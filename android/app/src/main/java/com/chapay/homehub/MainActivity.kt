@@ -2,6 +2,7 @@ package com.chapay.homehub
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -30,6 +31,7 @@ import org.json.JSONObject
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private val repository = StatusRepository()
+    private var chartsLandscapeMode = false
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -190,6 +192,22 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun fetchLoadControllerHistory(requestId: String) {
+            lifecycleScope.launch {
+                val cfg = AppConfigStorage.load(this@MainActivity)
+                runCatching { repository.fetchLoadControllerHistory(cfg) }
+                    .onSuccess { json ->
+                        if (json == null) {
+                            sendDataError(requestId, "No data")
+                        } else {
+                            sendDataResult(requestId, json.toString())
+                        }
+                    }
+                    .onFailure { err -> sendDataError(requestId, err.message ?: "History data failed") }
+            }
+        }
+
+        @JavascriptInterface
         fun setInverterGridMode(mode: String, requestId: String) {
             runModeCommand(requestId) { cfg -> repository.setInverterGridMode(cfg, mode.uppercase()) }
         }
@@ -200,8 +218,18 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun setInverterLoadLock(locked: Boolean, requestId: String) {
+            runModeCommand(requestId) { cfg -> repository.setInverterLoadLock(cfg, locked) }
+        }
+
+        @JavascriptInterface
         fun setBoiler1Mode(mode: String, requestId: String) {
             runModeCommand(requestId) { cfg -> repository.setBoiler1Mode(cfg, mode.uppercase()) }
+        }
+
+        @JavascriptInterface
+        fun setBoiler1Lock(mode: String, requestId: String) {
+            runModeCommand(requestId) { cfg -> repository.setBoiler1Lock(cfg, mode.uppercase()) }
         }
 
         @JavascriptInterface
@@ -210,13 +238,36 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun setPumpLock(mode: String, requestId: String) {
+            runModeCommand(requestId) { cfg -> repository.setPumpLock(cfg, mode.uppercase()) }
+        }
+
+        @JavascriptInterface
         fun setBoiler2Mode(mode: String, requestId: String) {
             runModeCommand(requestId) { cfg -> repository.setBoiler2Mode(cfg, mode.uppercase()) }
         }
 
         @JavascriptInterface
+        fun setBoiler2Lock(mode: String, requestId: String) {
+            runModeCommand(requestId) { cfg -> repository.setBoiler2Lock(cfg, mode.uppercase()) }
+        }
+
+        @JavascriptInterface
         fun triggerGate(requestId: String) {
             runModeCommand(requestId) { cfg -> repository.triggerGate(cfg) }
+        }
+
+        @JavascriptInterface
+        fun setChartsLandscapeMode(enabled: Boolean) {
+            runOnUiThread {
+                if (chartsLandscapeMode == enabled) return@runOnUiThread
+                chartsLandscapeMode = enabled
+                requestedOrientation = if (enabled) {
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                }
+            }
         }
 
         private fun runModeCommand(
@@ -319,6 +370,17 @@ private fun InverterStatus.toJson(): JSONObject = JSONObject().apply {
     put("gridW", gridW)
     put("loadW", loadW)
     put("lineVoltage", lineVoltage)
+    put("pvVoltage", pvVoltage)
+    put("batteryVoltage", batteryVoltage)
+    put("gridFrequency", gridFrequency)
+    put("outputVoltage", outputVoltage)
+    put("outputFrequency", outputFrequency)
+    put("inverterTemp", inverterTemp)
+    put("dailyPV", dailyPv)
+    put("dailyHome", dailyHome)
+    put("dailyGrid", dailyGrid)
+    put("lastUpdate", lastUpdate)
+    put("loadOnLocked", loadOnLocked)
     put("batterySoc", batterySoc)
     put("batteryPower", batteryPower)
     put("mode", mode)
@@ -351,6 +413,14 @@ private fun LoadControllerStatus.toJson(): JSONObject = JSONObject().apply {
     put("pumpModeReason", pumpModeReason)
     put("pumpOn", pumpOn)
     put("pumpStateReason", pumpStateReason)
+    put("boilerLock", boilerLock)
+    put("pumpLock", pumpLock)
+    put("boilerCurrent", boilerCurrent)
+    put("boilerPower", boilerPower)
+    put("dailyBoiler", dailyBoiler)
+    put("pumpCurrent", pumpCurrent)
+    put("pumpPower", pumpPower)
+    put("dailyPump", dailyPump)
     put("lineVoltage", lineVoltage)
     put("pvW", pvW)
     put("gridW", gridW)
@@ -371,8 +441,14 @@ private fun GarageStatus.toJson(): JSONObject = JSONObject().apply {
     put("boiler2ModeReason", boiler2ModeReason)
     put("boiler2On", boiler2On)
     put("boiler2StateReason", boiler2StateReason)
+    put("boilerLock", boilerLock)
+    put("boilerCurrent", boilerCurrent)
+    put("boilerPower", boilerPower)
+    put("dailyBoiler", dailyBoiler)
     put("gateState", gateState)
     put("gateReason", gateReason)
+    put("gateOpenPin", gateOpenPin)
+    put("gateClosedPin", gateClosedPin)
     put("lineVoltage", lineVoltage)
     put("pvW", pvW)
     put("gridW", gridW)

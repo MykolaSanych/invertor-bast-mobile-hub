@@ -48,6 +48,7 @@ body {
   padding: 14px;
   position: relative;
   z-index: 1;
+  animation: appFadeIn 0.42s ease-out both;
 }
 
 .compact-header {
@@ -84,6 +85,28 @@ body {
   text-transform: uppercase;
   color: var(--neon-cyan);
   text-shadow: 0 0 14px rgba(0, 230, 255, 0.35);
+}
+
+.clickable-title {
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.2s ease, text-shadow 0.2s ease;
+}
+
+.clickable-title::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(0, 230, 255, 0), rgba(0, 230, 255, 0.9), rgba(0, 230, 255, 0));
+  opacity: 0.25;
+}
+
+.clickable-title:active {
+  transform: translateY(1px) scale(0.996);
 }
 
 .compact-subtitle {
@@ -145,6 +168,7 @@ body {
   border-radius: 2px;
   background: linear-gradient(90deg, var(--neon-green), var(--neon-cyan));
   box-shadow: 0 0 10px rgba(51, 255, 153, 0.6);
+  animation: wifiPulse 1.9s ease-in-out infinite;
 }
 
 .climate-wide-card {
@@ -160,6 +184,8 @@ body {
     0 8px 18px rgba(0, 0, 0, 0.35);
   margin-bottom: 14px;
   padding: 12px;
+  transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+  animation: panelGlow 7s ease-in-out infinite;
 }
 
 .climate-wide-header {
@@ -246,6 +272,18 @@ body {
   position: relative;
   overflow: hidden;
   min-height: 190px;
+  transition: transform 0.22s ease, box-shadow 0.24s ease, border-color 0.24s ease;
+  animation: cardBreathe 8s ease-in-out infinite;
+}
+
+.data-card::after {
+  content: "";
+  position: absolute;
+  inset: -35% -55%;
+  background: radial-gradient(closest-side, rgba(0, 230, 255, 0.1), transparent 72%);
+  opacity: 0.4;
+  pointer-events: none;
+  animation: cardAura 6s ease-in-out infinite;
 }
 
 .data-card::before {
@@ -289,6 +327,14 @@ body {
   cursor: pointer;
 }
 
+.data-card.clickable:hover,
+.climate-wide-card.clickable:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 0 22px rgba(0, 230, 255, 0.16),
+    0 12px 26px rgba(0, 0, 0, 0.4);
+}
+
 .clickable:active {
   transform: translateY(1px);
 }
@@ -297,6 +343,20 @@ body {
   opacity: 0.45;
   filter: grayscale(0.65);
   pointer-events: none;
+}
+
+.card-stale {
+  opacity: 0.35;
+  filter: grayscale(0.78) saturate(0.62);
+  pointer-events: none;
+}
+
+.card-live {
+  opacity: 1;
+}
+
+.card-flash {
+  animation: cardUpdateFlash 0.55s ease-out;
 }
 
 .card-icon {
@@ -349,6 +409,87 @@ body {
   border-top: 1px solid rgba(79, 124, 255, 0.2);
   display: grid;
   gap: 5px;
+}
+
+.card-indicators {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.mini-indicator {
+  border: 1px solid rgba(79, 124, 255, 0.35);
+  background: rgba(9, 14, 30, 0.8);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.7rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.door-action {
+  display: flex;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.door-action-btn {
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 14px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  border-radius: 12px;
+  border: 1px solid rgba(51, 255, 153, 0.55);
+  background: linear-gradient(135deg, #33ff99, #00d4ff);
+  color: #04150f;
+  cursor: pointer;
+  text-transform: lowercase;
+}
+
+.door-action-btn.is-stop {
+  background: linear-gradient(135deg, rgba(35, 60, 45, 0.9), rgba(20, 40, 32, 0.9));
+  color: #cfe9dc;
+  border-color: rgba(120, 200, 160, 0.5);
+}
+
+.door-action-btn.is-close {
+  background: linear-gradient(135deg, #00d084, #00b96f);
+}
+
+.door-action-btn.is-open {
+  background: linear-gradient(135deg, #3dff9a, #00d47d);
+}
+
+.door-times {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.door-time-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(6, 14, 10, 0.6);
+  border: 1px solid rgba(51, 255, 153, 0.2);
+  font-size: 0.74rem;
+}
+
+.door-time-label {
+  color: rgba(182, 216, 198, 0.75);
+  font-weight: 600;
+}
+
+.door-time-value {
+  color: var(--neon-green);
+  font-weight: 700;
+  letter-spacing: 0.2px;
 }
 
 .detail-row {
@@ -524,6 +665,90 @@ body {
   background: rgba(6, 10, 22, 0.82);
 }
 
+.timeline-panel-compact {
+  background: rgba(8, 12, 26, 0.82);
+  border-radius: 12px;
+  padding: 12px;
+  border: 1px solid rgba(0, 230, 255, 0.2);
+}
+
+.timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.timeline-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.timeline-meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(0, 230, 255, 0.2);
+}
+
+.timeline-canvas-wrap {
+  position: relative;
+  height: 280px;
+  border-radius: 12px;
+  background: rgba(6, 10, 22, 0.85);
+  border: 1px solid rgba(0, 230, 255, 0.2);
+  box-shadow: inset 0 0 18px rgba(0, 230, 255, 0.08);
+  overflow: auto;
+}
+
+#loadTimelineCanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.timeline-legend {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.legend-chip {
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(10, 15, 30, 0.6);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.legend-chip.boiler {
+  border-color: rgba(255, 77, 109, 0.6);
+  color: var(--neon-red);
+}
+
+.legend-chip.pump {
+  border-color: rgba(79, 124, 255, 0.6);
+  color: var(--neon-blue);
+}
+
+.legend-chip.grid {
+  border-color: rgba(51, 255, 153, 0.6);
+  color: var(--neon-green);
+}
+
+.legend-chip.pv {
+  border-color: rgba(255, 179, 71, 0.6);
+  color: var(--neon-amber);
+}
+
 .chart-legend {
   margin-top: 8px;
   display: flex;
@@ -579,6 +804,7 @@ body {
 }
 
 .mode-btn-compact {
+  position: relative;
   min-height: 44px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -592,6 +818,28 @@ body {
 .mode-btn-compact.active {
   border-color: rgba(0, 230, 255, 0.6);
   box-shadow: 0 0 14px rgba(0, 230, 255, 0.35);
+}
+
+.mode-btn-compact.locked {
+  border-color: rgba(51, 255, 153, 0.7);
+  box-shadow: 0 0 14px rgba(51, 255, 153, 0.35);
+}
+
+.mode-btn-compact.locked::before {
+  content: "L";
+  position: absolute;
+  top: 5px;
+  left: 6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(51, 255, 153, 0.9);
+  color: #04150f;
+  font-size: 0.65rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .reason-line {
@@ -697,6 +945,73 @@ body {
   max-width: 80vw;
   font-size: 0.84rem;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+.cards-grid .data-card:nth-child(1) { animation-delay: 0ms; }
+.cards-grid .data-card:nth-child(2) { animation-delay: 90ms; }
+.cards-grid .data-card:nth-child(3) { animation-delay: 140ms; }
+.cards-grid .data-card:nth-child(4) { animation-delay: 180ms; }
+.cards-grid .data-card:nth-child(5) { animation-delay: 220ms; }
+.cards-grid .data-card:nth-child(6) { animation-delay: 260ms; }
+.cards-grid .data-card:nth-child(7) { animation-delay: 300ms; }
+.cards-grid .data-card:nth-child(8) { animation-delay: 340ms; }
+
+@keyframes appFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes cardBreathe {
+  0%, 100% {
+    border-color: rgba(79, 124, 255, 0.3);
+    box-shadow: 0 0 0 rgba(0, 230, 255, 0);
+  }
+  50% {
+    border-color: rgba(79, 124, 255, 0.45);
+    box-shadow: 0 0 16px rgba(0, 230, 255, 0.12);
+  }
+}
+
+@keyframes cardAura {
+  0%, 100% { opacity: 0.28; }
+  50% { opacity: 0.58; }
+}
+
+@keyframes panelGlow {
+  0%, 100% { border-color: rgba(0, 230, 255, 0.25); }
+  50% { border-color: rgba(0, 230, 255, 0.45); }
+}
+
+@keyframes wifiPulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.35); }
+}
+
+@keyframes cardUpdateFlash {
+  0% {
+    box-shadow:
+      0 0 0 rgba(0, 230, 255, 0),
+      0 0 0 rgba(51, 255, 153, 0);
+    border-color: rgba(79, 124, 255, 0.3);
+  }
+  45% {
+    box-shadow:
+      0 0 24px rgba(0, 230, 255, 0.36),
+      0 0 28px rgba(51, 255, 153, 0.24);
+    border-color: rgba(0, 230, 255, 0.72);
+  }
+  100% {
+    box-shadow:
+      0 0 0 rgba(0, 230, 255, 0),
+      0 0 0 rgba(51, 255, 153, 0);
+    border-color: rgba(79, 124, 255, 0.3);
+  }
 }
 
 @media (max-width: 620px) {

@@ -21,6 +21,11 @@ const DEFAULT_CONFIG = {
   notifyGateState: true,
 };
 
+const LOAD_TIMELINE_POWER_ON_THRESHOLD = 50;
+const LOAD_TIMELINE_HISTORY_REFRESH_MS = 60 * 1000;
+const LOAD_TIMELINE_VISIBLE_HOURS = 6;
+const LOAD_TIMELINE_MAX_SAMPLES = 1600;
+
 const state = {
   config: { ...DEFAULT_CONFIG },
   status: null,
@@ -37,6 +42,24 @@ const state = {
     period: "daily",
     metric: "temp",
     last: null,
+  },
+  gate: {
+    lastState: "",
+    lastOpenAt: "--",
+    lastCloseAt: "--",
+  },
+  locks: {
+    inverterLoadOn: false,
+    boiler1: "NONE",
+    pump: "NONE",
+    boiler2: "NONE",
+  },
+  timeline: {
+    samples: [],
+    day: "",
+    lastTimestamp: 0,
+    historyReady: false,
+    lastHistoryFetchMs: 0,
   },
 };
 
@@ -211,6 +234,56 @@ function setText(id, value) {
   el.textContent = value;
 }
 
+function formatDateTimeFromStatus(dateValue, timeValue) {
+  const date = safeText(dateValue, "");
+  const time = safeText(timeValue, "");
+  if (date && time && date !== "---" && time !== "--:--:--") {
+    return `${date} ${time}`;
+  }
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+}
+
+function classifyGateState(garage) {
+  const openPin = Number(garage?.gateOpenPin);
+  const closedPin = Number(garage?.gateClosedPin);
+  const hasPins = Number.isFinite(openPin) && Number.isFinite(closedPin) && openPin >= 0 && closedPin >= 0;
+  if (hasPins) {
+    const openActive = openPin === 0;
+    const closedActive = closedPin === 0;
+    if (closedActive && !openActive) return "closed";
+    if (openActive && !closedActive) return "open";
+    return "moving";
+  }
+
+  const raw = safeText(garage?.gateState, "").toLowerCase();
+  if (raw.includes("open")) return "open";
+  if (raw.includes("close") || raw.includes("closed")) return "closed";
+  if (raw.includes("stop")) return "stopped";
+  if (raw.includes("move")) return "moving";
+  return "unknown";
+}
+
+function setGateActionButtonLabel(stateName) {
+  const btn = document.getElementById("gateActionBtn");
+  if (!btn) return;
+
+  let label = "stop";
+  if (stateName === "closed") label = "open";
+  else if (stateName === "open") label = "close";
+
+  btn.textContent = label;
+  btn.classList.toggle("is-open", label === "open");
+  btn.classList.toggle("is-close", label === "close");
+  btn.classList.toggle("is-stop", label === "stop");
+}
+
 function readChecked(id, fallback = false) {
   const el = document.getElementById(id);
   if (!el) return fallback;
@@ -235,7 +308,287 @@ function setWifi(strengthRaw) {
   setText("wifiIcon", icon);
 }
 
+function parseRtcTimestampParts(datePart, timePart) {
+  const dateText = safeText(datePart, "");
+  const timeText = safeText(timePart, "");
+  if (dateText.length === 10 && timeText.length === 8) {
+    const parsed = new Date(`${dateText}T${timeText}`).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
+}
+
+function loadTimelineDayKey(timestampMs) {
+  const date = new Date(timestampMs);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function resizeLoadTimelineCanvas(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.floor(rect.width * ratio));
+  const height = Math.max(1, Math.floor(rect.height * ratio));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+}
+
+function drawLoadTimelineRow(ctx, samples, key, xFor, rowTop, rowHeight, color) {
+  if (!samples.length) return;
+  let segmentStart = null;
+
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = samples[i];
+    const isOn = !!sample[key];
+    if (isOn && segmentStart === null) {
+      segmentStart = sample.ts;
+    }
+    if (!isOn && segmentStart !== null) {
+      const xStart = xFor(segmentStart);
+      const xEnd = xFor(sample.ts);
+      ctx.fillStyle = color;
+      ctx.fillRect(xStart, rowTop, Math.max(1, xEnd - xStart), rowHeight);
+      segmentStart = null;
+    }
+  }
+
+  if (segmentStart !== null) {
+    const xStart = xFor(segmentStart);
+    const xEnd = xFor(samples[samples.length - 1].ts);
+    ctx.fillStyle = color;
+    ctx.fillRect(xStart, rowTop, Math.max(1, xEnd - xStart), rowHeight);
+  }
+}
+
+function renderLoadTimeline() {
+  const canvas = document.getElementById("loadTimelineCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const wrap = canvas.parentElement;
+  if (!wrap) return;
+
+  const visibleHours = Math.max(1, LOAD_TIMELINE_VISIBLE_HOURS);
+  const pxPerHour = Math.max(60, wrap.clientWidth / visibleHours);
+  const fullWidth = Math.round(pxPerHour * 24);
+  canvas.style.width = `${fullWidth}px`;
+
+  resizeLoadTimelineCanvas(canvas);
+  const width = canvas.width;
+  const height = canvas.height;
+  if (width <= 2 || height <= 2) return;
+
+  ctx.clearRect(0, 0, width, height);
+
+  const samples = state.timeline.samples;
+  const now = samples.length ? samples[samples.length - 1].ts : Date.now();
+  const dateLabel = safeText(state.timeline.day, loadTimelineDayKey(now));
+  const dayStart = new Date(`${dateLabel}T00:00:00`).getTime();
+  const dayEnd = new Date(`${dateLabel}T23:55:00`).getTime();
+  const windowMs = Math.max(1, dayEnd - dayStart);
+
+  const padding = { left: 60, right: 18, top: 16, bottom: 28 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  if (plotWidth <= 10 || plotHeight <= 10) return;
+
+  const xFor = (ts) => padding.left + ((ts - dayStart) / windowMs) * plotWidth;
+
+  ctx.fillStyle = "rgba(255,255,255,0.04)";
+  ctx.fillRect(padding.left, padding.top, plotWidth, plotHeight);
+
+  const rowGap = 10;
+  const rows = 4;
+  const rowHeight = (plotHeight - rowGap * (rows - 1)) / rows;
+  const boilerTop = padding.top;
+  const pumpTop = boilerTop + rowHeight + rowGap;
+  const gridTop = pumpTop + rowHeight + rowGap;
+  const pvTop = gridTop + rowHeight + rowGap;
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padding.left, padding.top, plotWidth, plotHeight);
+
+  const tickMs = 60 * 60 * 1000;
+  ctx.font = `${12 * (window.devicePixelRatio || 1)}px "Playpen Sans", sans-serif`;
+  ctx.fillStyle = "rgba(230, 241, 255, 0.55)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (let t = dayStart; t <= dayEnd; t += tickMs) {
+    const x = xFor(t);
+    ctx.strokeStyle = "rgba(79,124,255,0.18)";
+    ctx.beginPath();
+    ctx.moveTo(x, padding.top);
+    ctx.lineTo(x, padding.top + plotHeight);
+    ctx.stroke();
+    const hh = String(new Date(t).getHours()).padStart(2, "0");
+    ctx.fillText(`${hh}:00`, x, padding.top + plotHeight + 6);
+  }
+
+  ctx.fillStyle = "rgba(230, 241, 255, 0.75)";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText("BOILER", padding.left - 8, boilerTop + rowHeight / 2);
+  ctx.fillText("PUMP", padding.left - 8, pumpTop + rowHeight / 2);
+  ctx.fillText("GRID", padding.left - 8, gridTop + rowHeight / 2);
+  ctx.fillText("PV", padding.left - 8, pvTop + rowHeight / 2);
+
+  ctx.fillStyle = "rgba(255,77,109,0.12)";
+  ctx.fillRect(padding.left, boilerTop, plotWidth, rowHeight);
+  ctx.fillStyle = "rgba(79,124,255,0.12)";
+  ctx.fillRect(padding.left, pumpTop, plotWidth, rowHeight);
+  ctx.fillStyle = "rgba(51,255,153,0.1)";
+  ctx.fillRect(padding.left, gridTop, plotWidth, rowHeight);
+  ctx.fillStyle = "rgba(255,179,71,0.12)";
+  ctx.fillRect(padding.left, pvTop, plotWidth, rowHeight);
+
+  drawLoadTimelineRow(ctx, samples, "boilerOn", xFor, boilerTop, rowHeight, "rgba(255,77,109,0.85)");
+  drawLoadTimelineRow(ctx, samples, "pumpOn", xFor, pumpTop, rowHeight, "rgba(79,124,255,0.85)");
+  drawLoadTimelineRow(ctx, samples, "gridOn", xFor, gridTop, rowHeight, "rgba(51,255,153,0.85)");
+  drawLoadTimelineRow(ctx, samples, "pvOn", xFor, pvTop, rowHeight, "rgba(255,179,71,0.85)");
+
+  if (!samples.length) {
+    ctx.fillStyle = "rgba(230, 241, 255, 0.7)";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("no timeline data", width / 2, height / 2);
+  }
+
+  setText("timelineMeta", `date: ${dateLabel} (00:00-23:55), view ~${visibleHours}h`);
+}
+
+function applyLoadTimelineHistory(payload) {
+  const dateLabel = safeText(payload?.date, "");
+  const rows = Array.isArray(payload?.samples) ? payload.samples : [];
+  if (!dateLabel) {
+    throw new Error("history payload is empty");
+  }
+
+  const dayStart = new Date(`${dateLabel}T00:00:00`).getTime();
+  if (!Number.isFinite(dayStart)) {
+    throw new Error("invalid timeline date");
+  }
+
+  const samples = [];
+  rows.forEach((row) => {
+    const minute = Number(row?.m);
+    if (!Number.isFinite(minute)) return;
+    const ts = dayStart + minute * 60 * 1000;
+    const flags = Number(row?.f) || 0;
+    samples.push({
+      ts,
+      boilerOn: (flags & 0x01) !== 0,
+      pumpOn: (flags & 0x02) !== 0,
+      gridOn: (flags & 0x04) !== 0,
+      pvOn: (flags & 0x08) !== 0,
+    });
+  });
+
+  samples.sort((a, b) => a.ts - b.ts);
+  state.timeline.samples = samples;
+  state.timeline.day = dateLabel;
+  state.timeline.lastTimestamp = samples.length ? samples[samples.length - 1].ts : dayStart;
+  state.timeline.historyReady = true;
+}
+
+function recordLoadTimelineSample(loadController) {
+  if (!loadController || typeof loadController !== "object") return;
+
+  const boilerPower = Number(loadController.boilerPower);
+  const pumpPower = Number(loadController.pumpPower);
+  const hasSampleBasis = Number.isFinite(boilerPower) || Number.isFinite(pumpPower);
+  if (!hasSampleBasis) return;
+
+  let ts = parseRtcTimestampParts(loadController.rtcDate, loadController.rtcTime);
+  const dayKey = safeText(loadController.rtcDate, "");
+  if (dayKey && dayKey !== state.timeline.day) {
+    state.timeline.day = dayKey;
+    state.timeline.samples = [];
+    state.timeline.lastTimestamp = 0;
+    state.timeline.historyReady = false;
+  }
+  if (!state.timeline.day) {
+    state.timeline.day = loadTimelineDayKey(ts);
+  }
+
+  if (ts <= state.timeline.lastTimestamp) {
+    ts = state.timeline.lastTimestamp + clampPoll(state.config.pollIntervalSec) * 1000;
+  }
+  state.timeline.lastTimestamp = ts;
+
+  const sample = {
+    ts,
+    boilerOn: Number.isFinite(boilerPower) ? boilerPower > LOAD_TIMELINE_POWER_ON_THRESHOLD : !!loadController.boiler1On,
+    pumpOn: Number.isFinite(pumpPower) ? pumpPower > LOAD_TIMELINE_POWER_ON_THRESHOLD : !!loadController.pumpOn,
+    gridOn: Number(loadController.lineVoltage) > 180,
+    pvOn: Number(loadController.pvW) > 22,
+  };
+
+  const tail = state.timeline.samples[state.timeline.samples.length - 1];
+  if (!tail || sample.ts > tail.ts) {
+    state.timeline.samples.push(sample);
+    if (state.timeline.samples.length > LOAD_TIMELINE_MAX_SAMPLES) {
+      state.timeline.samples = state.timeline.samples.slice(
+        state.timeline.samples.length - LOAD_TIMELINE_MAX_SAMPLES,
+      );
+    }
+  }
+
+  if (isModalOpen("timelineModal")) {
+    renderLoadTimeline();
+  }
+}
+
+async function loadLoadTimelineHistory(options = {}) {
+  const { force = false } = options;
+  if (!hasBridge()) {
+    renderLoadTimeline();
+    return;
+  }
+  if (!state.config.loadControllerEnabled) {
+    renderLoadTimeline();
+    showToast("load controller module disabled");
+    return;
+  }
+
+  const nowMs = Date.now();
+  if (
+    !force &&
+    state.timeline.samples.length &&
+    nowMs - state.timeline.lastHistoryFetchMs < LOAD_TIMELINE_HISTORY_REFRESH_MS
+  ) {
+    renderLoadTimeline();
+    return;
+  }
+
+  setText("timelineChartTitle", "load controller timeline - loading...");
+  try {
+    const payload = await bridgeRequest("timeline-history", (requestId) => {
+      window.AndroidHub.fetchLoadControllerHistory(requestId);
+    });
+    applyLoadTimelineHistory(payload);
+    setText("timelineChartTitle", "load controller timeline");
+    renderLoadTimeline();
+  } catch (error) {
+    setText("timelineChartTitle", "load controller timeline - error");
+    renderLoadTimeline();
+    showToast(`timeline load failed: ${error.message}`);
+  } finally {
+    state.timeline.lastHistoryFetchMs = nowMs;
+  }
+}
+
+async function openTimelineModal() {
+  openModal("timelineModal");
+  await loadLoadTimelineHistory({ force: true });
+}
+
 function updateButtonStates(selector, expected) {
+  const normalizedExpected = safeText(expected, "").trim().toUpperCase();
   document.querySelectorAll(selector).forEach((btn) => {
     const ownMode =
       btn.dataset.gridMode ||
@@ -243,8 +596,40 @@ function updateButtonStates(selector, expected) {
       btn.dataset.boiler1Mode ||
       btn.dataset.pumpMode ||
       btn.dataset.boiler2Mode;
-    btn.classList.toggle("active", ownMode === expected);
+    const normalizedOwn = safeText(ownMode, "").trim().toUpperCase();
+    btn.classList.toggle("active", normalizedOwn === normalizedExpected);
   });
+}
+
+function normalizeLockMode(value) {
+  const mode = safeText(value, "NONE").toUpperCase();
+  if (mode === "ON" || mode === "OFF") return mode;
+  return "NONE";
+}
+
+function setModeButtonLocked(buttonId, locked) {
+  const btn = document.getElementById(buttonId);
+  if (!btn) return;
+  btn.classList.toggle("locked", !!locked);
+}
+
+function setActiveModeGroup(prefix, mode) {
+  const normalizedMode = safeText(mode, "").trim().toUpperCase();
+  ["AUTO", "OFF", "ON"].forEach((item) => {
+    const btn = document.getElementById(`${prefix}${item}`);
+    if (!btn) return;
+    btn.classList.toggle("active", item === normalizedMode);
+  });
+}
+
+function applyLockedActiveButtons(prefix, lockMode) {
+  if (lockMode !== "ON" && lockMode !== "OFF") return;
+  ["AUTO", "OFF", "ON"].forEach((mode) => {
+    const btn = document.getElementById(`${prefix}${mode}`);
+    if (btn) btn.classList.remove("active");
+  });
+  const lockedBtn = document.getElementById(`${prefix}${lockMode}`);
+  if (lockedBtn) lockedBtn.classList.add("active");
 }
 
 function showToast(message) {
@@ -260,22 +645,47 @@ function showToast(message) {
   }, 3000);
 }
 
+function modalNeedsLandscape(modalId) {
+  return modalId === "energyModal" || modalId === "climateModal" || modalId === "timelineModal";
+}
+
+function anyLandscapeModalOpen() {
+  return ["energyModal", "climateModal", "timelineModal"].some((id) => isModalOpen(id));
+}
+
+function syncChartsOrientation() {
+  if (!hasBridge()) return;
+  if (!window.AndroidHub || typeof window.AndroidHub.setChartsLandscapeMode !== "function") return;
+  try {
+    window.AndroidHub.setChartsLandscapeMode(anyLandscapeModalOpen());
+  } catch (error) {
+    // ignore orientation bridge failures
+  }
+}
+
 function openModal(id) {
   const modal = document.getElementById(id);
   if (!modal) return;
   modal.classList.add("is-open");
+  if (modalNeedsLandscape(id)) {
+    syncChartsOrientation();
+  }
 }
 
 function closeModal(id) {
   const modal = document.getElementById(id);
   if (!modal) return;
   modal.classList.remove("is-open");
+  if (modalNeedsLandscape(id)) {
+    syncChartsOrientation();
+  }
 }
 
 function closeAllModals() {
   document.querySelectorAll(".modal-root").forEach((modal) => {
     modal.classList.remove("is-open");
   });
+  syncChartsOrientation();
 }
 
 function isModalOpen(id) {
@@ -315,6 +725,20 @@ function bindCardEvents() {
     });
   }
 
+  const headerTitle = document.getElementById("appHeaderTitle");
+  if (headerTitle) {
+    headerTitle.addEventListener("click", () => {
+      openTimelineModal();
+    });
+  }
+
+  const timelineReloadBtn = document.getElementById("timelineReloadBtn");
+  if (timelineReloadBtn) {
+    timelineReloadBtn.addEventListener("click", () => {
+      loadLoadTimelineHistory({ force: true });
+    });
+  }
+
   document.querySelectorAll("[data-close-modal]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const modalId = btn.getAttribute("data-close-modal");
@@ -329,56 +753,171 @@ function bindCardEvents() {
   });
 }
 
-async function sendGridMode(mode) {
+async function sendGridMode(mode, options = {}) {
+  const { silent = false } = options;
   try {
     await bridgeRequest("cmd", (requestId) => {
       window.AndroidHub.setInverterGridMode(mode, requestId);
     });
-    showToast(`grid mode: ${mode}`);
+    setActiveModeGroup("btnGrid", mode);
+    if (!silent) showToast(`grid mode: ${mode}`);
   } catch (error) {
     showToast(`grid mode failed: ${error.message}`);
   }
 }
 
-async function sendLoadMode(mode) {
+async function sendInverterLoadLock(locked, options = {}) {
+  const { silent = false } = options;
+  try {
+    await bridgeRequest("cmd", (requestId) => {
+      window.AndroidHub.setInverterLoadLock(!!locked, requestId);
+    });
+    state.locks.inverterLoadOn = !!locked;
+    setModeButtonLocked("btnLoadON", !!locked);
+    if (locked) {
+      setActiveModeGroup("btnLoad", "ON");
+    }
+    if (!silent) {
+      showToast(locked ? "load ON locked" : "load ON unlocked");
+    }
+    return true;
+  } catch (error) {
+    showToast(`load lock failed: ${error.message}`);
+    return false;
+  }
+}
+
+async function sendLoadMode(mode, options = {}) {
+  const { silent = false } = options;
+  if (mode !== "ON" && state.locks.inverterLoadOn) {
+    await sendInverterLoadLock(false, { silent: true });
+  }
   try {
     await bridgeRequest("cmd", (requestId) => {
       window.AndroidHub.setInverterLoadMode(mode, requestId);
     });
-    showToast(`load mode: ${mode}`);
+    setActiveModeGroup("btnLoad", mode);
+    if (!silent) showToast(`load mode: ${mode}`);
   } catch (error) {
     showToast(`load mode failed: ${error.message}`);
   }
 }
 
-async function sendBoiler1Mode(mode) {
+async function sendBoiler1Lock(mode, options = {}) {
+  const { silent = false } = options;
+  const lockMode = normalizeLockMode(mode);
+  try {
+    await bridgeRequest("cmd", (requestId) => {
+      window.AndroidHub.setBoiler1Lock(lockMode, requestId);
+    });
+    state.locks.boiler1 = lockMode;
+    setModeButtonLocked("btnBoiler1ON", lockMode === "ON");
+    setModeButtonLocked("btnBoiler1OFF", lockMode === "OFF");
+    if (lockMode === "ON" || lockMode === "OFF") {
+      setActiveModeGroup("btnBoiler1", lockMode);
+    }
+    if (!silent) showToast(`boiler1 lock: ${lockMode}`);
+    return true;
+  } catch (error) {
+    showToast(`boiler1 lock failed: ${error.message}`);
+    return false;
+  }
+}
+
+async function sendBoiler1Mode(mode, options = {}) {
+  const { silent = false } = options;
+  if (state.locks.boiler1 === "ON" && mode !== "ON") {
+    await sendBoiler1Lock("NONE", { silent: true });
+  }
+  if (state.locks.boiler1 === "OFF" && mode !== "OFF") {
+    await sendBoiler1Lock("NONE", { silent: true });
+  }
   try {
     await bridgeRequest("cmd", (requestId) => {
       window.AndroidHub.setBoiler1Mode(mode, requestId);
     });
-    showToast(`boiler1 mode: ${mode}`);
+    setActiveModeGroup("btnBoiler1", mode);
+    if (!silent) showToast(`boiler1 mode: ${mode}`);
   } catch (error) {
     showToast(`boiler1 mode failed: ${error.message}`);
   }
 }
 
-async function sendPumpMode(mode) {
+async function sendPumpLock(mode, options = {}) {
+  const { silent = false } = options;
+  const lockMode = normalizeLockMode(mode);
+  try {
+    await bridgeRequest("cmd", (requestId) => {
+      window.AndroidHub.setPumpLock(lockMode, requestId);
+    });
+    state.locks.pump = lockMode;
+    setModeButtonLocked("btnPumpON", lockMode === "ON");
+    setModeButtonLocked("btnPumpOFF", lockMode === "OFF");
+    if (lockMode === "ON" || lockMode === "OFF") {
+      setActiveModeGroup("btnPump", lockMode);
+    }
+    if (!silent) showToast(`pump lock: ${lockMode}`);
+    return true;
+  } catch (error) {
+    showToast(`pump lock failed: ${error.message}`);
+    return false;
+  }
+}
+
+async function sendPumpMode(mode, options = {}) {
+  const { silent = false } = options;
+  if (state.locks.pump === "ON" && mode !== "ON") {
+    await sendPumpLock("NONE", { silent: true });
+  }
+  if (state.locks.pump === "OFF" && mode !== "OFF") {
+    await sendPumpLock("NONE", { silent: true });
+  }
   try {
     await bridgeRequest("cmd", (requestId) => {
       window.AndroidHub.setPumpMode(mode, requestId);
     });
-    showToast(`pump mode: ${mode}`);
+    setActiveModeGroup("btnPump", mode);
+    if (!silent) showToast(`pump mode: ${mode}`);
   } catch (error) {
     showToast(`pump mode failed: ${error.message}`);
   }
 }
 
-async function sendBoiler2Mode(mode) {
+async function sendBoiler2Lock(mode, options = {}) {
+  const { silent = false } = options;
+  const lockMode = normalizeLockMode(mode);
+  try {
+    await bridgeRequest("cmd", (requestId) => {
+      window.AndroidHub.setBoiler2Lock(lockMode, requestId);
+    });
+    state.locks.boiler2 = lockMode;
+    setModeButtonLocked("btnBoiler2ON", lockMode === "ON");
+    setModeButtonLocked("btnBoiler2OFF", lockMode === "OFF");
+    if (lockMode === "ON" || lockMode === "OFF") {
+      setActiveModeGroup("btnBoiler2", lockMode);
+    }
+    if (!silent) showToast(`boiler2 lock: ${lockMode}`);
+    return true;
+  } catch (error) {
+    showToast(`boiler2 lock failed: ${error.message}`);
+    return false;
+  }
+}
+
+async function sendBoiler2Mode(mode, options = {}) {
+  const { silent = false } = options;
+  if (state.locks.boiler2 === "ON" && mode !== "ON") {
+    await sendBoiler2Lock("NONE", { silent: true });
+  }
+  if (state.locks.boiler2 === "OFF" && mode !== "OFF") {
+    await sendBoiler2Lock("NONE", { silent: true });
+  }
   try {
     await bridgeRequest("cmd", (requestId) => {
       window.AndroidHub.setBoiler2Mode(mode, requestId);
     });
-    showToast(`boiler2 mode: ${mode}`);
+    setActiveModeGroup("btnBoiler2", mode);
+    if (!silent) showToast(`boiler2 mode: ${mode}`);
   } catch (error) {
     showToast(`boiler2 mode failed: ${error.message}`);
   }
@@ -395,25 +934,177 @@ async function triggerGate() {
   }
 }
 
-function bindModeButtons() {
-  document.querySelectorAll("[data-grid-mode]").forEach((btn) => {
-    btn.addEventListener("click", () => sendGridMode(btn.dataset.gridMode));
+function bindPointerClick(buttonId, handler) {
+  const btn = document.getElementById(buttonId);
+  if (!btn) return;
+  let armed = false;
+
+  btn.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    armed = true;
   });
-  document.querySelectorAll("[data-load-mode]").forEach((btn) => {
-    btn.addEventListener("click", () => sendLoadMode(btn.dataset.loadMode));
+  btn.addEventListener("pointerup", () => {
+    if (!armed) return;
+    armed = false;
+    handler();
   });
-  document.querySelectorAll("[data-boiler1-mode]").forEach((btn) => {
-    btn.addEventListener("click", () => sendBoiler1Mode(btn.dataset.boiler1Mode));
+  btn.addEventListener("pointerleave", () => {
+    armed = false;
   });
-  document.querySelectorAll("[data-pump-mode]").forEach((btn) => {
-    btn.addEventListener("click", () => sendPumpMode(btn.dataset.pumpMode));
+  btn.addEventListener("pointercancel", () => {
+    armed = false;
   });
-  document.querySelectorAll("[data-boiler2-mode]").forEach((btn) => {
-    btn.addEventListener("click", () => sendBoiler2Mode(btn.dataset.boiler2Mode));
+  btn.addEventListener(
+    "click",
+    (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true,
+  );
+}
+
+function bindLongPress(buttonId, shortHandler, longHandler, holdMs = 800) {
+  const btn = document.getElementById(buttonId);
+  if (!btn) return;
+
+  let pressActive = false;
+  let longPressFired = false;
+  let timer = null;
+
+  const clearPress = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    longPressFired = false;
+    pressActive = false;
+  };
+
+  btn.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    pressActive = true;
+    longPressFired = false;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      longPressFired = true;
+      longHandler();
+    }, holdMs);
   });
 
-  const gateBtn = document.getElementById("gateToggleBtn");
-  if (gateBtn) gateBtn.addEventListener("click", triggerGate);
+  const endPress = () => {
+    if (!pressActive) return;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (!longPressFired) {
+      shortHandler();
+    }
+    longPressFired = false;
+    pressActive = false;
+  };
+
+  btn.addEventListener("pointerup", endPress);
+  btn.addEventListener("pointerleave", endPress);
+  btn.addEventListener("pointercancel", endPress);
+  btn.addEventListener("contextmenu", (event) => event.preventDefault());
+  btn.addEventListener(
+    "click",
+    (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true,
+  );
+}
+
+function bindModeButtons() {
+  bindPointerClick("btnGridAUTO", () => sendGridMode("AUTO"));
+  bindPointerClick("btnGridOFF", () => sendGridMode("OFF"));
+  bindPointerClick("btnGridON", () => sendGridMode("ON"));
+
+  bindPointerClick("btnLoadAUTO", () => sendLoadMode("AUTO"));
+  bindPointerClick("btnLoadOFF", () => sendLoadMode("OFF"));
+  bindLongPress(
+    "btnLoadON",
+    () => sendLoadMode("ON"),
+    async () => {
+      await sendInverterLoadLock(true, { silent: true });
+      await sendLoadMode("ON", { silent: true });
+      showToast("load ON locked");
+    },
+  );
+
+  bindPointerClick("btnBoiler1AUTO", () => sendBoiler1Mode("AUTO"));
+  bindLongPress(
+    "btnBoiler1OFF",
+    () => sendBoiler1Mode("OFF"),
+    async () => {
+      await sendBoiler1Lock("OFF", { silent: true });
+      await sendBoiler1Mode("OFF", { silent: true });
+      showToast("boiler1 OFF locked");
+    },
+  );
+  bindLongPress(
+    "btnBoiler1ON",
+    () => sendBoiler1Mode("ON"),
+    async () => {
+      await sendBoiler1Lock("ON", { silent: true });
+      await sendBoiler1Mode("ON", { silent: true });
+      showToast("boiler1 ON locked");
+    },
+  );
+
+  bindPointerClick("btnPumpAUTO", () => sendPumpMode("AUTO"));
+  bindLongPress(
+    "btnPumpOFF",
+    () => sendPumpMode("OFF"),
+    async () => {
+      await sendPumpLock("OFF", { silent: true });
+      await sendPumpMode("OFF", { silent: true });
+      showToast("pump OFF locked");
+    },
+  );
+  bindLongPress(
+    "btnPumpON",
+    () => sendPumpMode("ON"),
+    async () => {
+      await sendPumpLock("ON", { silent: true });
+      await sendPumpMode("ON", { silent: true });
+      showToast("pump ON locked");
+    },
+  );
+
+  bindPointerClick("btnBoiler2AUTO", () => sendBoiler2Mode("AUTO"));
+  bindLongPress(
+    "btnBoiler2OFF",
+    () => sendBoiler2Mode("OFF"),
+    async () => {
+      await sendBoiler2Lock("OFF", { silent: true });
+      await sendBoiler2Mode("OFF", { silent: true });
+      showToast("boiler2 OFF locked");
+    },
+  );
+  bindLongPress(
+    "btnBoiler2ON",
+    () => sendBoiler2Mode("ON"),
+    async () => {
+      await sendBoiler2Lock("ON", { silent: true });
+      await sendBoiler2Mode("ON", { silent: true });
+      showToast("boiler2 ON locked");
+    },
+  );
+
+  const gateActionBtn = document.getElementById("gateActionBtn");
+  if (gateActionBtn) {
+    gateActionBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      triggerGate();
+    });
+  }
 }
 
 function bindSettings() {
@@ -466,6 +1157,7 @@ function bindSettings() {
     state.config = { ...DEFAULT_CONFIG, ...nextConfig };
     setText("pollText", `${state.config.pollIntervalSec}s`);
     applyModuleCardStates();
+    applyLiveCardStates(state.status);
     restartPolling();
     closeModal("settingsModal");
     showToast("settings saved");
@@ -582,6 +1274,58 @@ function applyModuleCardStates() {
   );
   setModuleCardsDisabled(["cardBoiler1", "cardPump"], !state.config.loadControllerEnabled);
   setModuleCardsDisabled(["cardBoiler2", "cardGate"], !state.config.garageEnabled);
+}
+
+function setCardDataState(cardId, hasData) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  card.classList.toggle("card-stale", !hasData);
+  card.classList.toggle("card-live", !!hasData);
+}
+
+function flashCard(cardId) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  if (card.classList.contains("module-disabled") || card.classList.contains("card-stale")) return;
+  card.classList.remove("card-flash");
+  // Restart animation on each refresh cycle.
+  void card.offsetWidth;
+  card.classList.add("card-flash");
+}
+
+function applyLiveCardStates(status) {
+  const hasInverterData = !!(state.config.inverterEnabled && status?.inverter);
+  const hasLoadData = !!(state.config.loadControllerEnabled && status?.loadController);
+  const hasGarageData = !!(state.config.garageEnabled && status?.garage);
+  const hasClimateData = hasInverterData || hasLoadData || hasGarageData;
+
+  setCardDataState("cardPv", hasInverterData);
+  setCardDataState("cardGrid", hasInverterData);
+  setCardDataState("cardBattery", hasInverterData);
+  setCardDataState("cardLoad", hasInverterData);
+  setCardDataState("cardBoiler1", hasLoadData);
+  setCardDataState("cardPump", hasLoadData);
+  setCardDataState("cardBoiler2", hasGarageData);
+  setCardDataState("cardGate", hasGarageData);
+  setCardDataState("climateWideCard", hasClimateData);
+
+  if (hasInverterData) {
+    flashCard("cardPv");
+    flashCard("cardGrid");
+    flashCard("cardBattery");
+    flashCard("cardLoad");
+  }
+  if (hasLoadData) {
+    flashCard("cardBoiler1");
+    flashCard("cardPump");
+  }
+  if (hasGarageData) {
+    flashCard("cardBoiler2");
+    flashCard("cardGate");
+  }
+  if (hasClimateData) {
+    flashCard("climateWideCard");
+  }
 }
 
 function ensureCanvasSize(canvas, fallbackHeight = 320) {
@@ -1407,6 +2151,7 @@ function renderAll() {
   const garage = state.config.garageEnabled ? status.garage || {} : {};
 
   applyModuleCardStates();
+  applyLiveCardStates(status);
 
   const topLineVoltage = pickNumber([
     inverter.lineVoltage,
@@ -1448,61 +2193,113 @@ function renderAll() {
   const loadOff = !state.config.loadControllerEnabled;
   const garageOff = !state.config.garageEnabled;
 
+  if (!loadOff) {
+    recordLoadTimelineSample(loadController);
+  }
+
   setText("pvValue", invOff ? "--" : num(inverter.pvW, 0));
-  setText("pvSource", invOff ? "disabled" : inverter.mode ? "inverter" : "fallback");
-  setText("pvUpdated", invOff ? "--:--:--" : safeText(inverter.rtcTime, "--:--:--"));
+  setText("pvVoltage", invOff ? "--" : num(inverter.pvVoltage, 1));
+  setText("dailyPV", invOff ? "--" : num(inverter.dailyPV, 1));
+  setText(
+    "lastUpdatePV",
+    invOff ? "--:--:--" : safeText(inverter.lastUpdate, safeText(inverter.rtcTime, "--:--:--")),
+  );
 
   setText("gridValue", invOff ? "--" : num(inverter.gridW, 0));
-  setText("gridMode", invOff ? "disabled" : safeText(inverter.mode));
-  setText("gridRelay", invOff ? "---" : boolText(!!inverter.gridRelayOn));
-  setText("gridReason", invOff ? "module disabled" : safeText(inverter.modeReason));
+  setText("gridVoltage", invOff ? "--" : num(inverter.lineVoltage, 1));
+  setText("gridFrequency", invOff ? "--" : num(inverter.gridFrequency, 1));
+  setText("dailyGrid", invOff ? "--" : num(inverter.dailyGrid, 1));
+  setText("gridModeIndicator", invOff ? "mode: disabled" : `mode: ${safeText(inverter.mode)}`);
+  setText("gridStateIndicator", invOff ? "state: ---" : `state: ${boolText(!!inverter.gridRelayOn)}`);
   setText("gridModalState", invOff ? "---" : boolText(!!inverter.gridRelayOn));
-  setText("gridModalReason", invOff ? "module disabled" : safeText(inverter.modeReason));
+  setText("gridModalReason", invOff ? "module disabled" : safeText(inverter.gridRelayReason));
 
   setText("loadValue", invOff ? "--" : num(inverter.loadW, 0));
-  setText("loadMode", invOff ? "disabled" : safeText(inverter.loadMode));
-  setText("loadRelay", invOff ? "---" : boolText(!!inverter.loadRelayOn));
-  setText("loadReason", invOff ? "module disabled" : safeText(inverter.loadModeReason));
+  setText("outputVoltage", invOff ? "--" : num(inverter.outputVoltage, 1));
+  setText("outputFrequency", invOff ? "--" : num(inverter.outputFrequency, 1));
+  setText("dailyHome", invOff ? "--" : num(inverter.dailyHome, 1));
+  setText("loadModeIndicator", invOff ? "mode: disabled" : `mode: ${safeText(inverter.loadMode)}`);
+  setText("loadStateIndicator", invOff ? "state: ---" : `state: ${boolText(!!inverter.loadRelayOn)}`);
   setText("loadModalState", invOff ? "---" : boolText(!!inverter.loadRelayOn));
-  setText("loadModalReason", invOff ? "module disabled" : safeText(inverter.loadModeReason));
+  setText("loadModalReason", invOff ? "module disabled" : safeText(inverter.loadRelayReason));
 
-  setText("batteryValue", invOff ? "--" : num(inverter.batterySoc, 0));
-  setText("batteryPowerCard", invOff ? "--" : num(inverter.batteryPower, 0));
-  setText("lineVoltageCard", invOff ? "--" : num(inverter.lineVoltage, 1));
+  setText("batteryValueMain", invOff ? "--" : num(inverter.batterySoc, 0));
+  setText("batteryVoltage", invOff ? "--" : num(inverter.batteryVoltage, 1));
+  setText("batteryPower", invOff ? "--" : num(inverter.batteryPower, 0));
+  setText("inverterTemp", invOff ? "--" : num(inverter.inverterTemp, 1));
 
+  setText("boiler1Power", loadOff ? "--" : num(loadController.boilerPower, 0));
   setText("boiler1Mode", loadOff ? "disabled" : safeText(loadController.boiler1Mode));
+  setText("boiler1Current", loadOff ? "--" : num(loadController.boilerCurrent, 2));
+  setText("boiler1Daily", loadOff ? "--" : num(loadController.dailyBoiler, 0));
   setText("boiler1State", loadOff ? "---" : boolText(!!loadController.boiler1On));
-  setText("boiler1StateMain", loadOff ? "---" : boolText(!!loadController.boiler1On));
-  setText("boiler1Reason", loadOff ? "module disabled" : safeText(loadController.boiler1ModeReason));
   setText("boiler1ModalState", loadOff ? "---" : boolText(!!loadController.boiler1On));
-  setText("boiler1ModalReason", loadOff ? "module disabled" : safeText(loadController.boiler1ModeReason));
+  setText("boiler1ModalReason", loadOff ? "module disabled" : safeText(loadController.boiler1StateReason));
 
+  setText("pumpPower", loadOff ? "--" : num(loadController.pumpPower, 0));
   setText("pumpMode", loadOff ? "disabled" : safeText(loadController.pumpMode));
+  setText("pumpCurrent", loadOff ? "--" : num(loadController.pumpCurrent, 2));
+  setText("pumpDaily", loadOff ? "--" : num(loadController.dailyPump, 0));
   setText("pumpState", loadOff ? "---" : boolText(!!loadController.pumpOn));
-  setText("pumpStateMain", loadOff ? "---" : boolText(!!loadController.pumpOn));
-  setText("pumpReason", loadOff ? "module disabled" : safeText(loadController.pumpModeReason));
   setText("pumpModalState", loadOff ? "---" : boolText(!!loadController.pumpOn));
-  setText("pumpModalReason", loadOff ? "module disabled" : safeText(loadController.pumpModeReason));
+  setText("pumpModalReason", loadOff ? "module disabled" : safeText(loadController.pumpStateReason));
 
+  setText("boiler2Power", garageOff ? "--" : num(garage.boilerPower, 0));
   setText("boiler2Mode", garageOff ? "disabled" : safeText(garage.boiler2Mode));
+  setText("boiler2Current", garageOff ? "--" : num(garage.boilerCurrent, 2));
+  setText("boiler2Daily", garageOff ? "--" : num(garage.dailyBoiler, 0));
   setText("boiler2State", garageOff ? "---" : boolText(!!garage.boiler2On));
-  setText("boiler2StateMain", garageOff ? "---" : boolText(!!garage.boiler2On));
-  setText("boiler2Reason", garageOff ? "module disabled" : safeText(garage.boiler2ModeReason));
   setText("boiler2ModalState", garageOff ? "---" : boolText(!!garage.boiler2On));
-  setText("boiler2ModalReason", garageOff ? "module disabled" : safeText(garage.boiler2ModeReason));
+  setText("boiler2ModalReason", garageOff ? "module disabled" : safeText(garage.boiler2StateReason));
 
-  setText("gateState", garageOff ? "disabled" : safeText(garage.gateState));
+  const gateNormalized = garageOff ? "unknown" : classifyGateState(garage);
+  if (!garageOff) {
+    if (state.gate.lastState !== gateNormalized) {
+      const stamp = formatDateTimeFromStatus(garage.rtcDate, garage.rtcTime);
+      if (gateNormalized === "open") {
+        state.gate.lastOpenAt = stamp;
+      } else if (gateNormalized === "closed") {
+        state.gate.lastCloseAt = stamp;
+      }
+      state.gate.lastState = gateNormalized;
+    }
+  } else {
+    state.gate.lastState = "";
+  }
+
+  setText("gateState", garageOff ? "disabled" : safeText(garage.gateState, gateNormalized));
   setText("gateReason", garageOff ? "module disabled" : safeText(garage.gateReason));
-  setText("gateModalState", garageOff ? "disabled" : safeText(garage.gateState));
+  setText("gateLastOpen", garageOff ? "--" : safeText(state.gate.lastOpenAt, "--"));
+  setText("gateLastClose", garageOff ? "--" : safeText(state.gate.lastCloseAt, "--"));
+  setText("gateModalState", garageOff ? "disabled" : safeText(garage.gateState, gateNormalized));
   setText("gateModalReason", garageOff ? "module disabled" : safeText(garage.gateReason));
+  setGateActionButtonLabel(gateNormalized);
 
   renderClimateWideCard(inverter, loadController, garage);
+
+  state.locks.inverterLoadOn = !invOff && !!inverter.loadOnLocked;
+  state.locks.boiler1 = loadOff ? "NONE" : normalizeLockMode(loadController.boilerLock);
+  state.locks.pump = loadOff ? "NONE" : normalizeLockMode(loadController.pumpLock);
+  state.locks.boiler2 = garageOff ? "NONE" : normalizeLockMode(garage.boilerLock);
+
+  setModeButtonLocked("btnLoadON", state.locks.inverterLoadOn);
+  setModeButtonLocked("btnBoiler1ON", state.locks.boiler1 === "ON");
+  setModeButtonLocked("btnBoiler1OFF", state.locks.boiler1 === "OFF");
+  setModeButtonLocked("btnPumpON", state.locks.pump === "ON");
+  setModeButtonLocked("btnPumpOFF", state.locks.pump === "OFF");
+  setModeButtonLocked("btnBoiler2ON", state.locks.boiler2 === "ON");
+  setModeButtonLocked("btnBoiler2OFF", state.locks.boiler2 === "OFF");
 
   updateButtonStates("[data-grid-mode]", safeText(inverter.mode));
   updateButtonStates("[data-load-mode]", safeText(inverter.loadMode));
   updateButtonStates("[data-boiler1-mode]", safeText(loadController.boiler1Mode));
   updateButtonStates("[data-pump-mode]", safeText(loadController.pumpMode));
   updateButtonStates("[data-boiler2-mode]", safeText(garage.boiler2Mode));
+
+  applyLockedActiveButtons("btnLoad", state.locks.inverterLoadOn ? "ON" : "NONE");
+  applyLockedActiveButtons("btnBoiler1", state.locks.boiler1);
+  applyLockedActiveButtons("btnPump", state.locks.pump);
+  applyLockedActiveButtons("btnBoiler2", state.locks.boiler2);
 
   setText("lastUpdateText", formatClockFromMs(status.updatedAtMs));
 }
@@ -1526,6 +2323,9 @@ function bindResizeRedraw() {
     if (isModalOpen("climateModal") && state.climate.last) {
       renderClimateChart();
     }
+    if (isModalOpen("timelineModal")) {
+      renderLoadTimeline();
+    }
   }, 120);
   window.addEventListener("resize", redraw);
 }
@@ -1541,11 +2341,13 @@ function initUi() {
   loadConfigFromBridge();
   syncConfigToForm();
   applyModuleCardStates();
+  applyLiveCardStates(null);
   setText("pollText", `${clampPoll(state.config.pollIntervalSec)}s`);
 
   syncEnergyToolbar();
   syncClimateToolbar();
   updateClimateMetricButtons();
+  syncChartsOrientation();
 
   requestStatus();
   restartPolling();

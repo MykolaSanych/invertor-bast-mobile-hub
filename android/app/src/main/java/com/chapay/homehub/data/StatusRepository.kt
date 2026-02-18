@@ -79,6 +79,15 @@ class StatusRepository {
         )
     }
 
+    suspend fun fetchLoadControllerHistory(config: AppConfig): JSONObject? = withContext(Dispatchers.IO) {
+        if (!config.loadControllerEnabled) return@withContext null
+        fetchJsonWithAuth(
+            baseUrlRaw = config.loadControllerBaseUrl,
+            password = config.loadControllerPassword,
+            path = "/api/history",
+        )
+    }
+
     suspend fun setInverterGridMode(config: AppConfig, mode: String): Boolean = withContext(Dispatchers.IO) {
         if (!config.inverterEnabled) return@withContext false
         postMode(config.inverterBaseUrl, config.inverterPassword, "/api/mode", mode)
@@ -89,9 +98,29 @@ class StatusRepository {
         postMode(config.inverterBaseUrl, config.inverterPassword, "/api/loadmode", mode)
     }
 
+    suspend fun setInverterLoadLock(config: AppConfig, locked: Boolean): Boolean = withContext(Dispatchers.IO) {
+        if (!config.inverterEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.inverterBaseUrl,
+            password = config.inverterPassword,
+            path = "/api/loadlock",
+            formPairs = listOf("locked" to if (locked) "1" else "0"),
+        )
+    }
+
     suspend fun setBoiler1Mode(config: AppConfig, mode: String): Boolean = withContext(Dispatchers.IO) {
         if (!config.loadControllerEnabled) return@withContext false
         postMode(config.loadControllerBaseUrl, config.loadControllerPassword, "/api/mode", mode)
+    }
+
+    suspend fun setBoiler1Lock(config: AppConfig, lockMode: String): Boolean = withContext(Dispatchers.IO) {
+        if (!config.loadControllerEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.loadControllerBaseUrl,
+            password = config.loadControllerPassword,
+            path = "/api/boilerlock",
+            formPairs = listOf("lock" to lockMode.uppercase()),
+        )
     }
 
     suspend fun setPumpMode(config: AppConfig, mode: String): Boolean = withContext(Dispatchers.IO) {
@@ -99,9 +128,29 @@ class StatusRepository {
         postMode(config.loadControllerBaseUrl, config.loadControllerPassword, "/api/loadmode", mode)
     }
 
+    suspend fun setPumpLock(config: AppConfig, lockMode: String): Boolean = withContext(Dispatchers.IO) {
+        if (!config.loadControllerEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.loadControllerBaseUrl,
+            password = config.loadControllerPassword,
+            path = "/api/pumplock",
+            formPairs = listOf("lock" to lockMode.uppercase()),
+        )
+    }
+
     suspend fun setBoiler2Mode(config: AppConfig, mode: String): Boolean = withContext(Dispatchers.IO) {
         if (!config.garageEnabled) return@withContext false
         postMode(config.garageBaseUrl, config.garagePassword, "/api/mode", mode)
+    }
+
+    suspend fun setBoiler2Lock(config: AppConfig, lockMode: String): Boolean = withContext(Dispatchers.IO) {
+        if (!config.garageEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.garageBaseUrl,
+            password = config.garagePassword,
+            path = "/api/boilerlock",
+            formPairs = listOf("lock" to lockMode.uppercase()),
+        )
     }
 
     suspend fun triggerGate(config: AppConfig): Boolean = withContext(Dispatchers.IO) {
@@ -121,6 +170,17 @@ class StatusRepository {
             gridW = json.optDoubleSafe("ac_in"),
             loadW = json.optDoubleSafe("ac_out"),
             lineVoltage = json.optDoubleSafe("gridVolt"),
+            pvVoltage = json.optDoubleSafe("pvVolt"),
+            batteryVoltage = json.optDoubleSafe("batVolt"),
+            gridFrequency = json.optDoubleSafe("gridFreq"),
+            outputVoltage = json.optDoubleSafe("outputVolt"),
+            outputFrequency = json.optDoubleSafe("outputFreq"),
+            inverterTemp = json.optDoubleSafe("inverterTemp"),
+            dailyPv = json.optDoubleSafe("dailyPV"),
+            dailyHome = json.optDoubleSafe("dailyHome"),
+            dailyGrid = json.optDoubleSafe("dailyGrid"),
+            lastUpdate = json.optStringSafe("last_update", "--:--:--"),
+            loadOnLocked = json.optBooleanSafe("load_on_locked"),
             batterySoc = json.optDoubleSafe("battery"),
             batteryPower = json.optDoubleSafe("battery_power"),
             mode = json.optString("mode", "---"),
@@ -156,6 +216,14 @@ class StatusRepository {
             pumpModeReason = json.optStringSafe("pump_mode_reason", "unknown"),
             pumpOn = json.optBooleanSafe("pump_on"),
             pumpStateReason = json.optStringSafe("pump_state_reason", "unknown"),
+            boilerLock = json.optStringSafe("boiler_lock", "NONE"),
+            pumpLock = json.optStringSafe("pump_lock", "NONE"),
+            boilerCurrent = json.optDoubleSafe("boiler_current"),
+            boilerPower = json.optDoubleSafe("boiler_power"),
+            dailyBoiler = json.optDoubleSafe("daily_boiler"),
+            pumpCurrent = json.optDoubleSafe("pump_current"),
+            pumpPower = json.optDoubleSafe("pump_power"),
+            dailyPump = json.optDoubleSafe("daily_pump"),
             lineVoltage = json.optDoubleSafe("gridVolt"),
             pvW = json.optDoubleSafe("pv"),
             gridW = json.optDoubleSafe("ac_in"),
@@ -179,8 +247,14 @@ class StatusRepository {
             boiler2ModeReason = json.optStringSafe("boiler_mode_reason", "unknown"),
             boiler2On = json.optBooleanSafe("boiler_on"),
             boiler2StateReason = json.optStringSafe("boiler_state_reason", "unknown"),
+            boilerLock = json.optStringSafe("boiler_lock", "NONE"),
+            boilerCurrent = json.optDoubleSafe("boiler_current"),
+            boilerPower = json.optDoubleSafe("boiler_power"),
+            dailyBoiler = json.optDoubleSafe("daily_boiler"),
             gateState = json.optStringSafe("door_state", "unknown"),
             gateReason = json.optStringSafe("door_reason", "unknown"),
+            gateOpenPin = json.optInt("door_open_pin", -1),
+            gateClosedPin = json.optInt("door_closed_pin", -1),
             lineVoltage = json.optDoubleSafe("gridVolt"),
             pvW = json.optDoubleSafe("pv"),
             gridW = json.optDoubleSafe("ac_in"),

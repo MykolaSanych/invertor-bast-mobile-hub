@@ -1,4 +1,4 @@
-package com.chapay.homehub.push
+﻿package com.chapay.homehub.push
 
 import android.content.Context
 import com.chapay.homehub.data.AppConfig
@@ -117,16 +117,16 @@ object LocalEventEngine {
 
         if (config.inverterEnabled && config.notifyPvGeneration) {
             if (previous.pvActive != null && current.pvActive != null && previous.pvActive != current.pvActive) {
-                val title = if (current.pvActive) "PV генерація з'явилась" else "PV генерація зникла"
-                val reason = "PV=${current.pvW?.toInt() ?: 0}W, поріг ${PV_ACTIVE_THRESHOLD_W.toInt()}W"
-                events += LocalEvent(title, "Причина: $reason")
+                val title = if (current.pvActive) "PV РіРµРЅРµСЂР°С†С–СЏ Р·'СЏРІРёР»Р°СЃСЊ" else "PV РіРµРЅРµСЂР°С†С–СЏ Р·РЅРёРєР»Р°"
+                val reason = "PV=${current.pvW?.toInt() ?: 0}W, РїРѕСЂС–Рі ${PV_ACTIVE_THRESHOLD_W.toInt()}W"
+                events += LocalEvent(title, "РџСЂРёС‡РёРЅР°: $reason")
             }
         }
 
         if (config.inverterEnabled && config.notifyGridRelay) {
             if (previous.gridRelayOn != null && current.gridRelayOn != null && previous.gridRelayOn != current.gridRelayOn) {
-                val title = if (current.gridRelayOn) "GRID увімкнувся" else "GRID вимкнувся"
-                events += LocalEvent(title, "Причина: ${current.gridRelayReason.orUnknown()}")
+                val title = if (current.gridRelayOn) "GRID СѓРІС–РјРєРЅСѓРІСЃСЏ" else "GRID РІРёРјРєРЅСѓРІСЃСЏ"
+                events += LocalEvent(title, "РџСЂРёС‡РёРЅР°: ${current.gridRelayReason.normalizeReason()}")
             }
         }
 
@@ -135,7 +135,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.gridMode,
                 currMode = current.gridMode,
-                title = "Зміна режиму GRID",
+                title = "Р—РјС–РЅР° СЂРµР¶РёРјСѓ GRID",
                 reason = current.gridModeReason,
             )
         }
@@ -144,7 +144,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.loadMode,
                 currMode = current.loadMode,
-                title = "Зміна режиму LOAD",
+                title = "Р—РјС–РЅР° СЂРµР¶РёРјСѓ LOAD",
                 reason = current.loadModeReason,
             )
         }
@@ -153,7 +153,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.boiler1Mode,
                 currMode = current.boiler1Mode,
-                title = "Зміна режиму BOILER1",
+                title = "Р—РјС–РЅР° СЂРµР¶РёРјСѓ BOILER1",
                 reason = current.boiler1ModeReason,
             )
         }
@@ -162,7 +162,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.pumpMode,
                 currMode = current.pumpMode,
-                title = "Зміна режиму PUMP",
+                title = "Р—РјС–РЅР° СЂРµР¶РёРјСѓ PUMP",
                 reason = current.pumpModeReason,
             )
         }
@@ -171,7 +171,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.boiler2Mode,
                 currMode = current.boiler2Mode,
-                title = "Зміна режиму BOILER2",
+                title = "Р—РјС–РЅР° СЂРµР¶РёРјСѓ BOILER2",
                 reason = current.boiler2ModeReason,
             )
         }
@@ -181,8 +181,8 @@ object LocalEventEngine {
                 !current.gateState.isNullOrBlank() &&
                 previous.gateState != current.gateState
             ) {
-                val body = "Стан: ${previous.gateState} -> ${current.gateState}. Причина: ${current.gateReason.orUnknown()}"
-                events += LocalEvent("Зміна стану воріт", body)
+                val body = "РЎС‚Р°РЅ: ${previous.gateState} -> ${current.gateState}. РџСЂРёС‡РёРЅР°: ${current.gateReason.normalizeReason()}"
+                events += LocalEvent("Р—РјС–РЅР° СЃС‚Р°РЅСѓ РІРѕСЂС–С‚", body)
             }
         }
 
@@ -200,11 +200,21 @@ object LocalEventEngine {
         if (prevMode == currMode) return
         events += LocalEvent(
             title,
-            "$prevMode -> $currMode. Причина: ${reason.orUnknown()}",
+            "$prevMode -> $currMode. РџСЂРёС‡РёРЅР°: ${reason.normalizeReason()}",
         )
     }
 
-    private fun String?.orUnknown(): String = this?.takeIf { it.isNotBlank() } ?: "невідомо"
+    private fun String?.normalizeReason(): String {
+        val value = this?.trim().orEmpty()
+        if (value.isEmpty()) return "Ручна зміна"
+
+        return when (value.lowercase()) {
+            "manual" -> "Ручна зміна"
+            "manual pulse" -> "Ручний імпульс"
+            "unknown", "uncnov", "невідомо", "---", "none", "null", "n/a", "na" -> "Ручна зміна"
+            else -> value
+        }
+    }
 }
 
 private const val PV_ACTIVE_THRESHOLD_W = 80.0
@@ -241,3 +251,4 @@ private fun JSONObject.optNullableBoolean(key: String): Boolean? {
         else -> null
     }
 }
+
