@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>my Home</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playpen+Sans:wght@300;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="hub.css">
+</head>
+<body>
+  <div class="container">
+    <header class="compact-header">
+      <div class="header-row">
+        <div class="header-title">my home</div>
+        <button class="action-btn small" id="settingsOpenBtn" type="button">settings</button>
+      </div>
+      <div class="compact-subtitle">inverter + load controller + garage</div>
+    </header>
+
+    <section class="compact-header compact-status-shell">
+      <div class="compact-status-header">
+        <span class="status-block">
+          <span class="status-label">time</span>
+          <span class="status-value" id="realTime">--:--:--</span>
+        </span>
+        <span class="status-divider">•</span>
+        <span class="status-block">
+          <span class="detail-label">in:</span>
+          <span class="detail-value"><span id="lineVoltage">0</span> V</span>
+        </span>
+        <span class="status-divider">•</span>
+        <span class="status-block">
+          <span class="detail-label">pv:</span>
+          <span class="detail-value"><span id="pvPowerTop">0</span> W</span>
+        </span>
+        <span class="status-divider">•</span>
+        <span class="status-block">
+          <span class="detail-label">grid:</span>
+          <span class="detail-value"><span id="gridPowerTop">0</span> W</span>
+        </span>
+        <span class="status-divider">•</span>
+        <span class="status-block">
+          <span class="detail-label">load:</span>
+          <span class="detail-value"><span id="loadPowerTop">0</span> W</span>
+        </span>
+        <span class="status-divider">•</span>
+        <span class="status-block">
+          <span class="detail-label">bat:</span>
+          <span class="detail-value"><span id="batterySocTop">0</span>%</span>
+        </span>
+        <span class="status-divider">•</span>
+        <span class="status-block">
+          <span class="detail-label">bat pwr:</span>
+          <span class="detail-value"><span id="batteryPowerTop">0</span> W</span>
+        </span>
+        <span class="status-divider">•</span>
+        <span class="status-block">
+          <span id="wifiIcon">📶</span>
+          <span class="wifi-strength-fill" id="wifiStrengthBar"></span>
+          <span class="status-value" id="wifiStrengthTop">0%</span>
+        </span>
+      </div>
+    </section>
+
+    <section class="climate-wide-card clickable" id="climateWideCard">
+      <div class="climate-wide-header">
+        <div class="climate-wide-title">climate sensors</div>
+        <div class="climate-wide-sub" id="climateUpdated">updated: --:--:--</div>
+      </div>
+      <div class="climate-zone-list" id="climateZoneList">
+        <div class="climate-zone-row">
+          <span class="climate-zone-name">zone</span>
+          <span class="climate-zone-values">-- C / -- % / -- hPa</span>
+        </div>
+      </div>
+      <div class="climate-wide-foot">tap to open climate chart (inverter)</div>
+    </section>
+
+    <section class="cards-grid">
+      <article class="data-card pv clickable" id="cardPv">
+        <div class="card-icon">☀</div>
+        <div class="card-title">pv</div>
+        <div class="card-value pv-value"><span id="pvValue">0</span><span class="status-unit">W</span></div>
+        <div class="card-details">
+          <div class="detail-row"><span class="detail-label">source:</span><span class="detail-value" id="pvSource">inverter</span></div>
+          <div class="detail-row"><span class="detail-label">updated:</span><span class="detail-value" id="pvUpdated">--:--:--</span></div>
+        </div>
+      </article>
+
+      <article class="data-card grid clickable" id="cardGrid">
+        <div class="card-icon">🔌</div>
+        <div class="card-title">grid</div>
+        <div class="card-value grid-value"><span id="gridValue">0</span><span class="status-unit">W</span></div>
+        <div class="card-details">
+          <div class="detail-row"><span class="detail-label">mode:</span><span class="detail-value" id="gridMode">---</span></div>
+          <div class="detail-row"><span class="detail-label">relay:</span><span class="detail-value" id="gridRelay">---</span></div>
+          <div class="detail-row"><span class="detail-label">reason:</span><span class="detail-value" id="gridReason">---</span></div>
+        </div>
+      </article>
+
+      <article class="data-card load clickable" id="cardLoad">
+        <div class="card-icon">🏠</div>
+        <div class="card-title">load</div>
+        <div class="card-value load-value"><span id="loadValue">0</span><span class="status-unit">W</span></div>
+        <div class="card-details">
+          <div class="detail-row"><span class="detail-label">mode:</span><span class="detail-value" id="loadMode">---</span></div>
+          <div class="detail-row"><span class="detail-label">relay:</span><span class="detail-value" id="loadRelay">---</span></div>
+          <div class="detail-row"><span class="detail-label">reason:</span><span class="detail-value" id="loadReason">---</span></div>
+        </div>
+      </article>
+
+      <article class="data-card battery clickable" id="cardBattery">
+        <div class="card-icon">🔋</div>
+        <div class="card-title">battery</div>
+        <div class="card-value battery-value"><span id="batteryValue">0</span><span class="status-unit">%</span></div>
+        <div class="card-details">
+          <div class="detail-row"><span class="detail-label">power:</span><span class="detail-value"><span id="batteryPowerCard">0</span> W</span></div>
+          <div class="detail-row"><span class="detail-label">line:</span><span class="detail-value"><span id="lineVoltageCard">0</span> V</span></div>
+        </div>
+      </article>
+
+      <article class="data-card boiler clickable" id="cardBoiler1">
+        <div class="card-icon">♨</div>
+        <div class="card-title">boiler1</div>
+        <div class="card-value boiler-value"><span id="boiler1StateMain">---</span></div>
+        <div class="card-details">
+          <div class="detail-row"><span class="detail-label">mode:</span><span class="detail-value" id="boiler1Mode">---</span></div>
+          <div class="detail-row"><span class="detail-label">state:</span><span class="detail-value" id="boiler1State">---</span></div>
+          <div class="detail-row"><span class="detail-label">reason:</span><span class="detail-value" id="boiler1Reason">---</span></div>
+        </div>
+      </article>
+
+      <article class="data-card pump clickable" id="cardPump">
+        <div class="card-icon">💧</div>
+        <div class="card-title">pump</div>
+        <div class="card-value pump-value"><span id="pumpStateMain">---</span></div>
+        <div class="card-details">
+          <div class="detail-row"><span class="detail-label">mode:</span><span class="detail-value" id="pumpMode">---</span></div>
+          <div class="detail-row"><span class="detail-label">state:</span><span class="detail-value" id="pumpState">---</span></div>
+          <div class="detail-row"><span class="detail-label">reason:</span><span class="detail-value" id="pumpReason">---</span></div>
+        </div>
+      </article>
+
+      <article class="data-card boiler clickable" id="cardBoiler2">
+        <div class="card-icon">♨</div>
+        <div class="card-title">boiler2</div>
+        <div class="card-value boiler-value"><span id="boiler2StateMain">---</span></div>
+        <div class="card-details">
+          <div class="detail-row"><span class="detail-label">mode:</span><span class="detail-value" id="boiler2Mode">---</span></div>
+          <div class="detail-row"><span class="detail-label">state:</span><span class="detail-value" id="boiler2State">---</span></div>
+          <div class="detail-row"><span class="detail-label">reason:</span><span class="detail-value" id="boiler2Reason">---</span></div>
+        </div>
+      </article>
+
+      <article class="data-card door clickable" id="cardGate">
+        <div class="card-icon">🚪</div>
+        <div class="card-title">gate</div>
+        <div class="card-value door-value"><span id="gateState">---</span></div>
+        <div class="card-details">
+          <div class="detail-row"><span class="detail-label">reason:</span><span class="detail-value" id="gateReason">---</span></div>
+          <div class="detail-row"><span class="detail-label">action:</span><span class="detail-value">tap card</span></div>
+        </div>
+      </article>
+    </section>
+
+    <footer class="compact-footer">
+      <div class="compact-footer-info">
+        <div class="compact-footer-item"><span>last update:</span><span id="lastUpdateText">--:--:--</span></div>
+        <div class="compact-footer-item"><span>poll:</span><span id="pollText">5s</span></div>
+      </div>
+      <div>made for Chapay's house | my Home</div>
+    </footer>
+  </div>
+
+  <div class="modal-root" id="energyModal">
+    <div class="chart-overlay" data-close-modal="energyModal"></div>
+    <div class="chart-box chart-modal-box">
+      <div class="chart-header">
+        <div class="chart-title" id="energyChartTitle">energy graph</div>
+        <button class="close-graph-btn" type="button" data-close-modal="energyModal">×</button>
+      </div>
+      <div class="chart-toolbar">
+        <div class="period-radio-group">
+          <label class="period-radio"><input type="radio" name="energyPeriod" value="daily" checked>day</label>
+          <label class="period-radio"><input type="radio" name="energyPeriod" value="monthly">month</label>
+          <label class="period-radio"><input type="radio" name="energyPeriod" value="yearly">year</label>
+        </div>
+        <input id="energyDateInput" class="period-input" type="date">
+        <input id="energyMonthInput" class="period-input" type="month">
+        <button class="action-btn small" id="energyLoadBtn" type="button">load</button>
+      </div>
+      <canvas id="energyCanvas" class="graph-canvas"></canvas>
+      <div class="chart-legend" id="energyLegend"></div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="climateModal">
+    <div class="chart-overlay" data-close-modal="climateModal"></div>
+    <div class="chart-box chart-modal-box">
+      <div class="chart-header">
+        <div class="chart-title" id="climateChartTitle">climate graph</div>
+        <button class="close-graph-btn" type="button" data-close-modal="climateModal">×</button>
+      </div>
+      <div class="chart-toolbar">
+        <div class="period-radio-group">
+          <label class="period-radio"><input type="radio" name="climatePeriod" value="daily" checked>day</label>
+          <label class="period-radio"><input type="radio" name="climatePeriod" value="monthly">month</label>
+          <label class="period-radio"><input type="radio" name="climatePeriod" value="yearly">year</label>
+        </div>
+        <input id="climateDateInput" class="period-input" type="date">
+        <input id="climateMonthInput" class="period-input" type="month">
+        <button class="action-btn small" id="climateLoadBtn" type="button">load</button>
+      </div>
+      <div class="metric-toggle">
+        <button class="metric-btn active" data-climate-metric="temp" type="button">temp</button>
+        <button class="metric-btn" data-climate-metric="hum" type="button">hum</button>
+        <button class="metric-btn" data-climate-metric="press" type="button">press</button>
+      </div>
+      <canvas id="climateCanvas" class="graph-canvas"></canvas>
+      <div class="chart-legend" id="climateLegend"></div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="gridModal">
+    <div class="chart-overlay" data-close-modal="gridModal"></div>
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">grid control</div>
+        <button class="close-graph-btn" type="button" data-close-modal="gridModal">×</button>
+      </div>
+      <div class="control-group">
+        <div class="control-group-header">
+          <div class="control-group-title">grid mode</div>
+          <div class="control-group-status" id="gridModalState">---</div>
+        </div>
+        <div class="mode-buttons-compact">
+          <button class="mode-btn-compact" id="btnGridAUTO" data-grid-mode="AUTO">AUTO</button>
+          <button class="mode-btn-compact" id="btnGridOFF" data-grid-mode="OFF">OFF</button>
+          <button class="mode-btn-compact" id="btnGridON" data-grid-mode="ON">ON</button>
+        </div>
+        <div class="reason-line">reason: <span id="gridModalReason">---</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="loadModal">
+    <div class="chart-overlay" data-close-modal="loadModal"></div>
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">load control</div>
+        <button class="close-graph-btn" type="button" data-close-modal="loadModal">×</button>
+      </div>
+      <div class="control-group">
+        <div class="control-group-header">
+          <div class="control-group-title">load mode</div>
+          <div class="control-group-status" id="loadModalState">---</div>
+        </div>
+        <div class="mode-buttons-compact">
+          <button class="mode-btn-compact" id="btnLoadAUTO" data-load-mode="AUTO">AUTO</button>
+          <button class="mode-btn-compact" id="btnLoadOFF" data-load-mode="OFF">OFF</button>
+          <button class="mode-btn-compact" id="btnLoadON" data-load-mode="ON">ON</button>
+        </div>
+        <div class="reason-line">reason: <span id="loadModalReason">---</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="boiler1Modal">
+    <div class="chart-overlay" data-close-modal="boiler1Modal"></div>
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">boiler1 control</div>
+        <button class="close-graph-btn" type="button" data-close-modal="boiler1Modal">×</button>
+      </div>
+      <div class="control-group">
+        <div class="control-group-header">
+          <div class="control-group-title">boiler1 mode</div>
+          <div class="control-group-status" id="boiler1ModalState">---</div>
+        </div>
+        <div class="mode-buttons-compact">
+          <button class="mode-btn-compact" data-boiler1-mode="AUTO">AUTO</button>
+          <button class="mode-btn-compact" data-boiler1-mode="OFF">OFF</button>
+          <button class="mode-btn-compact" data-boiler1-mode="ON">ON</button>
+        </div>
+        <div class="reason-line">reason: <span id="boiler1ModalReason">---</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="pumpModal">
+    <div class="chart-overlay" data-close-modal="pumpModal"></div>
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">pump control</div>
+        <button class="close-graph-btn" type="button" data-close-modal="pumpModal">×</button>
+      </div>
+      <div class="control-group">
+        <div class="control-group-header">
+          <div class="control-group-title">pump mode</div>
+          <div class="control-group-status" id="pumpModalState">---</div>
+        </div>
+        <div class="mode-buttons-compact">
+          <button class="mode-btn-compact" data-pump-mode="AUTO">AUTO</button>
+          <button class="mode-btn-compact" data-pump-mode="OFF">OFF</button>
+          <button class="mode-btn-compact" data-pump-mode="ON">ON</button>
+        </div>
+        <div class="reason-line">reason: <span id="pumpModalReason">---</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="boiler2Modal">
+    <div class="chart-overlay" data-close-modal="boiler2Modal"></div>
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">boiler2 control</div>
+        <button class="close-graph-btn" type="button" data-close-modal="boiler2Modal">×</button>
+      </div>
+      <div class="control-group">
+        <div class="control-group-header">
+          <div class="control-group-title">boiler2 mode</div>
+          <div class="control-group-status" id="boiler2ModalState">---</div>
+        </div>
+        <div class="mode-buttons-compact">
+          <button class="mode-btn-compact" data-boiler2-mode="AUTO">AUTO</button>
+          <button class="mode-btn-compact" data-boiler2-mode="OFF">OFF</button>
+          <button class="mode-btn-compact" data-boiler2-mode="ON">ON</button>
+        </div>
+        <div class="reason-line">reason: <span id="boiler2ModalReason">---</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="gateModal">
+    <div class="chart-overlay" data-close-modal="gateModal"></div>
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">gate</div>
+        <button class="close-graph-btn" type="button" data-close-modal="gateModal">×</button>
+      </div>
+      <div class="control-group">
+        <div class="control-group-header">
+          <div class="control-group-title">current state</div>
+          <div class="control-group-status" id="gateModalState">---</div>
+        </div>
+        <div class="reason-line">reason: <span id="gateModalReason">---</span></div>
+        <button class="action-btn" id="gateToggleBtn" type="button">toggle gate</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="settingsModal">
+    <div class="chart-overlay" data-close-modal="settingsModal"></div>
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">connection settings</div>
+        <button class="close-graph-btn" type="button" data-close-modal="settingsModal">×</button>
+      </div>
+      <div class="settings-form">
+        <div class="settings-group-title">modules</div>
+        <label class="settings-check"><input id="cfgInverterEnabled" type="checkbox"> inverter enabled</label>
+        <label class="settings-check"><input id="cfgLoadEnabled" type="checkbox"> load controller enabled</label>
+        <label class="settings-check"><input id="cfgGarageEnabled" type="checkbox"> garage enabled</label>
+
+        <div class="settings-group-title">connections</div>
+        <label>Inverter URL<input id="cfgInverterUrl" type="text"></label>
+        <label>Inverter Password<input id="cfgInverterPass" type="password"></label>
+        <label>Load Controller URL<input id="cfgLoadUrl" type="text"></label>
+        <label>Load Controller Password<input id="cfgLoadPass" type="password"></label>
+        <label>Garage URL<input id="cfgGarageUrl" type="text"></label>
+        <label>Garage Password<input id="cfgGaragePass" type="password"></label>
+        <label>Poll Interval (2-60 sec)<input id="cfgPollSec" type="number" min="2" max="60"></label>
+
+        <div class="settings-group-title">realtime monitor</div>
+        <label class="settings-check"><input id="cfgRealtimeEnabled" type="checkbox"> realtime foreground monitoring</label>
+        <label>Realtime Interval (3-60 sec)<input id="cfgRealtimeSec" type="number" min="3" max="60"></label>
+
+        <div class="settings-group-title">notifications</div>
+        <label class="settings-check"><input id="cfgNotifyPv" type="checkbox"> pv generation appeared/disappeared</label>
+        <label class="settings-check"><input id="cfgNotifyGridRelay" type="checkbox"> grid turned on/off</label>
+        <label class="settings-check"><input id="cfgNotifyGridMode" type="checkbox"> grid mode changed</label>
+        <label class="settings-check"><input id="cfgNotifyLoadMode" type="checkbox"> load mode changed</label>
+        <label class="settings-check"><input id="cfgNotifyBoiler1" type="checkbox"> boiler1 mode changed</label>
+        <label class="settings-check"><input id="cfgNotifyPump" type="checkbox"> pump mode changed</label>
+        <label class="settings-check"><input id="cfgNotifyBoiler2" type="checkbox"> boiler2 mode changed</label>
+        <label class="settings-check"><input id="cfgNotifyGate" type="checkbox"> gate state changed</label>
+
+        <div class="settings-actions">
+          <button class="action-btn" id="settingsSaveBtn" type="button">save</button>
+          <button class="action-btn secondary" type="button" data-close-modal="settingsModal">cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-root" id="toastRoot"></div>
+  <script src="hub.js"></script>
+</body>
+</html>

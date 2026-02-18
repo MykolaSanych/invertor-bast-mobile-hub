@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">my Home</string>
+    <string name="notif_channel_name">Home Events</string>
+    <string name="notif_channel_desc">Події будинку: PV/GRID/режими/ворота</string>
+    <string name="monitor_channel_name">Background Monitor</string>
+    <string name="monitor_channel_desc">Локальний фоновий моніторинг модулів</string>
+    <string name="monitor_notification_title">my Home monitor</string>
+</resources>

@@ -1,0 +1,10 @@
+android/.gradle/
+android/local.properties
+android/**/build/
+android/app/google-services.json
+
+push-bridge/.env
+push-bridge/service-account.json
+push-bridge/.venv/
+push-bridge/__pycache__/
+push-bridge/*.pyc
