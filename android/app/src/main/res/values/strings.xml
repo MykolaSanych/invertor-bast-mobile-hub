@@ -6,4 +6,15 @@
     <string name="monitor_channel_name">Background Monitor</string>
     <string name="monitor_channel_desc">Локальний фоновий моніторинг модулів</string>
     <string name="monitor_notification_title">my Home monitor</string>
+    <string name="widget_status_name">my Home status</string>
+    <string name="widget_status_description">Статус будинку: температура та енергетичні показники</string>
+    <string name="widget_status_title">my Home</string>
+    <string name="widget_status_waiting">Оновлення...</string>
+    <string name="widget_status_updated_at">Оновлено: %1$s</string>
+    <string name="widget_metric_outside_temp">OUT</string>
+    <string name="widget_metric_pv_power">PV</string>
+    <string name="widget_metric_grid_power">GRID</string>
+    <string name="widget_metric_load_power">LOAD</string>
+    <string name="widget_metric_battery_power">BAT</string>
+    <string name="widget_metric_battery_soc">BAT</string>
 </resources>

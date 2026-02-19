@@ -104,4 +104,5 @@ data class UnifiedStatus(
     val loadController: LoadControllerStatus? = null,
     val garage: GarageStatus? = null,
     val updatedAtMs: Long = System.currentTimeMillis(),
+    val fromMulticast: Boolean = false,
 )

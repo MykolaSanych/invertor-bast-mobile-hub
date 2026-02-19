@@ -25,6 +25,7 @@ import com.chapay.homehub.data.StatusRepository
 import com.chapay.homehub.data.UnifiedStatus
 import com.chapay.homehub.push.MonitorController
 import com.chapay.homehub.push.ensureNotificationChannel
+import com.chapay.homehub.widget.StatusWidgetProvider
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -291,6 +292,7 @@ class MainActivity : ComponentActivity() {
         }
 
         private fun sendStatus(requestId: String, status: UnifiedStatus) {
+            StatusWidgetProvider.updateAllWidgets(this@MainActivity, status)
             evaluateJs(
                 "window.HubNative&&window.HubNative.onStatusResult(" +
                     "${JSONObject.quote(requestId)},${status.toJson()});",
@@ -360,6 +362,7 @@ private fun configToJson(cfg: AppConfig): JSONObject = JSONObject().apply {
 
 private fun UnifiedStatus.toJson(): JSONObject = JSONObject().apply {
     put("updatedAtMs", updatedAtMs)
+    put("fromMulticast", fromMulticast)
     put("inverter", inverter?.toJson() ?: JSONObject.NULL)
     put("loadController", loadController?.toJson() ?: JSONObject.NULL)
     put("garage", garage?.toJson() ?: JSONObject.NULL)

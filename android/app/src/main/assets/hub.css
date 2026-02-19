@@ -431,6 +431,28 @@ body {
   opacity: 0;
 }
 
+.data-card.card-neon-off .card-icon,
+.data-card.card-neon-off .card-title,
+.data-card.card-neon-off .card-value,
+.data-card.card-neon-off .detail-label,
+.data-card.card-neon-off .detail-value,
+.data-card.card-neon-off .status-unit,
+.data-card.card-neon-off .mini-indicator,
+.data-card.card-neon-off .door-time-label,
+.data-card.card-neon-off .door-time-value {
+  color: rgba(var(--card-accent-rgb), 0.62);
+  text-shadow: none;
+}
+
+.data-card.card-neon-off .mini-indicator {
+  border-color: rgba(var(--card-accent-rgb), 0.24);
+  background: rgba(var(--card-accent-rgb), 0.06);
+}
+
+.data-card.card-neon-off .card-details {
+  border-top-color: rgba(var(--card-accent-rgb), 0.18);
+}
+
 .data-card.card-neon-on .card-icon,
 .data-card.card-neon-on .card-title,
 .data-card.card-neon-on .card-value,

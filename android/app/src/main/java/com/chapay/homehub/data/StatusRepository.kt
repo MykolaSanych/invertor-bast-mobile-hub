@@ -127,7 +127,7 @@ class StatusRepository(
     }
 
     private fun fetchUnifiedFromMulticast(config: AppConfig): UnifiedStatus {
-        pollMulticastPackets(MULTICAST_LISTEN_WINDOW_MS)
+        val receivedMulticastPacket = pollMulticastPackets(MULTICAST_LISTEN_WINDOW_MS)
 
         val now = System.currentTimeMillis()
         val inverter: InverterStatus?
@@ -159,10 +159,12 @@ class StatusRepository(
             loadController = loadController,
             garage = garage,
             updatedAtMs = if (newestPacketAt > 0L) newestPacketAt else now,
+            fromMulticast = receivedMulticastPacket,
         )
     }
 
-    private fun pollMulticastPackets(windowMs: Long) {
+    private fun pollMulticastPackets(windowMs: Long): Boolean {
+        var receivedPacket = false
         val multicastLock = runCatching {
             val wifiManager = appContext?.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             wifiManager?.createMulticastLock("my_home_multicast_lock")?.apply {
@@ -178,7 +180,7 @@ class StatusRepository(
                 bind(InetSocketAddress(MULTICAST_PORT))
                 joinGroup(multicastGroupAddress)
             }
-        }.getOrNull() ?: return
+        }.getOrNull() ?: return false
 
         try {
             val endAt = System.currentTimeMillis() + windowMs
@@ -198,6 +200,7 @@ class StatusRepository(
                 }.getOrNull() ?: continue
 
                 val json = runCatching { JSONObject(payload) }.getOrNull() ?: continue
+                receivedPacket = true
                 applyMulticastPacket(json)
             }
         } finally {
@@ -209,6 +212,8 @@ class StatusRepository(
                 }
             }
         }
+
+        return receivedPacket
     }
 
     private fun applyMulticastPacket(json: JSONObject) {

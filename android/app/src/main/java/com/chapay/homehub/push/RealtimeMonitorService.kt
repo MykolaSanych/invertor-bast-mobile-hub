@@ -9,6 +9,7 @@ import android.util.Log
 import com.chapay.homehub.data.AppConfig
 import com.chapay.homehub.data.AppConfigStorage
 import com.chapay.homehub.data.StatusRepository
+import com.chapay.homehub.widget.StatusWidgetProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -78,6 +79,7 @@ class RealtimeMonitorService : Service() {
             }
         }
         StatusSnapshotStore.save(this, current)
+        StatusWidgetProvider.updateAllWidgets(this, status)
     }
 
     companion object {
