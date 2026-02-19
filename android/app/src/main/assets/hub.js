@@ -25,6 +25,7 @@ const LOAD_TIMELINE_POWER_ON_THRESHOLD = 50;
 const LOAD_TIMELINE_HISTORY_REFRESH_MS = 60 * 1000;
 const LOAD_TIMELINE_VISIBLE_HOURS = 6;
 const LOAD_TIMELINE_MAX_SAMPLES = 1600;
+const CARD_NEON_POWER_THRESHOLD = 1;
 
 const state = {
   config: { ...DEFAULT_CONFIG },
@@ -1283,10 +1284,25 @@ function setCardDataState(cardId, hasData) {
   card.classList.toggle("card-live", !!hasData);
 }
 
+function applyCardNeonByPower(cardId, powerValue, enabled = true) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  const power = Number(powerValue);
+  const neonEnabled = !!enabled && Number.isFinite(power) && Math.abs(power) >= CARD_NEON_POWER_THRESHOLD;
+  card.classList.toggle("card-neon-on", neonEnabled);
+  card.classList.toggle("card-neon-off", !neonEnabled);
+}
+
 function flashCard(cardId) {
   const card = document.getElementById(cardId);
   if (!card) return;
-  if (card.classList.contains("module-disabled") || card.classList.contains("card-stale")) return;
+  if (
+    card.classList.contains("module-disabled") ||
+    card.classList.contains("card-stale") ||
+    card.classList.contains("card-neon-off")
+  ) {
+    return;
+  }
   card.classList.remove("card-flash");
   // Restart animation on each refresh cycle.
   void card.offsetWidth;
@@ -2274,6 +2290,15 @@ function renderAll() {
   setText("gateModalState", garageOff ? "disabled" : safeText(garage.gateState, gateNormalized));
   setText("gateModalReason", garageOff ? "module disabled" : safeText(garage.gateReason));
   setGateActionButtonLabel(gateNormalized);
+
+  applyCardNeonByPower("cardPv", inverter.pvW, !invOff);
+  applyCardNeonByPower("cardGrid", inverter.gridW, !invOff);
+  applyCardNeonByPower("cardLoad", inverter.loadW, !invOff);
+  applyCardNeonByPower("cardBattery", inverter.batteryPower, !invOff);
+  applyCardNeonByPower("cardBoiler1", loadController.boilerPower, !loadOff);
+  applyCardNeonByPower("cardPump", loadController.pumpPower, !loadOff);
+  applyCardNeonByPower("cardBoiler2", garage.boilerPower, !garageOff);
+  applyCardNeonByPower("cardGate", null, false);
 
   renderClimateWideCard(inverter, loadController, garage);
 

@@ -260,6 +260,8 @@ body {
 }
 
 .data-card {
+  --card-accent: var(--text);
+  --card-accent-rgb: 230, 241, 255;
   background: linear-gradient(
     180deg,
     rgba(12, 18, 38, 0.95),
@@ -272,6 +274,7 @@ body {
   position: relative;
   overflow: hidden;
   min-height: 190px;
+  color: var(--card-accent);
   transition: transform 0.22s ease, box-shadow 0.24s ease, border-color 0.24s ease;
   animation: cardBreathe 8s ease-in-out infinite;
 }
@@ -295,28 +298,63 @@ body {
   height: 4px;
 }
 
+.data-card.pv {
+  --card-accent: var(--neon-amber);
+  --card-accent-rgb: 255, 179, 71;
+}
+
 .data-card.pv::before {
   background: var(--neon-amber);
+}
+
+.data-card.grid {
+  --card-accent: var(--neon-blue);
+  --card-accent-rgb: 79, 124, 255;
 }
 
 .data-card.grid::before {
   background: var(--neon-blue);
 }
 
+.data-card.load {
+  --card-accent: var(--neon-red);
+  --card-accent-rgb: 255, 77, 109;
+}
+
 .data-card.load::before {
   background: var(--neon-red);
+}
+
+.data-card.battery {
+  --card-accent: var(--neon-green);
+  --card-accent-rgb: 51, 255, 153;
 }
 
 .data-card.battery::before {
   background: var(--neon-green);
 }
 
+.data-card.boiler {
+  --card-accent: var(--neon-red);
+  --card-accent-rgb: 255, 77, 109;
+}
+
 .data-card.boiler::before {
   background: var(--neon-red);
 }
 
+.data-card.pump {
+  --card-accent: var(--neon-blue);
+  --card-accent-rgb: 79, 124, 255;
+}
+
 .data-card.pump::before {
   background: var(--neon-blue);
+}
+
+.data-card.door {
+  --card-accent: var(--neon-green);
+  --card-accent-rgb: 51, 255, 153;
 }
 
 .data-card.door::before {
@@ -327,7 +365,20 @@ body {
   cursor: pointer;
 }
 
-.data-card.clickable:hover,
+.data-card.clickable:hover {
+  transform: translateY(-3px);
+}
+
+.data-card.clickable.card-neon-on:hover {
+  box-shadow:
+    0 0 22px rgba(var(--card-accent-rgb), 0.22),
+    0 12px 26px rgba(0, 0, 0, 0.4);
+}
+
+.data-card.clickable.card-neon-off:hover {
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+}
+
 .climate-wide-card.clickable:hover {
   transform: translateY(-3px);
   box-shadow:
@@ -359,14 +410,47 @@ body {
   animation: cardUpdateFlash 0.55s ease-out;
 }
 
+.data-card.card-neon-on {
+  border-color: rgba(var(--card-accent-rgb), 0.62);
+  box-shadow:
+    0 0 26px rgba(var(--card-accent-rgb), 0.3),
+    0 0 46px rgba(var(--card-accent-rgb), 0.15),
+    0 12px 26px rgba(0, 0, 0, 0.42);
+}
+
+.data-card.card-neon-on::after {
+  opacity: 0.78;
+}
+
+.data-card.card-neon-off {
+  border-color: rgba(79, 124, 255, 0.22);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+}
+
+.data-card.card-neon-off::after {
+  opacity: 0;
+}
+
+.data-card.card-neon-on .card-icon,
+.data-card.card-neon-on .card-title,
+.data-card.card-neon-on .card-value,
+.data-card.card-neon-on .detail-label,
+.data-card.card-neon-on .detail-value,
+.data-card.card-neon-on .mini-indicator,
+.data-card.card-neon-on .door-time-label,
+.data-card.card-neon-on .door-time-value {
+  text-shadow: 0 0 12px rgba(var(--card-accent-rgb), 0.54);
+}
+
 .card-icon {
   font-size: 2rem;
   margin-bottom: 8px;
+  color: var(--card-accent);
 }
 
 .card-title {
   font-size: 0.92rem;
-  color: var(--muted);
+  color: var(--card-accent);
   letter-spacing: 0.5px;
   text-transform: uppercase;
 }
@@ -376,6 +460,7 @@ body {
   font-weight: 700;
   margin: 8px 0;
   line-height: 1;
+  color: var(--card-accent);
 }
 
 .pv-value {
@@ -406,7 +491,7 @@ body {
 .card-details {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid rgba(79, 124, 255, 0.2);
+  border-top: 1px solid rgba(var(--card-accent-rgb), 0.3);
   display: grid;
   gap: 5px;
 }
@@ -420,9 +505,9 @@ body {
 }
 
 .mini-indicator {
-  border: 1px solid rgba(79, 124, 255, 0.35);
-  background: rgba(9, 14, 30, 0.8);
-  color: var(--text);
+  border: 1px solid rgba(var(--card-accent-rgb), 0.45);
+  background: rgba(var(--card-accent-rgb), 0.12);
+  color: var(--card-accent);
   border-radius: 999px;
   padding: 3px 8px;
   font-size: 0.7rem;
@@ -476,18 +561,18 @@ body {
   align-items: center;
   padding: 6px 8px;
   border-radius: 8px;
-  background: rgba(6, 14, 10, 0.6);
-  border: 1px solid rgba(51, 255, 153, 0.2);
+  background: rgba(var(--card-accent-rgb), 0.08);
+  border: 1px solid rgba(var(--card-accent-rgb), 0.28);
   font-size: 0.74rem;
 }
 
 .door-time-label {
-  color: rgba(182, 216, 198, 0.75);
+  color: var(--card-accent);
   font-weight: 600;
 }
 
 .door-time-value {
-  color: var(--neon-green);
+  color: var(--card-accent);
   font-weight: 700;
   letter-spacing: 0.2px;
 }
@@ -506,6 +591,12 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 65%;
+}
+
+.data-card .detail-label,
+.data-card .detail-value,
+.data-card .status-unit {
+  color: var(--card-accent);
 }
 
 .compact-footer {
@@ -970,11 +1061,9 @@ body {
 @keyframes cardBreathe {
   0%, 100% {
     border-color: rgba(79, 124, 255, 0.3);
-    box-shadow: 0 0 0 rgba(0, 230, 255, 0);
   }
   50% {
     border-color: rgba(79, 124, 255, 0.45);
-    box-shadow: 0 0 16px rgba(0, 230, 255, 0.12);
   }
 }
 
