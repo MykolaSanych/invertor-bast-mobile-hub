@@ -117,16 +117,16 @@ object LocalEventEngine {
 
         if (config.inverterEnabled && config.notifyPvGeneration) {
             if (previous.pvActive != null && current.pvActive != null && previous.pvActive != current.pvActive) {
-                val title = if (current.pvActive) "PV РіРµРЅРµСЂР°С†С–СЏ Р·'СЏРІРёР»Р°СЃСЊ" else "PV РіРµРЅРµСЂР°С†С–СЏ Р·РЅРёРєР»Р°"
-                val reason = "PV=${current.pvW?.toInt() ?: 0}W, РїРѕСЂС–Рі ${PV_ACTIVE_THRESHOLD_W.toInt()}W"
-                events += LocalEvent(title, "РџСЂРёС‡РёРЅР°: $reason")
+                val title = if (current.pvActive) "PV generation started" else "PV generation stopped"
+                val reason = "PV=${current.pvW?.toInt() ?: 0}W, threshold ${PV_ACTIVE_THRESHOLD_W.toInt()}W"
+                events += LocalEvent(title, "Reason: $reason")
             }
         }
 
         if (config.inverterEnabled && config.notifyGridRelay) {
             if (previous.gridRelayOn != null && current.gridRelayOn != null && previous.gridRelayOn != current.gridRelayOn) {
-                val title = if (current.gridRelayOn) "GRID СѓРІС–РјРєРЅСѓРІСЃСЏ" else "GRID РІРёРјРєРЅСѓРІСЃСЏ"
-                events += LocalEvent(title, "РџСЂРёС‡РёРЅР°: ${current.gridRelayReason.normalizeReason()}")
+                val title = if (current.gridRelayOn) "GRID relay turned ON" else "GRID relay turned OFF"
+                events += LocalEvent(title, "Reason: ${current.gridRelayReason.normalizeReason()}")
             }
         }
 
@@ -135,7 +135,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.gridMode,
                 currMode = current.gridMode,
-                title = "Р—РјС–РЅР° СЂРµР¶РёРјСѓ GRID",
+                title = "GRID mode changed",
                 reason = current.gridModeReason,
             )
         }
@@ -144,7 +144,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.loadMode,
                 currMode = current.loadMode,
-                title = "Р—РјС–РЅР° СЂРµР¶РёРјСѓ LOAD",
+                title = "LOAD mode changed",
                 reason = current.loadModeReason,
             )
         }
@@ -153,7 +153,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.boiler1Mode,
                 currMode = current.boiler1Mode,
-                title = "Р—РјС–РЅР° СЂРµР¶РёРјСѓ BOILER1",
+                title = "BOILER1 mode changed",
                 reason = current.boiler1ModeReason,
             )
         }
@@ -162,7 +162,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.pumpMode,
                 currMode = current.pumpMode,
-                title = "Р—РјС–РЅР° СЂРµР¶РёРјСѓ PUMP",
+                title = "PUMP mode changed",
                 reason = current.pumpModeReason,
             )
         }
@@ -171,7 +171,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.boiler2Mode,
                 currMode = current.boiler2Mode,
-                title = "Р—РјС–РЅР° СЂРµР¶РёРјСѓ BOILER2",
+                title = "BOILER2 mode changed",
                 reason = current.boiler2ModeReason,
             )
         }
@@ -181,8 +181,8 @@ object LocalEventEngine {
                 !current.gateState.isNullOrBlank() &&
                 previous.gateState != current.gateState
             ) {
-                val body = "РЎС‚Р°РЅ: ${previous.gateState} -> ${current.gateState}. РџСЂРёС‡РёРЅР°: ${current.gateReason.normalizeReason()}"
-                events += LocalEvent("Р—РјС–РЅР° СЃС‚Р°РЅСѓ РІРѕСЂС–С‚", body)
+                val body = "State: ${previous.gateState} -> ${current.gateState}. Reason: ${current.gateReason.normalizeReason()}"
+                events += LocalEvent("Gate state changed", body)
             }
         }
 
@@ -200,20 +200,33 @@ object LocalEventEngine {
         if (prevMode == currMode) return
         events += LocalEvent(
             title,
-            "$prevMode -> $currMode. РџСЂРёС‡РёРЅР°: ${reason.normalizeReason()}",
+            "$prevMode -> $currMode. Reason: ${reason.normalizeReason()}",
         )
     }
 
     private fun String?.normalizeReason(): String {
         val value = this?.trim().orEmpty()
-        if (value.isEmpty()) return "Ручна зміна"
+        if (value.isEmpty()) return "Manual change"
 
-        return when (value.lowercase()) {
-            "manual" -> "Ручна зміна"
-            "manual pulse" -> "Ручний імпульс"
-            "unknown", "uncnov", "невідомо", "---", "none", "null", "n/a", "na" -> "Ручна зміна"
-            else -> value
+        val normalized = value.lowercase().replace('_', ' ').replace('-', ' ').trim()
+        if (normalized.isEmpty()) return "Manual change"
+
+        if (normalized == "manual" || normalized.contains("manual")) return "Manual change"
+        if (normalized == "manual pulse" || normalized == "pulse") return "Manual pulse"
+        if (normalized == "unknown" ||
+            normalized == "uncnov" ||
+            normalized == "---" ||
+            normalized == "none" ||
+            normalized == "null" ||
+            normalized == "n/a" ||
+            normalized == "na" ||
+            normalized.contains("unknown") ||
+            normalized.contains("uncnov")
+        ) {
+            return "Manual change"
         }
+
+        return value
     }
 }
 

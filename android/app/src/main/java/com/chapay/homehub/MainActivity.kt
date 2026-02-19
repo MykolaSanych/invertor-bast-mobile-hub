@@ -30,7 +30,7 @@ import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
-    private val repository = StatusRepository()
+    private val repository by lazy { StatusRepository(this) }
     private var chartsLandscapeMode = false
 
     private val notificationPermissionLauncher = registerForActivityResult(

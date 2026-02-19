@@ -10,7 +10,7 @@ class BackgroundStatusWorker(
     appContext: android.content.Context,
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
-    private val repository = StatusRepository()
+    private val repository = StatusRepository(appContext)
 
     override suspend fun doWork(): Result {
         return runCatching {

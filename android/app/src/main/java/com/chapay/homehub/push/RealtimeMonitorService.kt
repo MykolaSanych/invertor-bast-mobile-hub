@@ -19,7 +19,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class RealtimeMonitorService : Service() {
-    private val repository = StatusRepository()
+    private val repository by lazy { StatusRepository(applicationContext) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollJob: Job? = null
 
