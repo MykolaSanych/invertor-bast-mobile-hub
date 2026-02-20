@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from firebase_admin import credentials, get_app, initialize_app, messaging
 from pydantic import BaseModel, Field
 
@@ -58,6 +58,17 @@ def as_str(value: Any, default: str = "") -> str:
         return default
     text = str(value).strip()
     return text if text else default
+
+
+def bearer_token(authorization: Optional[str]) -> str:
+    if not authorization:
+        return ""
+    parts = authorization.strip().split(" ", 1)
+    if len(parts) != 2:
+        return ""
+    if parts[0].lower() != "bearer":
+        return ""
+    return parts[1].strip()
 
 
 @dataclass
@@ -145,6 +156,7 @@ class PushBridge:
         self.fcm_topic = env("FCM_TOPIC", "home-events") or "home-events"
         self.credentials_path = env("FIREBASE_CREDENTIALS_JSON", "./service-account.json")
         self.fcm_dry_run = as_bool(env("FCM_DRY_RUN", "0"))
+        self.api_token = env("BRIDGE_API_TOKEN")
 
         self.inverter = DeviceClient(
             "inverter",
@@ -502,6 +514,7 @@ class PushBridge:
             "running": self._running,
             "fcm_enabled": self.fcm_enabled,
             "fcm_dry_run": self.fcm_dry_run,
+            "api_token_required": bool(self.api_token),
             "firebase_credentials_found": os.path.exists(self.credentials_path),
             "poll_interval_sec": self.poll_interval,
             "request_timeout_sec": self.request_timeout,
@@ -527,6 +540,22 @@ class PushBridge:
 
 
 bridge = PushBridge()
+
+
+def require_api_token(
+    x_bridge_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    configured = bridge.api_token
+    if not configured:
+        return
+    if x_bridge_token and x_bridge_token == configured:
+        return
+    if bearer_token(authorization) == configured:
+        return
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 app = FastAPI(title="Home Push Bridge", version="1.1.0")
 
 
@@ -546,18 +575,18 @@ def health():
 
 
 @app.get("/probe")
-def probe():
+def probe(_auth: None = Depends(require_api_token)):
     return bridge.probe_devices()
 
 
 @app.post("/poll-once")
-def poll_once():
+def poll_once(_auth: None = Depends(require_api_token)):
     events = bridge.poll_once()
     return {"count": len(events), "events": [asdict(e) for e in events]}
 
 
 @app.post("/test-push")
-def test_push(request: TestPushRequest):
+def test_push(request: TestPushRequest, _auth: None = Depends(require_api_token)):
     ok = bridge.send_test_push(request.title, request.body, request.reason)
     if not ok:
         raise HTTPException(status_code=503, detail="FCM is not configured")
@@ -565,7 +594,7 @@ def test_push(request: TestPushRequest):
 
 
 @app.get("/last-events")
-def last_events(limit: int = 50):
+def last_events(limit: int = 50, _auth: None = Depends(require_api_token)):
     limit = max(1, min(200, limit))
     items = list(bridge.last_events)[-limit:]
     return {"count": len(items), "events": [asdict(e) for e in items]}

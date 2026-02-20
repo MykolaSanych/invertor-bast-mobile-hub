@@ -2,7 +2,9 @@ package com.chapay.homehub
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -23,6 +25,7 @@ import com.chapay.homehub.data.InverterStatus
 import com.chapay.homehub.data.LoadControllerStatus
 import com.chapay.homehub.data.StatusRepository
 import com.chapay.homehub.data.UnifiedStatus
+import com.chapay.homehub.push.EventJournalStore
 import com.chapay.homehub.push.MonitorController
 import com.chapay.homehub.push.ensureNotificationChannel
 import com.chapay.homehub.widget.StatusWidgetProvider
@@ -121,6 +124,7 @@ class MainActivity : ComponentActivity() {
                     realtimePollIntervalSec = parsed.optInt("realtimePollIntervalSec", current.realtimePollIntervalSec).coerceIn(3, 60),
                     notifyPvGeneration = parsed.optBoolean("notifyPvGeneration", current.notifyPvGeneration),
                     notifyGridRelay = parsed.optBoolean("notifyGridRelay", current.notifyGridRelay),
+                    notifyGridPresence = parsed.optBoolean("notifyGridPresence", current.notifyGridPresence),
                     notifyGridMode = parsed.optBoolean("notifyGridMode", current.notifyGridMode),
                     notifyLoadMode = parsed.optBoolean("notifyLoadMode", current.notifyLoadMode),
                     notifyBoiler1Mode = parsed.optBoolean("notifyBoiler1Mode", current.notifyBoiler1Mode),
@@ -209,6 +213,27 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun fetchEventJournal(requestId: String) {
+            lifecycleScope.launch {
+                runCatching { EventJournalStore.toJson(this@MainActivity) }
+                    .onSuccess { payload -> sendDataResult(requestId, payload.toString()) }
+                    .onFailure { err -> sendDataError(requestId, err.message ?: "Event journal load failed") }
+            }
+        }
+
+        @JavascriptInterface
+        fun clearEventJournal(requestId: String) {
+            lifecycleScope.launch {
+                runCatching {
+                    EventJournalStore.clear(this@MainActivity)
+                    JSONObject().put("ok", true)
+                }
+                    .onSuccess { payload -> sendDataResult(requestId, payload.toString()) }
+                    .onFailure { err -> sendDataError(requestId, err.message ?: "Event journal clear failed") }
+            }
+        }
+
+        @JavascriptInterface
         fun setInverterGridMode(mode: String, requestId: String) {
             runModeCommand(requestId) { cfg -> repository.setInverterGridMode(cfg, mode.uppercase()) }
         }
@@ -256,6 +281,41 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun triggerGate(requestId: String) {
             runModeCommand(requestId) { cfg -> repository.triggerGate(cfg) }
+        }
+
+        @JavascriptInterface
+        fun openInAppUrl(url: String): Boolean {
+            val raw = url.trim()
+            if (raw.isEmpty()) return false
+            if (!::webView.isInitialized) return false
+
+            val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
+            val scheme = uri.scheme?.lowercase()
+            if (scheme != "http" && scheme != "https") return false
+
+            return runCatching {
+                runOnUiThread {
+                    webView.loadUrl(uri.toString())
+                }
+                true
+            }.getOrDefault(false)
+        }
+
+        @JavascriptInterface
+        fun openExternalUrl(url: String): Boolean {
+            val raw = url.trim()
+            if (raw.isEmpty()) return false
+
+            val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
+            val scheme = uri.scheme?.lowercase()
+            if (scheme != "http" && scheme != "https") return false
+
+            return runCatching {
+                runOnUiThread {
+                    startActivity(Intent(Intent.ACTION_VIEW, uri))
+                }
+                true
+            }.getOrDefault(false)
         }
 
         @JavascriptInterface
@@ -352,6 +412,7 @@ private fun configToJson(cfg: AppConfig): JSONObject = JSONObject().apply {
     put("realtimePollIntervalSec", cfg.realtimePollIntervalSec)
     put("notifyPvGeneration", cfg.notifyPvGeneration)
     put("notifyGridRelay", cfg.notifyGridRelay)
+    put("notifyGridPresence", cfg.notifyGridPresence)
     put("notifyGridMode", cfg.notifyGridMode)
     put("notifyLoadMode", cfg.notifyLoadMode)
     put("notifyBoiler1Mode", cfg.notifyBoiler1Mode)
@@ -391,12 +452,14 @@ private fun InverterStatus.toJson(): JSONObject = JSONObject().apply {
     put("loadMode", loadMode)
     put("loadModeReason", loadModeReason)
     put("gridRelayOn", gridRelayOn)
+    put("gridPresent", gridPresent)
     put("gridRelayReason", gridRelayReason)
     put("loadRelayOn", loadRelayOn)
     put("loadRelayReason", loadRelayReason)
     put("wifiStrength", wifiStrength)
     put("rtcTime", rtcTime)
     put("rtcDate", rtcDate)
+    put("updatedAtMs", updatedAtMs)
     put("bmeAvailable", bmeAvailable)
     put("bmeTemp", bmeTemp)
     put("bmeHum", bmeHum)
@@ -433,6 +496,7 @@ private fun LoadControllerStatus.toJson(): JSONObject = JSONObject().apply {
     put("wifiStrength", wifiStrength)
     put("rtcTime", rtcTime)
     put("rtcDate", rtcDate)
+    put("updatedAtMs", updatedAtMs)
     put("bmeAvailable", bmeAvailable)
     put("bmeTemp", bmeTemp)
     put("bmeHum", bmeHum)
@@ -461,6 +525,7 @@ private fun GarageStatus.toJson(): JSONObject = JSONObject().apply {
     put("wifiStrength", wifiStrength)
     put("rtcTime", rtcTime)
     put("rtcDate", rtcDate)
+    put("updatedAtMs", updatedAtMs)
     put("bmeAvailable", bmeAvailable)
     put("bmeTemp", bmeTemp)
     put("bmeHum", bmeHum)

@@ -46,6 +46,7 @@ Example important values:
 - `REQUEST_TIMEOUT_SEC=5`
 - `FCM_TOPIC=home-events`
 - `FCM_DRY_RUN=0`
+- `BRIDGE_API_TOKEN=<strong-random-token>` (recommended)
 
 ## 3. Run push bridge
 
@@ -82,7 +83,11 @@ cd mobile-hub\push-bridge
 
 ## API
 
-- `GET /health`
+If `BRIDGE_API_TOKEN` is set, send one of:
+- `X-Bridge-Token: <token>`
+- `Authorization: Bearer <token>`
+
+- `GET /health` (always open)
 - `GET /probe`
 - `POST /poll-once`
 - `POST /test-push`

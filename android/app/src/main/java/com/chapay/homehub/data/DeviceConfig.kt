@@ -17,6 +17,7 @@ data class AppConfig(
     val realtimePollIntervalSec: Int = 5,
     val notifyPvGeneration: Boolean = true,
     val notifyGridRelay: Boolean = true,
+    val notifyGridPresence: Boolean = true,
     val notifyGridMode: Boolean = true,
     val notifyLoadMode: Boolean = true,
     val notifyBoiler1Mode: Boolean = true,
@@ -41,6 +42,7 @@ object AppConfigStorage {
     private const val K_REALTIME_SEC = "rt_sec"
     private const val K_N_PV = "n_pv"
     private const val K_N_GRID_RELAY = "n_grid_relay"
+    private const val K_N_GRID_PRESENCE = "n_grid_presence"
     private const val K_N_GRID_MODE = "n_grid_mode"
     private const val K_N_LOAD_MODE = "n_load_mode"
     private const val K_N_BOILER1 = "n_boiler1"
@@ -65,6 +67,7 @@ object AppConfigStorage {
             realtimePollIntervalSec = p.getInt(K_REALTIME_SEC, 5).coerceIn(3, 60),
             notifyPvGeneration = p.getBoolean(K_N_PV, true),
             notifyGridRelay = p.getBoolean(K_N_GRID_RELAY, true),
+            notifyGridPresence = p.getBoolean(K_N_GRID_PRESENCE, true),
             notifyGridMode = p.getBoolean(K_N_GRID_MODE, true),
             notifyLoadMode = p.getBoolean(K_N_LOAD_MODE, true),
             notifyBoiler1Mode = p.getBoolean(K_N_BOILER1, true),
@@ -91,6 +94,7 @@ object AppConfigStorage {
             .putInt(K_REALTIME_SEC, cfg.realtimePollIntervalSec.coerceIn(3, 60))
             .putBoolean(K_N_PV, cfg.notifyPvGeneration)
             .putBoolean(K_N_GRID_RELAY, cfg.notifyGridRelay)
+            .putBoolean(K_N_GRID_PRESENCE, cfg.notifyGridPresence)
             .putBoolean(K_N_GRID_MODE, cfg.notifyGridMode)
             .putBoolean(K_N_LOAD_MODE, cfg.notifyLoadMode)
             .putBoolean(K_N_BOILER1, cfg.notifyBoiler1Mode)

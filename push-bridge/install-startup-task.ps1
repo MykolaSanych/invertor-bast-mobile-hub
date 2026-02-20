@@ -1,6 +1,6 @@
 ﻿param(
   [string]$TaskName = "MyHomePushBridge",
-  [string]$HostAddress = "0.0.0.0",
+  [string]$HostAddress = "127.0.0.1",
   [int]$Port = 8080
 )
 

@@ -41,6 +41,7 @@ fun ensureNotificationChannel(context: Context) {
 
 fun showPushNotification(context: Context, title: String, body: String) {
     ensureNotificationChannel(context)
+    EventJournalStore.append(context, title, body)
     val launchIntent = Intent(context, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
     }

@@ -13,6 +13,7 @@ const DEFAULT_CONFIG = {
   realtimePollIntervalSec: 5,
   notifyPvGeneration: true,
   notifyGridRelay: true,
+  notifyGridPresence: true,
   notifyGridMode: true,
   notifyLoadMode: true,
   notifyBoiler1Mode: true,
@@ -61,6 +62,10 @@ const state = {
     lastTimestamp: 0,
     historyReady: false,
     lastHistoryFetchMs: 0,
+  },
+  events: {
+    items: [],
+    loadedAtMs: 0,
   },
 };
 
@@ -212,6 +217,15 @@ function clampRealtimePoll(value) {
   return Math.max(3, Math.min(60, Math.round(parsed)));
 }
 
+function normalizeBaseUrl(value) {
+  const trimmed = safeText(value, "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+  return `http://${trimmed}`;
+}
+
 function formatClockFromMs(ts) {
   const n = Number(ts);
   if (!Number.isFinite(n) || n <= 0) return "--:--:--";
@@ -241,14 +255,24 @@ function formatDateTimeFromStatus(dateValue, timeValue) {
   if (date && time && date !== "---" && time !== "--:--:--") {
     return `${date} ${time}`;
   }
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  const hh = String(now.getHours()).padStart(2, "0");
-  const mm = String(now.getMinutes()).padStart(2, "0");
-  const ss = String(now.getSeconds()).padStart(2, "0");
-  return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+  return formatDateTimeFromMs(Date.now());
+}
+
+function formatDateTimeFromMs(ts) {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return "--";
+  const d = new Date(n);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day} ${formatClockFromMs(n)}`;
+}
+
+function moduleUpdatedText(enabled, module) {
+  if (!enabled) return "disabled";
+  const moduleTs = Number(module?.updatedAtMs);
+  if (!Number.isFinite(moduleTs) || moduleTs <= 0) return "--:--:--";
+  return formatClockFromMs(moduleTs);
 }
 
 function classifyGateState(garage) {
@@ -588,6 +612,95 @@ async function openTimelineModal() {
   await loadLoadTimelineHistory({ force: true });
 }
 
+function renderEventJournal(items) {
+  const root = document.getElementById("eventList");
+  if (!root) return;
+  root.innerHTML = "";
+
+  if (!Array.isArray(items) || !items.length) {
+    const empty = document.createElement("div");
+    empty.className = "event-item-empty";
+    empty.textContent = "no events";
+    root.appendChild(empty);
+    return;
+  }
+
+  items.forEach((entry) => {
+    const item = document.createElement("div");
+    item.className = "event-item";
+
+    const head = document.createElement("div");
+    head.className = "event-item-head";
+
+    const title = document.createElement("div");
+    title.className = "event-item-title";
+    title.textContent = safeText(entry?.title, "event");
+
+    const time = document.createElement("div");
+    time.className = "event-item-time";
+    time.textContent = formatDateTimeFromMs(entry?.atMs);
+
+    const body = document.createElement("div");
+    body.className = "event-item-body";
+    body.textContent = safeText(entry?.body, "-");
+
+    head.appendChild(title);
+    head.appendChild(time);
+    item.appendChild(head);
+    item.appendChild(body);
+    root.appendChild(item);
+  });
+}
+
+async function loadEventJournal() {
+  if (!hasBridge()) {
+    renderEventJournal([]);
+    showToast("Android bridge not available");
+    return;
+  }
+
+  setText("eventChartTitle", "event journal - loading...");
+  try {
+    const payload = await bridgeRequest("events", (requestId) => {
+      window.AndroidHub.fetchEventJournal(requestId);
+    });
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    state.events.items = items;
+    state.events.loadedAtMs = Date.now();
+    renderEventJournal(items);
+    setText("eventChartTitle", "event journal");
+  } catch (error) {
+    renderEventJournal([]);
+    setText("eventChartTitle", "event journal - error");
+    showToast(`event journal failed: ${error.message}`);
+  }
+}
+
+async function clearEventJournal() {
+  if (!hasBridge()) {
+    showToast("Android bridge not available");
+    return;
+  }
+  if (!window.confirm("clear event journal?")) return;
+
+  try {
+    await bridgeRequest("events-clear", (requestId) => {
+      window.AndroidHub.clearEventJournal(requestId);
+    });
+    state.events.items = [];
+    state.events.loadedAtMs = Date.now();
+    renderEventJournal([]);
+    showToast("event journal cleared");
+  } catch (error) {
+    showToast(`event clear failed: ${error.message}`);
+  }
+}
+
+async function openEventModal() {
+  openModal("eventModal");
+  await loadEventJournal();
+}
+
 function updateButtonStates(selector, expected) {
   const normalizedExpected = safeText(expected, "").trim().toUpperCase();
   document.querySelectorAll(selector).forEach((btn) => {
@@ -730,6 +843,27 @@ function bindCardEvents() {
   if (headerTitle) {
     headerTitle.addEventListener("click", () => {
       openTimelineModal();
+    });
+  }
+
+  const eventsOpenBtn = document.getElementById("eventsOpenBtn");
+  if (eventsOpenBtn) {
+    eventsOpenBtn.addEventListener("click", () => {
+      openEventModal();
+    });
+  }
+
+  const eventsReloadBtn = document.getElementById("eventsReloadBtn");
+  if (eventsReloadBtn) {
+    eventsReloadBtn.addEventListener("click", () => {
+      loadEventJournal();
+    });
+  }
+
+  const eventsClearBtn = document.getElementById("eventsClearBtn");
+  if (eventsClearBtn) {
+    eventsClearBtn.addEventListener("click", () => {
+      clearEventJournal();
     });
   }
 
@@ -1108,7 +1242,47 @@ function bindModeButtons() {
   }
 }
 
+function openInverterLogs() {
+  const baseUrl = normalizeBaseUrl(state.config.inverterBaseUrl || DEFAULT_CONFIG.inverterBaseUrl);
+  if (!baseUrl) {
+    showToast("inverter URL is empty");
+    return;
+  }
+
+  const logsUrl = `${baseUrl}/api/sd/files`;
+
+  if (hasBridge() && window.AndroidHub) {
+    if (typeof window.AndroidHub.openInAppUrl === "function") {
+      const opened = !!window.AndroidHub.openInAppUrl(logsUrl);
+      if (!opened) {
+        showToast("failed to open logs");
+      }
+      return;
+    }
+
+    if (typeof window.AndroidHub.openExternalUrl === "function") {
+      const opened = !!window.AndroidHub.openExternalUrl(logsUrl);
+      if (!opened) {
+        showToast("failed to open logs");
+      }
+      return;
+    }
+  }
+
+  const popup = window.open(logsUrl, "_blank");
+  if (!popup) {
+    window.location.href = logsUrl;
+  }
+}
+
 function bindSettings() {
+  const logsBtn = document.getElementById("logsOpenBtn");
+  if (logsBtn) {
+    logsBtn.addEventListener("click", () => {
+      openInverterLogs();
+    });
+  }
+
   const openBtn = document.getElementById("settingsOpenBtn");
   if (openBtn) {
     openBtn.addEventListener("click", () => {
@@ -1141,6 +1315,7 @@ function bindSettings() {
       realtimePollIntervalSec: clampRealtimePoll(document.getElementById("cfgRealtimeSec")?.value),
       notifyPvGeneration: readChecked("cfgNotifyPv", true),
       notifyGridRelay: readChecked("cfgNotifyGridRelay", true),
+      notifyGridPresence: readChecked("cfgNotifyGridPresence", true),
       notifyGridMode: readChecked("cfgNotifyGridMode", true),
       notifyLoadMode: readChecked("cfgNotifyLoadMode", true),
       notifyBoiler1Mode: readChecked("cfgNotifyBoiler1", true),
@@ -1189,6 +1364,7 @@ function syncConfigToForm() {
   setCheck("cfgRealtimeEnabled", cfg.realtimeMonitorEnabled);
   setCheck("cfgNotifyPv", cfg.notifyPvGeneration);
   setCheck("cfgNotifyGridRelay", cfg.notifyGridRelay);
+  setCheck("cfgNotifyGridPresence", cfg.notifyGridPresence);
   setCheck("cfgNotifyGridMode", cfg.notifyGridMode);
   setCheck("cfgNotifyLoadMode", cfg.notifyLoadMode);
   setCheck("cfgNotifyBoiler1", cfg.notifyBoiler1Mode);
@@ -2209,6 +2385,17 @@ function renderAll() {
   const loadOff = !state.config.loadControllerEnabled;
   const garageOff = !state.config.garageEnabled;
 
+  const gridPresent = !invOff && (
+    inverter.gridPresent !== undefined && inverter.gridPresent !== null
+      ? !!inverter.gridPresent
+      : Number(inverter.lineVoltage) >= 170
+  );
+  const gridPresenceBadge = document.getElementById("gridPresenceBadge");
+  if (gridPresenceBadge) {
+    gridPresenceBadge.classList.toggle("is-present", gridPresent);
+    gridPresenceBadge.classList.toggle("is-absent", !gridPresent);
+  }
+
   if (!loadOff) {
     recordLoadTimelineSample(loadController);
   }
@@ -2327,6 +2514,9 @@ function renderAll() {
   applyLockedActiveButtons("btnBoiler2", state.locks.boiler2);
 
   setText("lastUpdateText", formatClockFromMs(status.updatedAtMs));
+  setText("moduleInvUpdated", moduleUpdatedText(!invOff, inverter));
+  setText("moduleLoadUpdated", moduleUpdatedText(!loadOff, loadController));
+  setText("moduleGarageUpdated", moduleUpdatedText(!garageOff, garage));
 }
 
 function debounce(fn, waitMs) {
@@ -2368,6 +2558,9 @@ function initUi() {
   applyModuleCardStates();
   applyLiveCardStates(null);
   setText("pollText", `${clampPoll(state.config.pollIntervalSec)}s`);
+  setText("moduleInvUpdated", "--:--:--");
+  setText("moduleLoadUpdated", "--:--:--");
+  setText("moduleGarageUpdated", "--:--:--");
 
   syncEnergyToolbar();
   syncClimateToolbar();

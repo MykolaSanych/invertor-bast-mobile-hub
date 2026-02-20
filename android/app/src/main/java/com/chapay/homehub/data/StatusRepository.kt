@@ -220,7 +220,7 @@ class StatusRepository(
         val now = System.currentTimeMillis()
         when (detectModuleType(json)) {
             MODULE_INVERTER -> {
-                val parsed = parseInverterStatus(json)
+                val parsed = parseInverterStatus(json, now)
                 synchronized(multicastCacheLock) {
                     cachedInverter = parsed
                     cachedInverterAtMs = now
@@ -228,7 +228,7 @@ class StatusRepository(
             }
 
             MODULE_LOAD -> {
-                val parsed = parseLoadControllerStatus(json)
+                val parsed = parseLoadControllerStatus(json, now)
                 synchronized(multicastCacheLock) {
                     cachedLoadController = parsed
                     cachedLoadAtMs = now
@@ -236,7 +236,7 @@ class StatusRepository(
             }
 
             MODULE_GARAGE -> {
-                val parsed = parseGarageStatus(json)
+                val parsed = parseGarageStatus(json, now)
                 synchronized(multicastCacheLock) {
                     cachedGarage = parsed
                     cachedGarageAtMs = now
@@ -341,20 +341,20 @@ class StatusRepository(
 
     private suspend fun fetchInverter(config: AppConfig): InverterStatus? = withContext(Dispatchers.IO) {
         val json = fetchStatusJson(config.inverterBaseUrl, config.inverterPassword) ?: return@withContext null
-        parseInverterStatus(json)
+        parseInverterStatus(json, System.currentTimeMillis())
     }
 
     private suspend fun fetchLoadController(config: AppConfig): LoadControllerStatus? = withContext(Dispatchers.IO) {
         val json = fetchStatusJson(config.loadControllerBaseUrl, config.loadControllerPassword) ?: return@withContext null
-        parseLoadControllerStatus(json)
+        parseLoadControllerStatus(json, System.currentTimeMillis())
     }
 
     private suspend fun fetchGarage(config: AppConfig): GarageStatus? = withContext(Dispatchers.IO) {
         val json = fetchStatusJson(config.garageBaseUrl, config.garagePassword) ?: return@withContext null
-        parseGarageStatus(json)
+        parseGarageStatus(json, System.currentTimeMillis())
     }
 
-    private fun parseInverterStatus(json: JSONObject): InverterStatus {
+    private fun parseInverterStatus(json: JSONObject, observedAtMs: Long): InverterStatus {
         val rtcTime = json.optStringSafeAny("--:--:--", "rtc_time", "time")
         val rtcDate = json.optStringSafeAny("---", "rtc_date", "date")
         val bmeTemp = json.optNullableDouble("bme_temp")
@@ -363,6 +363,11 @@ class StatusRepository(
         val bmeExtTemp = json.optNullableDouble("bme_ext_temp")
         val bmeExtHum = json.optNullableDouble("bme_ext_hum")
         val bmeExtPress = json.optNullableDouble("bme_ext_press")
+        val gridPresent = if (json.has("grid_present")) {
+            json.optBooleanSafe("grid_present")
+        } else {
+            json.optDoubleSafeAny("gridVolt") >= 170.0
+        }
 
         return InverterStatus(
             pvW = json.optDoubleSafeAny("pv"),
@@ -387,12 +392,14 @@ class StatusRepository(
             loadMode = json.optStringSafeAny("---", "load_mode"),
             loadModeReason = json.optStringSafeAny("manual", "load_mode_reason"),
             gridRelayOn = json.optBooleanSafe("pin34_state"),
+            gridPresent = gridPresent,
             gridRelayReason = json.optStringSafeAny("manual", "pin34_reason"),
             loadRelayOn = json.optBooleanSafe("pinLoad_state"),
             loadRelayReason = json.optStringSafeAny("manual", "pinLoad_reason"),
             wifiStrength = json.optDoubleSafeAny("wifi_strength"),
             rtcTime = rtcTime,
             rtcDate = rtcDate,
+            updatedAtMs = observedAtMs,
             bmeAvailable = json.optBooleanSafe("bme_available") || bmeTemp != null || bmeHum != null || bmePress != null,
             bmeTemp = bmeTemp,
             bmeHum = bmeHum,
@@ -404,7 +411,7 @@ class StatusRepository(
         )
     }
 
-    private fun parseLoadControllerStatus(json: JSONObject): LoadControllerStatus {
+    private fun parseLoadControllerStatus(json: JSONObject, observedAtMs: Long): LoadControllerStatus {
         val rtcTime = json.optStringSafeAny("--:--:--", "rtc_time", "time")
         val rtcDate = json.optStringSafeAny("---", "rtc_date", "date")
         val bmeTemp = json.optNullableDouble("bme_temp")
@@ -437,6 +444,7 @@ class StatusRepository(
             wifiStrength = json.optDoubleSafeAny("wifi_strength"),
             rtcTime = rtcTime,
             rtcDate = rtcDate,
+            updatedAtMs = observedAtMs,
             bmeAvailable = json.optBooleanSafe("bme_available") || bmeTemp != null || bmeHum != null || bmePress != null,
             bmeTemp = bmeTemp,
             bmeHum = bmeHum,
@@ -444,7 +452,7 @@ class StatusRepository(
         )
     }
 
-    private fun parseGarageStatus(json: JSONObject): GarageStatus {
+    private fun parseGarageStatus(json: JSONObject, observedAtMs: Long): GarageStatus {
         val rtcTime = json.optStringSafeAny("--:--:--", "rtc_time", "time")
         val rtcDate = json.optStringSafeAny("---", "rtc_date", "date")
         val bmeTemp = json.optNullableDouble("bme_temp")
@@ -473,6 +481,7 @@ class StatusRepository(
             wifiStrength = json.optDoubleSafeAny("wifi_strength"),
             rtcTime = rtcTime,
             rtcDate = rtcDate,
+            updatedAtMs = observedAtMs,
             bmeAvailable = json.optBooleanSafe("bme_available") || bmeTemp != null || bmeHum != null || bmePress != null,
             bmeTemp = bmeTemp,
             bmeHum = bmeHum,

@@ -14,6 +14,8 @@ data class StatusSnapshot(
     val pvActive: Boolean?,
     val pvW: Double?,
     val gridRelayOn: Boolean?,
+    val gridPresent: Boolean?,
+    val gridVoltage: Double?,
     val gridRelayReason: String?,
     val gridMode: String?,
     val gridModeReason: String?,
@@ -32,6 +34,8 @@ data class StatusSnapshot(
         put("pvActive", pvActive)
         put("pvW", pvW)
         put("gridRelayOn", gridRelayOn)
+        put("gridPresent", gridPresent)
+        put("gridVoltage", gridVoltage)
         put("gridRelayReason", gridRelayReason)
         put("gridMode", gridMode)
         put("gridModeReason", gridModeReason)
@@ -56,6 +60,8 @@ data class StatusSnapshot(
                 pvActive = inverter?.pvW?.let { it >= PV_ACTIVE_THRESHOLD_W },
                 pvW = inverter?.pvW,
                 gridRelayOn = inverter?.gridRelayOn,
+                gridPresent = inverter?.gridPresent,
+                gridVoltage = inverter?.lineVoltage,
                 gridRelayReason = inverter?.gridRelayReason,
                 gridMode = inverter?.mode,
                 gridModeReason = inverter?.modeReason,
@@ -76,6 +82,8 @@ data class StatusSnapshot(
             pvActive = json.optNullableBoolean("pvActive"),
             pvW = json.optNullableDouble("pvW"),
             gridRelayOn = json.optNullableBoolean("gridRelayOn"),
+            gridPresent = json.optNullableBoolean("gridPresent"),
+            gridVoltage = json.optNullableDouble("gridVoltage"),
             gridRelayReason = json.optNullableString("gridRelayReason"),
             gridMode = json.optNullableString("gridMode"),
             gridModeReason = json.optNullableString("gridModeReason"),
@@ -127,6 +135,14 @@ object LocalEventEngine {
             if (previous.gridRelayOn != null && current.gridRelayOn != null && previous.gridRelayOn != current.gridRelayOn) {
                 val title = if (current.gridRelayOn) "GRID relay turned ON" else "GRID relay turned OFF"
                 events += LocalEvent(title, "Reason: ${current.gridRelayReason.normalizeReason()}")
+            }
+        }
+
+        if (config.inverterEnabled && config.notifyGridPresence) {
+            if (previous.gridPresent != null && current.gridPresent != null && previous.gridPresent != current.gridPresent) {
+                val title = if (current.gridPresent) "GRID appeared" else "GRID disappeared"
+                val voltage = current.gridVoltage?.toInt() ?: 0
+                events += LocalEvent(title, "Line voltage: ${voltage}V")
             }
         }
 
