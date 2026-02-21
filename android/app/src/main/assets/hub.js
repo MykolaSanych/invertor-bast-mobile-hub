@@ -27,6 +27,7 @@ const LOAD_TIMELINE_HISTORY_REFRESH_MS = 60 * 1000;
 const LOAD_TIMELINE_VISIBLE_HOURS = 6;
 const LOAD_TIMELINE_MAX_SAMPLES = 1600;
 const CARD_NEON_POWER_THRESHOLD = 1;
+const MODULE_SIGNAL_TIMEOUT_MS = 35 * 1000;
 
 const state = {
   config: { ...DEFAULT_CONFIG },
@@ -67,6 +68,11 @@ const state = {
     items: [],
     loadedAtMs: 0,
   },
+  moduleSignalAtMs: {
+    inverter: 0,
+    loadController: 0,
+    garage: 0,
+  },
 };
 
 window.HubNative = {
@@ -78,6 +84,7 @@ window.HubNative = {
     }
 
     state.status = data;
+    updateModuleSignalTimes(data);
     renderAll();
     trackConnectivityHealth(data);
 
@@ -1436,6 +1443,37 @@ function trackConnectivityHealth(status) {
   }
 }
 
+function updateModuleSignalTimes(status) {
+  const now = Date.now();
+
+  const touchModule = (key, moduleData) => {
+    if (!moduleData || typeof moduleData !== "object") return;
+    const moduleTs = Number(moduleData.updatedAtMs);
+    const resolvedTs = Number.isFinite(moduleTs) && moduleTs > 0 ? moduleTs : now;
+
+    if (status?.fromMulticast) {
+      state.moduleSignalAtMs[key] = resolvedTs;
+      return;
+    }
+
+    // Bootstrap only once from non-multicast data to avoid immediate stale state on startup.
+    if (!state.moduleSignalAtMs[key]) {
+      state.moduleSignalAtMs[key] = resolvedTs;
+    }
+  };
+
+  touchModule("inverter", status?.inverter);
+  touchModule("loadController", status?.loadController);
+  touchModule("garage", status?.garage);
+}
+
+function moduleHasFreshSignal(key, enabled, moduleData) {
+  if (!enabled || !moduleData) return false;
+  const lastSignalTs = Number(state.moduleSignalAtMs[key]);
+  if (!Number.isFinite(lastSignalTs) || lastSignalTs <= 0) return false;
+  return Date.now() - lastSignalTs <= MODULE_SIGNAL_TIMEOUT_MS;
+}
+
 function setModuleCardsDisabled(cardIds, disabled) {
   cardIds.forEach((id) => {
     const el = document.getElementById(id);
@@ -1486,9 +1524,9 @@ function flashCard(cardId) {
 }
 
 function applyLiveCardStates(status) {
-  const hasInverterData = !!(state.config.inverterEnabled && status?.inverter);
-  const hasLoadData = !!(state.config.loadControllerEnabled && status?.loadController);
-  const hasGarageData = !!(state.config.garageEnabled && status?.garage);
+  const hasInverterData = moduleHasFreshSignal("inverter", state.config.inverterEnabled, status?.inverter);
+  const hasLoadData = moduleHasFreshSignal("loadController", state.config.loadControllerEnabled, status?.loadController);
+  const hasGarageData = moduleHasFreshSignal("garage", state.config.garageEnabled, status?.garage);
   const hasClimateData = hasInverterData || hasLoadData || hasGarageData;
 
   setCardDataState("cardPv", hasInverterData);

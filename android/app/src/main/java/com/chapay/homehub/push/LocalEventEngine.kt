@@ -227,8 +227,20 @@ object LocalEventEngine {
         val normalized = value.lowercase().replace('_', ' ').replace('-', ' ').trim()
         if (normalized.isEmpty()) return "Manual change"
 
-        if (normalized == "manual" || normalized.contains("manual")) return "Manual change"
-        if (normalized == "manual pulse" || normalized == "pulse") return "Manual pulse"
+        if (normalized == "manual" || normalized.contains("manual") || normalized.contains("ruch")) {
+            return "Manual change"
+        }
+        if (normalized == "manual pulse" || normalized == "pulse" || normalized.contains("impuls")) {
+            return "Manual pulse"
+        }
+
+        val compact = normalized.replace(" ", "")
+        val questionCount = compact.count { ch -> ch == '?' }
+        val isQuestionNoise = compact.isNotEmpty() && questionCount == compact.length
+        if (isQuestionNoise || questionCount >= 3) {
+            return "Manual change"
+        }
+
         if (normalized == "unknown" ||
             normalized == "uncnov" ||
             normalized == "---" ||

@@ -494,6 +494,14 @@ body {
   vertical-align: middle;
 }
 
+.data-card.grid .grid-presence-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin-left: 0;
+  z-index: 3;
+}
+
 .grid-presence-badge.is-absent {
   color: #111111;
 }
