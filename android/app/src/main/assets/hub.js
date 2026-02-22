@@ -28,6 +28,8 @@ const LOAD_TIMELINE_VISIBLE_HOURS = 6;
 const LOAD_TIMELINE_MAX_SAMPLES = 1600;
 const CARD_NEON_POWER_THRESHOLD = 1;
 const MODULE_SIGNAL_TIMEOUT_MS = 35 * 1000;
+const DEVICE_POWER_NOISE_FLOOR_W = 27;
+const ZERO_VOLTAGE_THRESHOLD_V = 0.5;
 
 const state = {
   config: { ...DEFAULT_CONFIG },
@@ -73,6 +75,13 @@ const state = {
     loadController: 0,
     garage: 0,
   },
+  schemeGesture: {
+    touch: null,
+    suppressClickUntilMs: 0,
+  },
+  schemeControlLandscape: false,
+  schemeControlReturnToSchemeModalId: "",
+  schemeControlPendingModalId: "",
 };
 
 window.HubNative = {
@@ -204,12 +213,41 @@ function safeText(value, fallback = "---") {
   return str.length ? str : fallback;
 }
 
+function isGarbledUiText(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/[\uFFFD]/.test(text)) return true;
+  if (/^[?\s]+$/.test(text)) return true;
+  return /[?]{2,}/.test(text);
+}
+
+function uiText(value, fallback = "---") {
+  const text = safeText(value, fallback);
+  return isGarbledUiText(text) ? fallback : text;
+}
+
 function pickNumber(values, fallback = 0) {
   for (const value of values) {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) return parsed;
   }
   return fallback;
+}
+
+function applyPowerNoiseFloor(value, thresholdW = DEVICE_POWER_NOISE_FLOOR_W) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return Math.abs(n) < thresholdW ? 0 : n;
+}
+
+function zeroGridPowerWhenNoVoltage(powerValue, voltageValue) {
+  const power = Number(powerValue);
+  const voltage = Number(voltageValue);
+  if (!Number.isFinite(power)) return powerValue;
+  if (Number.isFinite(voltage) && Math.abs(voltage) <= ZERO_VOLTAGE_THRESHOLD_V) {
+    return 0;
+  }
+  return power;
 }
 
 function clampPoll(value) {
@@ -767,11 +805,18 @@ function showToast(message) {
 }
 
 function modalNeedsLandscape(modalId) {
-  return modalId === "energyModal" || modalId === "climateModal" || modalId === "timelineModal";
+  if (modalId === "energyModal" || modalId === "climateModal" || modalId === "timelineModal" || modalId === "schemeModal") {
+    return true;
+  }
+  return isSchemeControlModal(modalId) && state.schemeControlLandscape;
 }
 
 function anyLandscapeModalOpen() {
-  return ["energyModal", "climateModal", "timelineModal"].some((id) => isModalOpen(id));
+  if (["energyModal", "climateModal", "timelineModal", "schemeModal"].some((id) => isModalOpen(id))) {
+    return true;
+  }
+  if (!state.schemeControlLandscape) return false;
+  return ["gridModal", "loadModal", "boiler1Modal", "pumpModal", "boiler2Modal"].some((id) => isModalOpen(id));
 }
 
 function syncChartsOrientation() {
@@ -787,8 +832,33 @@ function syncChartsOrientation() {
 function openModal(id) {
   const modal = document.getElementById(id);
   if (!modal) return;
+
+  if (id === "schemeModal") {
+    state.schemeControlLandscape = true;
+    state.schemeControlPendingModalId = "";
+  } else if (isSchemeControlModal(id)) {
+    if (state.schemeControlPendingModalId === id) {
+      state.schemeControlLandscape = true;
+      state.schemeControlReturnToSchemeModalId = id;
+      state.schemeControlPendingModalId = "";
+    } else {
+      state.schemeControlReturnToSchemeModalId = "";
+    }
+  } else {
+    state.schemeControlLandscape = false;
+    state.schemeControlReturnToSchemeModalId = "";
+    state.schemeControlPendingModalId = "";
+  }
+
   modal.classList.add("is-open");
-  if (modalNeedsLandscape(id)) {
+
+  if (id === "schemeModal") {
+    requestAnimationFrame(() => {
+      fitSchemeStageToViewport();
+    });
+  }
+
+  if (modalNeedsLandscape(id) || isSchemeControlModal(id)) {
     syncChartsOrientation();
   }
 }
@@ -796,8 +866,32 @@ function openModal(id) {
 function closeModal(id) {
   const modal = document.getElementById(id);
   if (!modal) return;
+
+  const affectsLandscape = modalNeedsLandscape(id) || id === "schemeModal" || isSchemeControlModal(id);
+  const returnToScheme = isSchemeControlModal(id) && state.schemeControlReturnToSchemeModalId === id;
+  const schemeToControlTransition = id === "schemeModal" && state.schemeControlPendingModalId.length > 0;
+
   modal.classList.remove("is-open");
-  if (modalNeedsLandscape(id)) {
+
+  if (returnToScheme) {
+    state.schemeControlReturnToSchemeModalId = "";
+    state.schemeControlLandscape = true;
+    openModal("schemeModal");
+    return;
+  }
+
+  if (isSchemeControlModal(id)) {
+    state.schemeControlReturnToSchemeModalId = "";
+  }
+
+  if (id === "schemeModal" && !anySchemeControlModalOpen() && !schemeToControlTransition) {
+    state.schemeControlLandscape = false;
+  }
+  if (isSchemeControlModal(id) && !isSchemeModalOpen() && !anySchemeControlModalOpen()) {
+    state.schemeControlLandscape = false;
+  }
+
+  if (affectsLandscape) {
     syncChartsOrientation();
   }
 }
@@ -806,12 +900,210 @@ function closeAllModals() {
   document.querySelectorAll(".modal-root").forEach((modal) => {
     modal.classList.remove("is-open");
   });
+  state.schemeControlLandscape = false;
+  state.schemeControlReturnToSchemeModalId = "";
+  state.schemeControlPendingModalId = "";
   syncChartsOrientation();
 }
 
 function isModalOpen(id) {
   const modal = document.getElementById(id);
   return !!modal && modal.classList.contains("is-open");
+}
+
+function isSchemeModalOpen() {
+  return isModalOpen("schemeModal");
+}
+
+function isSchemeControlModal(modalId) {
+  return modalId === "gridModal" || modalId === "loadModal" || modalId === "boiler1Modal" || modalId === "pumpModal" || modalId === "boiler2Modal";
+}
+
+function anySchemeControlModalOpen() {
+  return ["gridModal", "loadModal", "boiler1Modal", "pumpModal", "boiler2Modal"].some((id) => isModalOpen(id));
+}
+
+function hasOtherOpenModal(exceptId) {
+  const openModals = document.querySelectorAll(".modal-root.is-open");
+  for (const modal of openModals) {
+    if (!modal || modal.id === exceptId) continue;
+    return true;
+  }
+  return false;
+}
+
+function markSchemeSwipeHandled() {
+  state.schemeGesture.suppressClickUntilMs = Date.now() + 420;
+}
+
+function isSchemeSwipeClickSuppressed() {
+  return Date.now() < Number(state.schemeGesture.suppressClickUntilMs || 0);
+}
+
+function fitSchemeStageToViewport() {
+  const stage = document.getElementById("schemeStage");
+  const modalBox = document.querySelector("#schemeModal .scheme-modal-box");
+  if (!stage || !modalBox) return;
+
+  const viewportWidth = Math.max(320, window.innerWidth || document.documentElement.clientWidth || 1000);
+  const viewportHeight = Math.max(320, window.innerHeight || document.documentElement.clientHeight || 800);
+  const modalRect = modalBox.getBoundingClientRect();
+
+  const horizontalPadding = 10;
+  const verticalPadding = 10;
+
+  const boxWidth = Math.max(280, Math.floor(Math.min(modalBox.clientWidth - horizontalPadding, viewportWidth - 24)));
+  const boxLimitedHeight = Math.max(180, Math.floor(Math.min(modalBox.clientHeight - verticalPadding, viewportHeight - modalRect.top - 14)));
+
+  stage.style.width = `${boxWidth}px`;
+  stage.style.height = `${boxLimitedHeight}px`;
+}
+
+function bindSchemeSwipe() {
+  const beginTrack = (x, y, id, source) => {
+    if (state.schemeGesture.touch && state.schemeGesture.touch.source !== source) return;
+    state.schemeGesture.touch = {
+      source,
+      id,
+      startX: x,
+      startY: y,
+      handled: false,
+    };
+  };
+
+  const tryHandle = (x, y, id, source, eventObj) => {
+    const touch = state.schemeGesture.touch;
+    if (!touch) return false;
+    if (touch.source !== source || touch.id !== id) return false;
+
+    const dx = x - touch.startX;
+    const dy = y - touch.startY;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+
+    if (!touch.handled && absX >= 34 && absY <= 120 && absX >= absY * 1.05) {
+      if (dx > 0 && !isSchemeModalOpen() && !document.querySelector(".modal-root.is-open")) {
+        openModal("schemeModal");
+        touch.handled = true;
+        markSchemeSwipeHandled();
+      } else if (dx < 0 && isSchemeModalOpen()) {
+        closeModal("schemeModal");
+        touch.handled = true;
+        markSchemeSwipeHandled();
+      }
+    }
+
+    if (touch.handled && eventObj && eventObj.cancelable) {
+      eventObj.preventDefault();
+    }
+    return touch.handled;
+  };
+
+  const endTrack = (x, y, id, source, eventObj) => {
+    tryHandle(x, y, id, source, eventObj);
+    const touch = state.schemeGesture.touch;
+    if (touch && touch.source === source && touch.id === id) {
+      state.schemeGesture.touch = null;
+    }
+  };
+
+  const findTouchById = (touchList, id) => {
+    if (!touchList) return null;
+    for (let i = 0; i < touchList.length; i += 1) {
+      if (touchList[i].identifier === id) return touchList[i];
+    }
+    return null;
+  };
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (!isSchemeSwipeClickSuppressed()) return;
+      const targetElement = event.target;
+      if (targetElement instanceof Element && targetElement.closest("#schemeModal")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true,
+  );
+
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!event.isPrimary || event.pointerType === "mouse") return;
+      beginTrack(event.clientX, event.clientY, event.pointerId, "pointer");
+    },
+    { passive: true },
+  );
+
+  document.addEventListener(
+    "pointermove",
+    (event) => {
+      if (!event.isPrimary || event.pointerType === "mouse") return;
+      tryHandle(event.clientX, event.clientY, event.pointerId, "pointer", event);
+    },
+    { passive: false },
+  );
+
+  document.addEventListener(
+    "pointerup",
+    (event) => {
+      if (!event.isPrimary || event.pointerType === "mouse") return;
+      endTrack(event.clientX, event.clientY, event.pointerId, "pointer", event);
+    },
+    { passive: true },
+  );
+
+  document.addEventListener("pointercancel", (event) => {
+    const touch = state.schemeGesture.touch;
+    if (touch && touch.source === "pointer" && touch.id === event.pointerId) {
+      state.schemeGesture.touch = null;
+    }
+  });
+
+  document.addEventListener(
+    "touchstart",
+    (event) => {
+      const firstTouch = event.changedTouches && event.changedTouches[0];
+      if (!firstTouch) return;
+      beginTrack(firstTouch.clientX, firstTouch.clientY, firstTouch.identifier, "touch");
+    },
+    { passive: true },
+  );
+
+  document.addEventListener(
+    "touchmove",
+    (event) => {
+      const touch = state.schemeGesture.touch;
+      if (!touch || touch.source !== "touch") return;
+      const current = findTouchById(event.changedTouches, touch.id) || findTouchById(event.touches, touch.id);
+      if (!current) return;
+      tryHandle(current.clientX, current.clientY, touch.id, "touch", event);
+    },
+    { passive: false },
+  );
+
+  document.addEventListener(
+    "touchend",
+    (event) => {
+      const touch = state.schemeGesture.touch;
+      if (!touch || touch.source !== "touch") return;
+      const current = findTouchById(event.changedTouches, touch.id);
+      if (!current) {
+        state.schemeGesture.touch = null;
+        return;
+      }
+      endTrack(current.clientX, current.clientY, touch.id, "touch", event);
+    },
+    { passive: true },
+  );
+
+  document.addEventListener("touchcancel", () => {
+    const touch = state.schemeGesture.touch;
+    if (touch && touch.source === "touch") {
+      state.schemeGesture.touch = null;
+    }
+  });
 }
 
 function bindCardEvents() {
@@ -853,6 +1145,13 @@ function bindCardEvents() {
     });
   }
 
+  const schemeOpenBtn = document.getElementById("schemeOpenBtn");
+  if (schemeOpenBtn) {
+    schemeOpenBtn.addEventListener("click", () => {
+      openModal("schemeModal");
+    });
+  }
+
   const eventsOpenBtn = document.getElementById("eventsOpenBtn");
   if (eventsOpenBtn) {
     eventsOpenBtn.addEventListener("click", () => {
@@ -880,6 +1179,20 @@ function bindCardEvents() {
       loadLoadTimelineHistory({ force: true });
     });
   }
+
+  document.querySelectorAll("[data-scheme-open-modal]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const modalId = btn.getAttribute("data-scheme-open-modal");
+      if (!modalId) return;
+      if (hasOtherOpenModal("schemeModal") && !isModalOpen(modalId)) return;
+      state.schemeControlLandscape = true;
+      state.schemeControlPendingModalId = modalId;
+      closeModal("schemeModal");
+      openModal(modalId);
+    });
+  });
 
   document.querySelectorAll("[data-close-modal]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1258,22 +1571,12 @@ function openInverterLogs() {
 
   const logsUrl = `${baseUrl}/api/sd/files`;
 
-  if (hasBridge() && window.AndroidHub) {
-    if (typeof window.AndroidHub.openInAppUrl === "function") {
-      const opened = !!window.AndroidHub.openInAppUrl(logsUrl);
-      if (!opened) {
-        showToast("failed to open logs");
-      }
-      return;
+  if (hasBridge() && window.AndroidHub && typeof window.AndroidHub.openExternalUrl === "function") {
+    const opened = !!window.AndroidHub.openExternalUrl(logsUrl);
+    if (!opened) {
+      showToast("failed to open logs");
     }
-
-    if (typeof window.AndroidHub.openExternalUrl === "function") {
-      const opened = !!window.AndroidHub.openExternalUrl(logsUrl);
-      if (!opened) {
-        showToast("failed to open logs");
-      }
-      return;
-    }
+    return;
   }
 
   const popup = window.open(logsUrl, "_blank");
@@ -1415,6 +1718,26 @@ async function requestStatus() {
   }
 }
 
+async function requestMulticastRefreshNow() {
+  if (!hasBridge()) {
+    showToast("bridge unavailable");
+    return;
+  }
+
+  const btn = document.getElementById("multicastRefreshBtn");
+  if (btn) btn.disabled = true;
+  try {
+    await bridgeRequest("status", (requestId) => {
+      window.AndroidHub.fetchStatus(requestId);
+    });
+    showToast("refresh requested");
+  } catch (error) {
+    showToast(`refresh failed: ${error.message}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function restartPolling() {
   if (state.pollHandle) {
     clearInterval(state.pollHandle);
@@ -1439,7 +1762,7 @@ function trackConnectivityHealth(status) {
 
   state.emptyStatusCount += 1;
   if (state.emptyStatusCount === 3) {
-    showToast("No modules reachable. Check ZeroTier IPs in settings.");
+    showToast("No modules reachable. Check controller URLs and Wi-Fi.");
   }
 }
 
@@ -2179,18 +2502,18 @@ function currentClimateMetricMeta() {
 function climateSeriesForMetric(model, metric) {
   if (metric === "hum") {
     return {
-      internal: model.humInt,
+      primary: model.humInt,
       external: model.humExt,
     };
   }
   if (metric === "press") {
     return {
-      internal: model.pressInt,
+      primary: model.pressInt,
       external: model.pressExt,
     };
   }
   return {
-    internal: model.tempInt,
+    primary: model.tempInt,
     external: model.tempExt,
   };
 }
@@ -2214,20 +2537,12 @@ function renderClimateChart() {
   const selected = climateSeriesForMetric(model, state.climate.metric);
   const series = [
     {
-      label: `internal ${meta.label} (${meta.unit})`,
+      label: `${meta.label} (${meta.unit})`,
       color: "#7a5cff",
-      data: selected.internal,
+      data: selected.primary,
       lineWidth: 2.2,
       pointRadius: 1.4,
       fillAlpha: 0.2,
-    },
-    {
-      label: `external ${meta.label} (${meta.unit})`,
-      color: "#00e6ff",
-      data: selected.external,
-      lineWidth: 2.2,
-      pointRadius: 1.4,
-      fillAlpha: 0.14,
     },
   ];
 
@@ -2317,28 +2632,15 @@ function bindClimateControls() {
 function renderClimateWideCard(inverter, loadController, garage) {
   const zones = [];
 
-  const invIntAvailable = !!(
+  const invAvailable = !!(
     inverter &&
     (inverter.bmeAvailable ||
       inverter.bmeTemp !== null ||
       inverter.bmeHum !== null ||
       inverter.bmePress !== null)
   );
-  if (invIntAvailable) {
-    zones.push(climateZoneRow("гардероб", inverter.bmeTemp, inverter.bmeHum, inverter.bmePress));
-  }
-
-  const invExtAvailable = !!(
-    inverter &&
-    (inverter.bmeExtAvailable ||
-      inverter.bmeExtTemp !== null ||
-      inverter.bmeExtHum !== null ||
-      inverter.bmeExtPress !== null)
-  );
-  if (invExtAvailable) {
-    zones.push(
-      climateZoneRow("зовні", inverter.bmeExtTemp, inverter.bmeExtHum, inverter.bmeExtPress),
-    );
+  if (invAvailable) {
+    zones.push(climateZoneRow("outside", inverter.bmeTemp, inverter.bmeHum, inverter.bmePress));
   }
 
   const loadAvailable = !!(
@@ -2374,6 +2676,105 @@ function renderClimateWideCard(inverter, loadController, garage) {
   setText("climateUpdated", `updated: ${updated}`);
 }
 
+function formatSchemePower(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-- W";
+  return `${Math.round(n)} W`;
+}
+
+function setSchemeSwitchState(id, isClosed) {
+  const el = document.getElementById(id);
+  if (!el) return;
+
+  const unknown = isClosed === null || isClosed === undefined;
+  el.classList.toggle("is-on", isClosed === true);
+  el.classList.toggle("is-off", isClosed === false);
+  el.classList.toggle("is-unknown", unknown);
+
+  const stateLabel = el.querySelector(".scheme-switch-state");
+  if (stateLabel) {
+    stateLabel.textContent = unknown ? "--" : isClosed ? "ON" : "OFF";
+  }
+}
+
+function setSchemeLinkState(id, powerValue, enabled = true) {
+  const el = document.getElementById(id);
+  if (!el) return;
+
+  const power = Number(powerValue);
+  const hasPower = !!enabled && Number.isFinite(power) && Math.abs(power) >= 4;
+  const normalized = Number.isFinite(power) ? Math.min(1, Math.abs(power) / 6000) : 0;
+  const durationMs = Math.round(1900 - normalized * 1350);
+
+  const reverse = Number.isFinite(power) && power < 0;
+  el.classList.toggle("is-active", hasPower);
+  el.classList.toggle("is-reverse", reverse);
+  el.style.setProperty("--flow-direction", reverse ? "reverse" : "normal");
+  el.style.setProperty("--flow-duration", `${Math.max(420, durationMs)}ms`);
+}
+
+function renderPowerScheme({
+  inverter,
+  loadController,
+  garage,
+  invOff,
+  loadOff,
+  garageOff,
+  gridPresent,
+}) {
+  const gridPowerDisplayW = zeroGridPowerWhenNoVoltage(inverter.gridW, inverter.lineVoltage);
+  const boiler1PowerDisplayW = applyPowerNoiseFloor(loadController.boilerPower);
+  const pumpPowerDisplayW = applyPowerNoiseFloor(loadController.pumpPower);
+  const boiler2PowerDisplayW = applyPowerNoiseFloor(garage.boilerPower);
+
+  setText("schemeGridPower", invOff ? "-- W" : formatSchemePower(gridPowerDisplayW));
+  setText("schemePvPower", invOff ? "-- W" : formatSchemePower(inverter.pvW));
+  setText("schemeBatteryPower", invOff ? "-- W" : formatSchemePower(inverter.batteryPower));
+  setText("schemeLoadPower", invOff ? "-- W" : formatSchemePower(inverter.loadW));
+  setText("schemeBoiler1Power", loadOff ? "-- W" : formatSchemePower(boiler1PowerDisplayW));
+  setText("schemePumpPower", loadOff ? "-- W" : formatSchemePower(pumpPowerDisplayW));
+  setText("schemeBoiler2Power", garageOff ? "-- W" : formatSchemePower(boiler2PowerDisplayW));
+
+  setText("schemeInvInput", invOff ? "-- V" : `${num(inverter.lineVoltage, 1, "--")} V`);
+  setText("schemeInvOutput", invOff ? "-- V" : `${num(inverter.outputVoltage, 1, "--")} V`);
+  setText("schemeBatterySoc", invOff ? "--%" : `${num(inverter.batterySoc, 0, "--")}%`);
+  setText("schemeHouseLoad", invOff ? "-- W" : formatSchemePower(inverter.loadW));
+
+  setText("schemeBoiler1State", loadOff ? "disabled" : boolText(!!loadController.boiler1On));
+  setText("schemePumpState", loadOff ? "disabled" : boolText(!!loadController.pumpOn));
+  setText("schemeBoiler2State", garageOff ? "disabled" : boolText(!!garage.boiler2On));
+
+  const gridNode = document.getElementById("schemeNodeGrid");
+  if (gridNode) {
+    gridNode.classList.toggle("is-present", !!gridPresent);
+    gridNode.classList.toggle("is-absent", !gridPresent);
+  }
+  setText("schemeGridState", invOff ? "disabled" : gridPresent ? "live" : "off");
+
+  const gridSwitchOn = invOff ? null : !!inverter.gridRelayOn;
+  const loadSwitchOn = invOff ? null : !!inverter.loadRelayOn;
+  const boiler1SwitchOn = loadOff ? null : !!loadController.boiler1On;
+  const pumpSwitchOn = loadOff ? null : !!loadController.pumpOn;
+  const boiler2SwitchOn = garageOff ? null : !!garage.boiler2On;
+
+  setSchemeSwitchState("schemeSwitchGrid", gridSwitchOn);
+  setSchemeSwitchState("schemeSwitchLoad", loadSwitchOn);
+  setSchemeSwitchState("schemeSwitchBoiler1", boiler1SwitchOn);
+  setSchemeSwitchState("schemeSwitchPump", pumpSwitchOn);
+  setSchemeSwitchState("schemeSwitchBoiler2", boiler2SwitchOn);
+
+  setSchemeLinkState("schemeLinkGrid", gridPowerDisplayW, !invOff && !!gridPresent && gridSwitchOn === true);
+  setSchemeLinkState("schemeLinkPv", inverter.pvW, !invOff);
+  setSchemeLinkState("schemeLinkBattery", inverter.batteryPower, !invOff);
+  setSchemeLinkState("schemeLinkLoad", inverter.loadW, !invOff && loadSwitchOn === true);
+
+  const anyBranchActive = (boiler1SwitchOn === true) || (pumpSwitchOn === true) || (boiler2SwitchOn === true);
+  setSchemeLinkState("schemeLinkHouseTrunk", inverter.loadW, !invOff && loadSwitchOn === true && anyBranchActive);
+  setSchemeLinkState("schemeLinkBoiler1", boiler1PowerDisplayW, !loadOff && boiler1SwitchOn === true);
+  setSchemeLinkState("schemeLinkPump", pumpPowerDisplayW, !loadOff && pumpSwitchOn === true);
+  setSchemeLinkState("schemeLinkBoiler2", boiler2PowerDisplayW, !garageOff && boiler2SwitchOn === true);
+}
+
 function renderAll() {
   const status = state.status || {};
   const inverter = state.config.inverterEnabled ? status.inverter || {} : {};
@@ -2406,6 +2807,9 @@ function renderAll() {
     loadController.wifiStrength,
     garage.wifiStrength,
   ]);
+  const topGridDisplay = Math.abs(Number(topLineVoltage) || 0) <= ZERO_VOLTAGE_THRESHOLD_V
+    ? 0
+    : topGrid;
 
   setText(
     "realTime",
@@ -2413,7 +2817,7 @@ function renderAll() {
   );
   setText("lineVoltage", num(topLineVoltage, 1));
   setText("pvPowerTop", num(topPv, 0));
-  setText("gridPowerTop", num(topGrid, 0));
+  setText("gridPowerTop", num(topGridDisplay, 0));
   setText("loadPowerTop", num(topLoad, 0));
   setText("batterySocTop", num(topBatSoc, 0));
   setText("batteryPowerTop", num(topBatPower, 0));
@@ -2438,6 +2842,11 @@ function renderAll() {
     recordLoadTimelineSample(loadController);
   }
 
+  const gridPowerCardW = zeroGridPowerWhenNoVoltage(inverter.gridW, inverter.lineVoltage);
+  const boiler1PowerCardW = applyPowerNoiseFloor(loadController.boilerPower);
+  const pumpPowerCardW = applyPowerNoiseFloor(loadController.pumpPower);
+  const boiler2PowerCardW = applyPowerNoiseFloor(garage.boilerPower);
+
   setText("pvValue", invOff ? "--" : num(inverter.pvW, 0));
   setText("pvVoltage", invOff ? "--" : num(inverter.pvVoltage, 1));
   setText("dailyPV", invOff ? "--" : num(inverter.dailyPV, 1));
@@ -2446,14 +2855,14 @@ function renderAll() {
     invOff ? "--:--:--" : safeText(inverter.lastUpdate, safeText(inverter.rtcTime, "--:--:--")),
   );
 
-  setText("gridValue", invOff ? "--" : num(inverter.gridW, 0));
+  setText("gridValue", invOff ? "--" : num(gridPowerCardW, 0));
   setText("gridVoltage", invOff ? "--" : num(inverter.lineVoltage, 1));
   setText("gridFrequency", invOff ? "--" : num(inverter.gridFrequency, 1));
   setText("dailyGrid", invOff ? "--" : num(inverter.dailyGrid, 1));
   setText("gridModeIndicator", invOff ? "mode: disabled" : `mode: ${safeText(inverter.mode)}`);
   setText("gridStateIndicator", invOff ? "state: ---" : `state: ${boolText(!!inverter.gridRelayOn)}`);
   setText("gridModalState", invOff ? "---" : boolText(!!inverter.gridRelayOn));
-  setText("gridModalReason", invOff ? "module disabled" : safeText(inverter.gridRelayReason));
+  setText("gridModalReason", invOff ? "module disabled" : uiText(inverter.gridRelayReason, "manual"));
 
   setText("loadValue", invOff ? "--" : num(inverter.loadW, 0));
   setText("outputVoltage", invOff ? "--" : num(inverter.outputVoltage, 1));
@@ -2462,36 +2871,36 @@ function renderAll() {
   setText("loadModeIndicator", invOff ? "mode: disabled" : `mode: ${safeText(inverter.loadMode)}`);
   setText("loadStateIndicator", invOff ? "state: ---" : `state: ${boolText(!!inverter.loadRelayOn)}`);
   setText("loadModalState", invOff ? "---" : boolText(!!inverter.loadRelayOn));
-  setText("loadModalReason", invOff ? "module disabled" : safeText(inverter.loadRelayReason));
+  setText("loadModalReason", invOff ? "module disabled" : uiText(inverter.loadRelayReason, "manual"));
 
   setText("batteryValueMain", invOff ? "--" : num(inverter.batterySoc, 0));
   setText("batteryVoltage", invOff ? "--" : num(inverter.batteryVoltage, 1));
   setText("batteryPower", invOff ? "--" : num(inverter.batteryPower, 0));
   setText("inverterTemp", invOff ? "--" : num(inverter.inverterTemp, 1));
 
-  setText("boiler1Power", loadOff ? "--" : num(loadController.boilerPower, 0));
+  setText("boiler1Power", loadOff ? "--" : num(boiler1PowerCardW, 0));
   setText("boiler1Mode", loadOff ? "disabled" : safeText(loadController.boiler1Mode));
   setText("boiler1Current", loadOff ? "--" : num(loadController.boilerCurrent, 2));
   setText("boiler1Daily", loadOff ? "--" : num(loadController.dailyBoiler, 0));
   setText("boiler1State", loadOff ? "---" : boolText(!!loadController.boiler1On));
   setText("boiler1ModalState", loadOff ? "---" : boolText(!!loadController.boiler1On));
-  setText("boiler1ModalReason", loadOff ? "module disabled" : safeText(loadController.boiler1StateReason));
+  setText("boiler1ModalReason", loadOff ? "module disabled" : uiText(loadController.boiler1StateReason, "manual"));
 
-  setText("pumpPower", loadOff ? "--" : num(loadController.pumpPower, 0));
+  setText("pumpPower", loadOff ? "--" : num(pumpPowerCardW, 0));
   setText("pumpMode", loadOff ? "disabled" : safeText(loadController.pumpMode));
   setText("pumpCurrent", loadOff ? "--" : num(loadController.pumpCurrent, 2));
   setText("pumpDaily", loadOff ? "--" : num(loadController.dailyPump, 0));
   setText("pumpState", loadOff ? "---" : boolText(!!loadController.pumpOn));
   setText("pumpModalState", loadOff ? "---" : boolText(!!loadController.pumpOn));
-  setText("pumpModalReason", loadOff ? "module disabled" : safeText(loadController.pumpStateReason));
+  setText("pumpModalReason", loadOff ? "module disabled" : uiText(loadController.pumpStateReason, "manual"));
 
-  setText("boiler2Power", garageOff ? "--" : num(garage.boilerPower, 0));
+  setText("boiler2Power", garageOff ? "--" : num(boiler2PowerCardW, 0));
   setText("boiler2Mode", garageOff ? "disabled" : safeText(garage.boiler2Mode));
   setText("boiler2Current", garageOff ? "--" : num(garage.boilerCurrent, 2));
   setText("boiler2Daily", garageOff ? "--" : num(garage.dailyBoiler, 0));
   setText("boiler2State", garageOff ? "---" : boolText(!!garage.boiler2On));
   setText("boiler2ModalState", garageOff ? "---" : boolText(!!garage.boiler2On));
-  setText("boiler2ModalReason", garageOff ? "module disabled" : safeText(garage.boiler2StateReason));
+  setText("boiler2ModalReason", garageOff ? "module disabled" : uiText(garage.boiler2StateReason, "manual"));
 
   const gateNormalized = garageOff ? "unknown" : classifyGateState(garage);
   if (!garageOff) {
@@ -2508,13 +2917,23 @@ function renderAll() {
     state.gate.lastState = "";
   }
 
-  setText("gateState", garageOff ? "disabled" : safeText(garage.gateState, gateNormalized));
-  setText("gateReason", garageOff ? "module disabled" : safeText(garage.gateReason));
+  setText("gateState", garageOff ? "disabled" : uiText(garage.gateState, gateNormalized));
+  setText("gateReason", garageOff ? "module disabled" : uiText(garage.gateReason, "manual"));
   setText("gateLastOpen", garageOff ? "--" : safeText(state.gate.lastOpenAt, "--"));
   setText("gateLastClose", garageOff ? "--" : safeText(state.gate.lastCloseAt, "--"));
-  setText("gateModalState", garageOff ? "disabled" : safeText(garage.gateState, gateNormalized));
-  setText("gateModalReason", garageOff ? "module disabled" : safeText(garage.gateReason));
+  setText("gateModalState", garageOff ? "disabled" : uiText(garage.gateState, gateNormalized));
+  setText("gateModalReason", garageOff ? "module disabled" : uiText(garage.gateReason, "manual"));
   setGateActionButtonLabel(gateNormalized);
+
+  renderPowerScheme({
+    inverter,
+    loadController,
+    garage,
+    invOff,
+    loadOff,
+    garageOff,
+    gridPresent,
+  });
 
   applyCardNeonByPower("cardPv", inverter.pvW, !invOff);
   applyCardNeonByPower("cardGrid", inverter.gridW, !invOff);
@@ -2579,12 +2998,16 @@ function bindResizeRedraw() {
     if (isModalOpen("timelineModal")) {
       renderLoadTimeline();
     }
+    if (isModalOpen("schemeModal")) {
+      fitSchemeStageToViewport();
+    }
   }, 120);
   window.addEventListener("resize", redraw);
 }
 
 function initUi() {
   bindCardEvents();
+  bindSchemeSwipe();
   bindModeButtons();
   bindSettings();
   bindEnergyControls();

@@ -21,6 +21,7 @@
           <button class="action-btn small icon-only" id="logsOpenBtn" type="button" aria-label="open logs" title="saved logs">
             <span class="floppy-icon" aria-hidden="true"></span>
           </button>
+          <button class="action-btn small" id="schemeOpenBtn" type="button" aria-label="open power scheme">scheme</button>
           <button class="action-btn small" id="settingsOpenBtn" type="button">settings</button>
         </div>
       </div>
@@ -430,6 +431,90 @@
         </div>
         <div class="reason-line">reason: <span id="gateModalReason">---</span></div>
         <button class="action-btn" id="gateToggleBtn" type="button">toggle gate</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="schemeModal">
+    <div class="chart-overlay" data-close-modal="schemeModal"></div>
+    <div class="chart-box chart-modal-box scheme-modal-box">
+      <div class="scheme-stage" id="schemeStage">
+        <div class="scheme-overlay-top">
+          <div class="scheme-overlay-title">power scheme</div>
+          <div class="scheme-overlay-hint">swipe right to open | swipe left to close</div>
+        </div>
+        <button class="close-graph-btn scheme-close-btn" type="button" data-close-modal="schemeModal">x</button>
+        <div class="scheme-link h scheme-chain-blue link-grid" id="schemeLinkGrid"><span class="flow"></span></div>
+        <div class="scheme-link v scheme-chain-yellow link-pv" id="schemeLinkPv"><span class="flow"></span></div>
+        <div class="scheme-link v scheme-chain-green link-battery" id="schemeLinkBattery"><span class="flow"></span></div>
+        <div class="scheme-link h scheme-chain-red link-load" id="schemeLinkLoad"><span class="flow"></span></div>
+        <div class="scheme-link v scheme-chain-red link-house-trunk" id="schemeLinkHouseTrunk"><span class="flow"></span></div>
+        <div class="scheme-link h scheme-chain-red link-boiler1" id="schemeLinkBoiler1"><span class="flow"></span></div>
+        <div class="scheme-link h scheme-chain-red link-pump" id="schemeLinkPump"><span class="flow"></span></div>
+        <div class="scheme-link h scheme-chain-red link-boiler2" id="schemeLinkBoiler2"><span class="flow"></span></div>
+
+        <div class="scheme-node grid-pole" id="schemeNodeGrid">
+          <div class="scheme-node-title">grid</div>
+          <div class="scheme-node-sub" id="schemeGridState">--</div>
+        </div>
+        <div class="scheme-node pv-array">
+          <div class="scheme-node-title">pv</div>
+          <div class="scheme-node-sub">panels</div>
+        </div>
+        <div class="scheme-node battery-pack">
+          <div class="scheme-node-title">battery</div>
+          <div class="scheme-node-sub">soc: <span id="schemeBatterySoc">--%</span></div>
+        </div>
+        <div class="scheme-node inverter-core">
+          <div class="scheme-node-title">inverter</div>
+          <div class="scheme-node-sub">in: <span id="schemeInvInput">-- V</span></div>
+          <div class="scheme-node-sub">out: <span id="schemeInvOutput">-- V</span></div>
+        </div>
+        <div class="scheme-node house-load">
+          <div class="scheme-node-title">house</div>
+          <div class="scheme-node-sub">load: <span id="schemeHouseLoad">-- W</span></div>
+        </div>
+        <div class="scheme-node device-boiler1">
+          <div class="scheme-node-title">boiler1</div>
+          <div class="scheme-node-sub" id="schemeBoiler1State">--</div>
+        </div>
+        <div class="scheme-node device-pump">
+          <div class="scheme-node-title">pump</div>
+          <div class="scheme-node-sub" id="schemePumpState">--</div>
+        </div>
+        <div class="scheme-node device-boiler2">
+          <div class="scheme-node-title">boiler2</div>
+          <div class="scheme-node-sub" id="schemeBoiler2State">--</div>
+        </div>
+
+        <button class="scheme-switch switch-grid is-unknown" id="schemeSwitchGrid" type="button" data-scheme-open-modal="gridModal">
+          <span class="scheme-switch-name">grid sw</span>
+          <span class="scheme-switch-state">--</span>
+        </button>
+        <button class="scheme-switch switch-load is-unknown" id="schemeSwitchLoad" type="button" data-scheme-open-modal="loadModal">
+          <span class="scheme-switch-name">load sw</span>
+          <span class="scheme-switch-state">--</span>
+        </button>
+        <button class="scheme-switch switch-boiler1 is-unknown" id="schemeSwitchBoiler1" type="button" data-scheme-open-modal="boiler1Modal">
+          <span class="scheme-switch-name">b1 sw</span>
+          <span class="scheme-switch-state">--</span>
+        </button>
+        <button class="scheme-switch switch-pump is-unknown" id="schemeSwitchPump" type="button" data-scheme-open-modal="pumpModal">
+          <span class="scheme-switch-name">p1 sw</span>
+          <span class="scheme-switch-state">--</span>
+        </button>
+        <button class="scheme-switch switch-boiler2 is-unknown" id="schemeSwitchBoiler2" type="button" data-scheme-open-modal="boiler2Modal">
+          <span class="scheme-switch-name">b2 sw</span>
+          <span class="scheme-switch-state">--</span>
+        </button>
+
+        <div class="scheme-measure scheme-m-grid" id="schemeGridPower">-- W</div>
+        <div class="scheme-measure scheme-m-pv" id="schemePvPower">-- W</div>
+        <div class="scheme-measure scheme-m-battery" id="schemeBatteryPower">-- W</div>
+        <div class="scheme-measure scheme-m-load" id="schemeLoadPower">-- W</div>
+        <div class="scheme-measure scheme-m-boiler1" id="schemeBoiler1Power">-- W</div>
+        <div class="scheme-measure scheme-m-pump" id="schemePumpPower">-- W</div>
+        <div class="scheme-measure scheme-m-boiler2" id="schemeBoiler2Power">-- W</div>
       </div>
     </div>
   </div>

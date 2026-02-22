@@ -149,6 +149,16 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun requestMulticastRefresh(requestId: String) {
+            lifecycleScope.launch {
+                val cfg = AppConfigStorage.load(this@MainActivity)
+                runCatching { repository.fetchUnified(cfg) }
+                    .onSuccess { status -> sendStatus(requestId, status) }
+                    .onFailure { err -> sendStatusError(requestId, err.message ?: "Refresh failed") }
+            }
+        }
+
+        @JavascriptInterface
         fun fetchInverterDaily(date: String, requestId: String) {
             lifecycleScope.launch {
                 val cfg = AppConfigStorage.load(this@MainActivity)

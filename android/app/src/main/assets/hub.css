@@ -508,8 +508,9 @@ body {
 
 .grid-presence-badge.is-present {
   color: #1d57ff;
-  border-color: rgba(29, 87, 255, 0.35);
-  box-shadow: 0 0 9px rgba(79, 124, 255, 0.35);
+  background: rgba(51, 255, 153, 0.95);
+  border-color: rgba(15, 157, 88, 0.65);
+  box-shadow: 0 0 9px rgba(15, 157, 88, 0.35);
 }
 
 .card-title {
@@ -734,6 +735,310 @@ body {
 .chart-modal-box {
   width: min(980px, 96vw);
 }
+
+
+.scheme-modal-box {
+  width: min(1400px, 99vw);
+  max-height: 98vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+}
+
+.scheme-stage {
+  position: relative;
+  width: min(100%, 1320px);
+  height: min(84vh, 780px);
+  min-height: 260px;
+  max-height: 92vh;
+  margin: 0 auto;
+  border-radius: 14px;
+  border: 1px solid rgba(79, 124, 255, 0.32);
+  background:
+    radial-gradient(circle at 30% 20%, rgba(0, 230, 255, 0.12), transparent 45%),
+    radial-gradient(circle at 82% 78%, rgba(255, 77, 109, 0.11), transparent 50%),
+    linear-gradient(165deg, rgba(11, 17, 34, 0.95), rgba(7, 11, 24, 0.96));
+  overflow: hidden;
+}
+
+.scheme-chain-blue { --chain-rgb: 79, 124, 255; }
+.scheme-chain-yellow { --chain-rgb: 255, 179, 71; }
+.scheme-chain-green { --chain-rgb: 51, 255, 153; }
+.scheme-chain-red { --chain-rgb: 255, 77, 109; }
+
+.scheme-overlay-top {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 12;
+  display: grid;
+  gap: 2px;
+  max-width: min(72%, 420px);
+  padding: 6px 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(79, 124, 255, 0.28);
+  background: rgba(5, 9, 20, 0.7);
+  backdrop-filter: blur(2px);
+}
+
+.scheme-overlay-title {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--neon-cyan);
+  font-weight: 700;
+}
+
+.scheme-overlay-hint {
+  font-size: 0.67rem;
+  color: var(--muted);
+  line-height: 1.2;
+}
+
+.scheme-close-btn {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  z-index: 13;
+  width: 34px;
+  height: 34px;
+}
+
+.scheme-link {
+  position: absolute;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--chain-rgb, 200, 210, 220), 0.48);
+  background: rgba(var(--chain-rgb, 200, 210, 220), 0.16);
+  box-shadow: 0 0 10px rgba(var(--chain-rgb, 200, 210, 220), 0.25);
+  overflow: hidden;
+  z-index: 1;
+}
+
+.scheme-link.h { height: 8px; }
+.scheme-link.v { width: 8px; }
+
+.scheme-link .flow {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+
+.scheme-link.h .flow {
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(var(--chain-rgb, 200, 210, 220), 0.15) 0 7px,
+    rgba(var(--chain-rgb, 200, 210, 220), 0.95) 7px 15px,
+    rgba(var(--chain-rgb, 200, 210, 220), 0.15) 15px 24px
+  );
+  background-size: 24px 100%;
+}
+
+.scheme-link.v .flow {
+  background-image: repeating-linear-gradient(
+    180deg,
+    rgba(var(--chain-rgb, 200, 210, 220), 0.15) 0 7px,
+    rgba(var(--chain-rgb, 200, 210, 220), 0.95) 7px 15px,
+    rgba(var(--chain-rgb, 200, 210, 220), 0.15) 15px 24px
+  );
+  background-size: 100% 24px;
+}
+
+.scheme-link.is-active .flow {
+  opacity: 0.95;
+}
+
+.scheme-link.h.is-active .flow {
+  animation: schemeFlowX var(--flow-duration, 1.4s) linear infinite;
+  animation-direction: var(--flow-direction, normal);
+}
+
+.scheme-link.v.is-active .flow {
+  animation: schemeFlowY var(--flow-duration, 1.4s) linear infinite;
+  animation-direction: var(--flow-direction, normal);
+}
+
+.scheme-link.is-reverse .flow {
+  animation-direction: reverse;
+}
+
+@keyframes schemeFlowX {
+  from { background-position: 0 0; }
+  to { background-position: 24px 0; }
+}
+
+@keyframes schemeFlowY {
+  from { background-position: 0 0; }
+  to { background-position: 0 24px; }
+}
+
+.link-grid {
+  left: 11%;
+  top: 50%;
+  width: 22%;
+  transform: translateY(-50%);
+}
+
+.link-pv {
+  left: 40%;
+  top: 21%;
+  height: 24%;
+  transform: translateX(-50%);
+}
+
+.link-battery {
+  left: 40%;
+  top: 55%;
+  height: 24%;
+  transform: translateX(-50%);
+}
+
+.link-load {
+  left: 47%;
+  top: 50%;
+  width: 25%;
+  transform: translateY(-50%);
+}
+
+.link-house-trunk {
+  left: 72%;
+  top: 30%;
+  height: 40%;
+  transform: translateX(-50%);
+}
+
+.link-boiler1 {
+  left: 72%;
+  top: 30%;
+  width: 16%;
+  transform: translateY(-50%);
+}
+
+.link-pump {
+  left: 72%;
+  top: 50%;
+  width: 16%;
+  transform: translateY(-50%);
+}
+
+.link-boiler2 {
+  left: 72%;
+  top: 70%;
+  width: 16%;
+  transform: translateY(-50%);
+}
+
+.scheme-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  min-width: 94px;
+  max-width: 140px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(8, 12, 26, 0.88);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  z-index: 2;
+  text-align: center;
+}
+
+.scheme-node-title {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.scheme-node-sub {
+  margin-top: 3px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.grid-pole { left: 6%; top: 50%; border-color: rgba(79, 124, 255, 0.45); }
+.grid-pole.is-present { box-shadow: 0 0 18px rgba(79, 124, 255, 0.55); }
+.grid-pole.is-absent { opacity: 0.72; }
+
+.pv-array { left: 40%; top: 12%; border-color: rgba(255, 179, 71, 0.55); }
+.battery-pack { left: 40%; top: 88%; border-color: rgba(51, 255, 153, 0.55); }
+.inverter-core { left: 40%; top: 50%; min-width: 122px; border-color: rgba(0, 230, 255, 0.6); }
+.house-load { left: 72%; top: 50%; border-color: rgba(255, 77, 109, 0.55); }
+.device-boiler1 { left: 92%; top: 30%; border-color: rgba(255, 77, 109, 0.45); }
+.device-pump { left: 92%; top: 50%; border-color: rgba(255, 77, 109, 0.45); }
+.device-boiler2 { left: 92%; top: 70%; border-color: rgba(255, 77, 109, 0.45); }
+
+.scheme-switch {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 68px;
+  min-height: 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(10, 15, 30, 0.92);
+  color: var(--text);
+  display: grid;
+  gap: 1px;
+  align-content: center;
+  justify-items: center;
+  padding: 4px;
+  z-index: 3;
+  cursor: pointer;
+}
+
+.scheme-switch-name {
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.scheme-switch-state {
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.scheme-switch.is-on {
+  border-color: rgba(51, 255, 153, 0.8);
+  background: rgba(12, 32, 24, 0.95);
+  box-shadow: 0 0 12px rgba(51, 255, 153, 0.45);
+}
+
+.scheme-switch.is-off {
+  border-color: rgba(255, 77, 109, 0.68);
+  background: rgba(38, 16, 22, 0.95);
+}
+
+.scheme-switch.is-unknown {
+  border-color: rgba(180, 190, 210, 0.4);
+}
+
+.switch-grid { left: 20%; top: 50%; }
+.switch-load { left: 56%; top: 50%; }
+.switch-boiler1 { left: 80%; top: 30%; }
+.switch-pump { left: 80%; top: 50%; }
+.switch-boiler2 { left: 80%; top: 70%; }
+
+.scheme-measure {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(6, 10, 22, 0.9);
+  font-size: 0.7rem;
+  color: var(--text);
+  z-index: 4;
+  white-space: nowrap;
+}
+
+.scheme-m-grid { left: 22%; top: 43%; }
+.scheme-m-pv { left: 46%; top: 33%; }
+.scheme-m-battery { left: 46%; top: 67%; }
+.scheme-m-load { left: 60%; top: 43%; }
+.scheme-m-boiler1 { left: 82%; top: 23%; }
+.scheme-m-pump { left: 82%; top: 43%; }
+.scheme-m-boiler2 { left: 82%; top: 63%; }
 
 .chart-header {
   display: flex;
@@ -1271,6 +1576,46 @@ body {
       0 0 0 rgba(0, 230, 255, 0),
       0 0 0 rgba(51, 255, 153, 0);
     border-color: rgba(79, 124, 255, 0.3);
+  }
+}
+
+@media (max-width: 920px) {
+  .scheme-stage {
+    min-height: 220px;
+    height: min(70vh, 540px);
+  }
+
+  .scheme-overlay-top {
+    max-width: 76%;
+    left: 8px;
+    top: 8px;
+    padding: 5px 7px;
+  }
+
+  .scheme-close-btn {
+    right: 8px;
+    top: 8px;
+    width: 32px;
+    height: 32px;
+  }
+
+  .scheme-node {
+    min-width: 86px;
+    max-width: 126px;
+    padding: 7px 8px;
+  }
+
+  .scheme-node-title {
+    font-size: 0.75rem;
+  }
+
+  .scheme-switch {
+    width: 60px;
+    min-height: 34px;
+  }
+
+  .scheme-measure {
+    font-size: 0.66rem;
   }
 }
 
