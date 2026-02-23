@@ -11,6 +11,7 @@ import android.widget.RemoteViews
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.chapay.homehub.MainActivity
 import com.chapay.homehub.R
 import com.chapay.homehub.data.UnifiedStatus
@@ -27,7 +28,7 @@ class StatusWidgetProvider : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         if (appWidgetIds.isNotEmpty()) {
-            appWidgetManager.updateAppWidget(appWidgetIds, buildRemoteViews(context, null))
+            appWidgetManager.updateAppWidget(appWidgetIds, buildRemoteViews(context, null, pulseActive = false))
         }
         enqueueRefresh(context)
     }
@@ -39,13 +40,14 @@ class StatusWidgetProvider : AppWidgetProvider() {
         newOptions: android.os.Bundle,
     ) {
         super.onAppWidgetOptionsChanged(context, appWidgetManager, appWidgetId, newOptions)
-        appWidgetManager.updateAppWidget(appWidgetId, buildRemoteViews(context, null))
+        appWidgetManager.updateAppWidget(appWidgetId, buildRemoteViews(context, null, pulseActive = false))
         enqueueRefresh(context)
     }
 
     companion object {
         private const val UNIQUE_WIDGET_REFRESH_WORK = "homehub_widget_refresh"
-        private const val MULTICAST_GLOW_CLEAR_DELAY_MS = 3200L
+        private const val INPUT_SUPPRESS_PULSE = "suppress_widget_pulse"
+        private const val WIDGET_PULSE_CLEAR_DELAY_MS = 3200L
 
         private val COLOR_TEMP = Color.parseColor("#00D4FF")
         private val COLOR_PV = Color.parseColor("#FFB347")
@@ -55,8 +57,9 @@ class StatusWidgetProvider : AppWidgetProvider() {
         private val COLOR_DIVIDER_IDLE = Color.parseColor("#805C90D9")
         private val COLOR_DIVIDER_GLOW = Color.parseColor("#CC00D4FF")
 
-        fun enqueueRefresh(context: Context, delayMs: Long = 0L) {
+        fun enqueueRefresh(context: Context, delayMs: Long = 0L, suppressPulse: Boolean = false) {
             val requestBuilder = OneTimeWorkRequestBuilder<StatusWidgetRefreshWorker>()
+                .setInputData(workDataOf(INPUT_SUPPRESS_PULSE to suppressPulse))
             if (delayMs > 0L) {
                 requestBuilder.setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             }
@@ -68,20 +71,34 @@ class StatusWidgetProvider : AppWidgetProvider() {
             )
         }
 
-        fun hasActiveWidgets(context: Context): Boolean {
-            return getWidgetIds(context).isNotEmpty()
+        internal fun shouldSuppressPulse(inputData: androidx.work.Data): Boolean {
+            return inputData.getBoolean(INPUT_SUPPRESS_PULSE, false)
         }
 
-        fun updateAllWidgets(context: Context, status: UnifiedStatus?) {
+        fun hasActiveWidgets(context: Context): Boolean {
+            return getWidgetIds(context).isNotEmpty() || GateWidgetProvider.hasActiveWidgets(context)
+        }
+
+        fun updateAllWidgets(context: Context, status: UnifiedStatus?, triggerPulse: Boolean = true) {
+            val pulseActive = triggerPulse && hasAnyModuleData(status)
+
             val widgetIds = getWidgetIds(context)
-            if (widgetIds.isEmpty()) return
-            AppWidgetManager.getInstance(context).updateAppWidget(
-                widgetIds,
-                buildRemoteViews(context, status),
-            )
-            if (status?.fromMulticast == true) {
-                enqueueRefresh(context, delayMs = MULTICAST_GLOW_CLEAR_DELAY_MS)
+            if (widgetIds.isNotEmpty()) {
+                AppWidgetManager.getInstance(context).updateAppWidget(
+                    widgetIds,
+                    buildRemoteViews(context, status, pulseActive = pulseActive),
+                )
             }
+
+            GateWidgetProvider.updateAllWidgets(context, status, pulseActive)
+
+            if (pulseActive) {
+                enqueueRefresh(context, delayMs = WIDGET_PULSE_CLEAR_DELAY_MS, suppressPulse = true)
+            }
+        }
+
+        private fun hasAnyModuleData(status: UnifiedStatus?): Boolean {
+            return status?.inverter != null || status?.loadController != null || status?.garage != null
         }
 
         private fun getWidgetIds(context: Context): IntArray {
@@ -90,18 +107,17 @@ class StatusWidgetProvider : AppWidgetProvider() {
             return manager.getAppWidgetIds(component)
         }
 
-        private fun buildRemoteViews(context: Context, status: UnifiedStatus?): RemoteViews {
+        private fun buildRemoteViews(context: Context, status: UnifiedStatus?, pulseActive: Boolean): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget_status_4x2)
             val metrics = WidgetMetrics.from(status)
-            val isGlowActive = status?.fromMulticast == true
 
-            val backgroundRes = if (isGlowActive) {
+            val backgroundRes = if (pulseActive) {
                 R.drawable.widget_status_background_glow
             } else {
                 R.drawable.widget_status_background
             }
             views.setInt(R.id.widgetRoot, "setBackgroundResource", backgroundRes)
-            applyNeonColors(views, isGlowActive)
+            applyNeonColors(views, pulseActive)
 
             views.setTextViewText(R.id.widgetValueOutsideTemp, formatTemperature(metrics.outsideTempC))
             views.setTextViewText(R.id.widgetValuePvPower, formatPower(metrics.pvPowerW))
@@ -124,7 +140,7 @@ class StatusWidgetProvider : AppWidgetProvider() {
             return views
         }
 
-        private fun applyNeonColors(views: RemoteViews, isGlowActive: Boolean) {
+        private fun applyNeonColors(views: RemoteViews, pulseActive: Boolean) {
             views.setInt(R.id.widgetLabelOutsideTemp, "setTextColor", COLOR_TEMP)
             views.setInt(R.id.widgetValueOutsideTemp, "setTextColor", COLOR_TEMP)
 
@@ -142,7 +158,7 @@ class StatusWidgetProvider : AppWidgetProvider() {
             views.setInt(R.id.widgetLabelBatterySoc, "setTextColor", COLOR_BAT)
             views.setInt(R.id.widgetValueBatterySoc, "setTextColor", COLOR_BAT)
 
-            val dividerColor = if (isGlowActive) COLOR_DIVIDER_GLOW else COLOR_DIVIDER_IDLE
+            val dividerColor = if (pulseActive) COLOR_DIVIDER_GLOW else COLOR_DIVIDER_IDLE
             views.setInt(R.id.widgetColumnDivider, "setBackgroundColor", dividerColor)
         }
 

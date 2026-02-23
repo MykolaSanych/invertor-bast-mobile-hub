@@ -18,6 +18,7 @@ import java.net.InetSocketAddress
 import java.net.MulticastSocket
 import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
+import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
 class StatusRepository(
@@ -521,6 +522,10 @@ class StatusRepository(
         val baseUrl = normalizeBaseUrl(baseUrlRaw)
         if (baseUrl.isEmpty()) return null
 
+        if (path != TIME_SYNC_BROWSER_PATH) {
+            runCatching { syncControllerTimeWithAuth(baseUrl, password) }
+        }
+
         val url = buildUrl(baseUrl, path, query) ?: return null
 
         // First try without auth: works for open endpoints and active sessions.
@@ -551,9 +556,14 @@ class StatusRepository(
         password: String,
         path: String,
         formPairs: List<Pair<String, String>>,
+        syncTimeFirst: Boolean = true,
     ): Boolean {
         val baseUrl = normalizeBaseUrl(baseUrlRaw)
         if (baseUrl.isEmpty()) return false
+
+        if (syncTimeFirst && path != TIME_SYNC_BROWSER_PATH) {
+            runCatching { syncControllerTimeWithAuth(baseUrl, password) }
+        }
 
         val url = "$baseUrl$path".toHttpUrlOrNull() ?: return false
 
@@ -580,6 +590,26 @@ class StatusRepository(
         }
 
         return false
+    }
+
+    private fun syncControllerTimeWithAuth(baseUrl: String, password: String) {
+        val calendar = Calendar.getInstance()
+        val formPairs = listOf(
+            "year" to calendar.get(Calendar.YEAR).toString(),
+            "month" to (calendar.get(Calendar.MONTH) + 1).toString(),
+            "day" to calendar.get(Calendar.DAY_OF_MONTH).toString(),
+            "hour" to calendar.get(Calendar.HOUR_OF_DAY).toString(),
+            "minute" to calendar.get(Calendar.MINUTE).toString(),
+            "second" to calendar.get(Calendar.SECOND).toString(),
+        )
+
+        postForm(
+            baseUrlRaw = baseUrl,
+            password = password,
+            path = TIME_SYNC_BROWSER_PATH,
+            formPairs = formPairs,
+            syncTimeFirst = false,
+        )
     }
 
     private fun normalizeBaseUrl(value: String): String {
@@ -687,6 +717,8 @@ private fun JSONObject.optStringSafeAny(fallback: String, vararg keys: String): 
     }
     return fallback
 }
+
+private const val TIME_SYNC_BROWSER_PATH = "/api/time/syncbrowser"
 
 private const val MULTICAST_GROUP = "239.255.0.1"
 private const val MULTICAST_PORT = 5005

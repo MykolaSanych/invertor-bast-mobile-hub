@@ -17,4 +17,16 @@
     <string name="widget_metric_load_power">LOAD</string>
     <string name="widget_metric_battery_power">BAT</string>
     <string name="widget_metric_battery_soc">BAT</string>
+    <string name="widget_gate_name">my Home gate</string>
+    <string name="widget_gate_description">Gate control button and state indicator</string>
+    <string name="widget_gate_state_open">open</string>
+    <string name="widget_gate_state_closed">closed</string>
+    <string name="widget_gate_state_moving">moving</string>
+    <string name="widget_gate_state_stopped">stopped</string>
+    <string name="widget_gate_state_unknown">unknown</string>
+    <string name="widget_gate_state_disabled">disabled</string>
+    <string name="widget_gate_action_open">open</string>
+    <string name="widget_gate_action_close">close</string>
+    <string name="widget_gate_action_stop">stop</string>
+    <string name="widget_gate_action_disabled">disabled</string>
 </resources>

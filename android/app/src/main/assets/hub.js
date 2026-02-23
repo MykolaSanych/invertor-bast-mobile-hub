@@ -27,7 +27,6 @@ const LOAD_TIMELINE_HISTORY_REFRESH_MS = 60 * 1000;
 const LOAD_TIMELINE_VISIBLE_HOURS = 6;
 const LOAD_TIMELINE_MAX_SAMPLES = 1600;
 const CARD_NEON_POWER_THRESHOLD = 1;
-const MODULE_SIGNAL_TIMEOUT_MS = 35 * 1000;
 const DEVICE_POWER_NOISE_FLOOR_W = 27;
 const ZERO_VOLTAGE_THRESHOLD_V = 0.5;
 
@@ -37,6 +36,7 @@ const state = {
   pending: new Map(),
   reqSeq: 0,
   pollHandle: null,
+  signalAgeHandle: null,
   noBridgeToastShown: false,
   emptyStatusCount: 0,
   energy: {
@@ -106,6 +106,7 @@ window.HubNative = {
 
   onStatusError(requestId, message) {
     rejectPending(requestId, message || "Status error");
+    applyLiveCardStates(state.status, { flash: false });
     showToast(message || "Status request failed");
   },
 
@@ -1645,6 +1646,7 @@ function bindSettings() {
     applyModuleCardStates();
     applyLiveCardStates(state.status);
     restartPolling();
+    restartSignalAgeTicker();
     closeModal("settingsModal");
     showToast("settings saved");
     requestStatus();
@@ -1774,15 +1776,7 @@ function updateModuleSignalTimes(status) {
     const moduleTs = Number(moduleData.updatedAtMs);
     const resolvedTs = Number.isFinite(moduleTs) && moduleTs > 0 ? moduleTs : now;
 
-    if (status?.fromMulticast) {
-      state.moduleSignalAtMs[key] = resolvedTs;
-      return;
-    }
-
-    // Bootstrap only once from non-multicast data to avoid immediate stale state on startup.
-    if (!state.moduleSignalAtMs[key]) {
-      state.moduleSignalAtMs[key] = resolvedTs;
-    }
+    state.moduleSignalAtMs[key] = resolvedTs;
   };
 
   touchModule("inverter", status?.inverter);
@@ -1790,11 +1784,15 @@ function updateModuleSignalTimes(status) {
   touchModule("garage", status?.garage);
 }
 
+function moduleSignalTimeoutMs() {
+  return clampPoll(state.config.pollIntervalSec) * 2 * 1000;
+}
+
 function moduleHasFreshSignal(key, enabled, moduleData) {
   if (!enabled || !moduleData) return false;
   const lastSignalTs = Number(state.moduleSignalAtMs[key]);
   if (!Number.isFinite(lastSignalTs) || lastSignalTs <= 0) return false;
-  return Date.now() - lastSignalTs <= MODULE_SIGNAL_TIMEOUT_MS;
+  return Date.now() - lastSignalTs <= moduleSignalTimeoutMs();
 }
 
 function setModuleCardsDisabled(cardIds, disabled) {
@@ -1846,7 +1844,8 @@ function flashCard(cardId) {
   card.classList.add("card-flash");
 }
 
-function applyLiveCardStates(status) {
+function applyLiveCardStates(status, options = {}) {
+  const { flash = true } = options;
   const hasInverterData = moduleHasFreshSignal("inverter", state.config.inverterEnabled, status?.inverter);
   const hasLoadData = moduleHasFreshSignal("loadController", state.config.loadControllerEnabled, status?.loadController);
   const hasGarageData = moduleHasFreshSignal("garage", state.config.garageEnabled, status?.garage);
@@ -1862,23 +1861,33 @@ function applyLiveCardStates(status) {
   setCardDataState("cardGate", hasGarageData);
   setCardDataState("climateWideCard", hasClimateData);
 
-  if (hasInverterData) {
+  if (flash && hasInverterData) {
     flashCard("cardPv");
     flashCard("cardGrid");
     flashCard("cardBattery");
     flashCard("cardLoad");
   }
-  if (hasLoadData) {
+  if (flash && hasLoadData) {
     flashCard("cardBoiler1");
     flashCard("cardPump");
   }
-  if (hasGarageData) {
+  if (flash && hasGarageData) {
     flashCard("cardBoiler2");
     flashCard("cardGate");
   }
-  if (hasClimateData) {
+  if (flash && hasClimateData) {
     flashCard("climateWideCard");
   }
+}
+
+function restartSignalAgeTicker() {
+  if (state.signalAgeHandle) {
+    clearInterval(state.signalAgeHandle);
+    state.signalAgeHandle = null;
+  }
+  state.signalAgeHandle = setInterval(() => {
+    applyLiveCardStates(state.status, { flash: false });
+  }, 1000);
 }
 
 function ensureCanvasSize(canvas, fallbackHeight = 320) {
@@ -2939,9 +2948,9 @@ function renderAll() {
   applyCardNeonByPower("cardGrid", inverter.gridW, !invOff);
   applyCardNeonByPower("cardLoad", inverter.loadW, !invOff);
   applyCardNeonByPower("cardBattery", inverter.batteryPower, !invOff);
-  applyCardNeonByPower("cardBoiler1", loadController.boilerPower, !loadOff);
-  applyCardNeonByPower("cardPump", loadController.pumpPower, !loadOff);
-  applyCardNeonByPower("cardBoiler2", garage.boilerPower, !garageOff);
+  applyCardNeonByPower("cardBoiler1", boiler1PowerCardW, !loadOff);
+  applyCardNeonByPower("cardPump", pumpPowerCardW, !loadOff);
+  applyCardNeonByPower("cardBoiler2", boiler2PowerCardW, !garageOff);
   applyCardNeonByPower("cardGate", null, false);
 
   renderClimateWideCard(inverter, loadController, garage);
@@ -3030,6 +3039,7 @@ function initUi() {
 
   requestStatus();
   restartPolling();
+  restartSignalAgeTicker();
 }
 
 document.addEventListener("DOMContentLoaded", initUi);

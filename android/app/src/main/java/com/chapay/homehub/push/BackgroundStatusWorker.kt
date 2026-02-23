@@ -23,7 +23,7 @@ class BackgroundStatusWorker(
             val current = StatusSnapshot.fromUnified(status)
             val previous = StatusSnapshotStore.load(applicationContext)
             if (previous != null) {
-                LocalEventEngine.detect(previous, current, config).forEach { event ->
+                LocalEventEngine.detect(applicationContext, previous, current, config).forEach { event ->
                     showPushNotification(applicationContext, event.title, event.body)
                 }
             }

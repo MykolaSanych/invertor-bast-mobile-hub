@@ -74,7 +74,7 @@ class RealtimeMonitorService : Service() {
         val current = StatusSnapshot.fromUnified(status)
         val previous = StatusSnapshotStore.load(this)
         if (previous != null) {
-            LocalEventEngine.detect(previous, current, config).forEach { event ->
+            LocalEventEngine.detect(this, previous, current, config).forEach { event ->
                 showPushNotification(this, event.title, event.body)
             }
         }

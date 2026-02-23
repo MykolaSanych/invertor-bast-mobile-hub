@@ -1,4 +1,4 @@
-﻿package com.chapay.homehub.push
+package com.chapay.homehub.push
 
 import android.content.Context
 import com.chapay.homehub.data.AppConfig
@@ -120,15 +120,22 @@ object StatusSnapshotStore {
 }
 
 object LocalEventEngine {
-    fun detect(previous: StatusSnapshot, current: StatusSnapshot, config: AppConfig): List<LocalEvent> {
+    fun detect(
+        context: Context,
+        previous: StatusSnapshot,
+        current: StatusSnapshot,
+        config: AppConfig,
+    ): List<LocalEvent> {
         val events = mutableListOf<LocalEvent>()
 
-        if (config.inverterEnabled && config.notifyPvGeneration) {
-            if (previous.pvActive != null && current.pvActive != null && previous.pvActive != current.pvActive) {
-                val title = if (current.pvActive) "PV generation started" else "PV generation stopped"
-                val reason = "PV=${current.pvW?.toInt() ?: 0}W, threshold ${PV_ACTIVE_THRESHOLD_W.toInt()}W"
-                events += LocalEvent(title, "Reason: $reason")
-            }
+        if (config.inverterEnabled) {
+            appendPvGenerationEventWithDebounce(
+                context = context,
+                events = events,
+                current = current,
+                emitNotification = config.notifyPvGeneration,
+                config = config,
+            )
         }
 
         if (config.inverterEnabled && config.notifyGridRelay) {
@@ -205,6 +212,74 @@ object LocalEventEngine {
         return events
     }
 
+    private fun appendPvGenerationEventWithDebounce(
+        context: Context,
+        events: MutableList<LocalEvent>,
+        current: StatusSnapshot,
+        emitNotification: Boolean,
+        config: AppConfig,
+    ) {
+        val currentPvActive = current.pvActive ?: return
+        val debounceMs = pvTransitionDebounceMs(config)
+        val store = PvTransitionDebounceStore.load(context)
+        val now = System.currentTimeMillis()
+
+        if (store.stableActive == null) {
+            PvTransitionDebounceStore.save(
+                context,
+                store.copy(stableActive = currentPvActive, pendingActive = null, pendingSinceMs = 0L),
+            )
+            return
+        }
+
+        if (currentPvActive == store.stableActive) {
+            if (store.pendingActive != null || store.pendingSinceMs != 0L) {
+                PvTransitionDebounceStore.save(
+                    context,
+                    store.copy(pendingActive = null, pendingSinceMs = 0L),
+                )
+            }
+            return
+        }
+
+        if (store.pendingActive != currentPvActive) {
+            PvTransitionDebounceStore.save(
+                context,
+                store.copy(pendingActive = currentPvActive, pendingSinceMs = now),
+            )
+            return
+        }
+
+        val pendingSince = store.pendingSinceMs.takeIf { it > 0L } ?: now
+        if (now - pendingSince < debounceMs) {
+            return
+        }
+
+        PvTransitionDebounceStore.save(
+            context,
+            store.copy(
+                stableActive = currentPvActive,
+                pendingActive = null,
+                pendingSinceMs = 0L,
+            ),
+        )
+
+        if (!emitNotification) return
+
+        val title = if (currentPvActive) "PV generation started" else "PV generation stopped"
+        val reason = "PV=${current.pvW?.toInt() ?: 0}W, threshold ${PV_ACTIVE_THRESHOLD_W.toInt()}W"
+        events += LocalEvent(title, "Reason: $reason")
+    }
+
+    private fun pvTransitionDebounceMs(config: AppConfig): Long {
+        val baseSec = if (config.realtimeMonitorEnabled) {
+            config.realtimePollIntervalSec.coerceIn(3, 60)
+        } else {
+            config.pollIntervalSec.coerceIn(2, 60)
+        }
+        return (baseSec * 1000L).coerceIn(PV_TRANSITION_DEBOUNCE_MIN_MS, PV_TRANSITION_DEBOUNCE_MAX_MS)
+    }
+
     private fun appendModeEvent(
         events: MutableList<LocalEvent>,
         prevMode: String?,
@@ -258,7 +333,65 @@ object LocalEventEngine {
     }
 }
 
+private data class PvTransitionDebounceState(
+    val stableActive: Boolean? = null,
+    val pendingActive: Boolean? = null,
+    val pendingSinceMs: Long = 0L,
+)
+
+private object PvTransitionDebounceStore {
+    private const val PREFS = "home_hub_bg_worker"
+    private const val KEY_STABLE_ACTIVE = "pv_debounce_stable_active"
+    private const val KEY_HAS_STABLE = "pv_debounce_has_stable"
+    private const val KEY_PENDING_ACTIVE = "pv_debounce_pending_active"
+    private const val KEY_HAS_PENDING = "pv_debounce_has_pending"
+    private const val KEY_PENDING_SINCE_MS = "pv_debounce_pending_since_ms"
+
+    fun load(context: Context): PvTransitionDebounceState {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val stable = if (prefs.getBoolean(KEY_HAS_STABLE, false)) {
+            prefs.getBoolean(KEY_STABLE_ACTIVE, false)
+        } else {
+            null
+        }
+        val pending = if (prefs.getBoolean(KEY_HAS_PENDING, false)) {
+            prefs.getBoolean(KEY_PENDING_ACTIVE, false)
+        } else {
+            null
+        }
+        return PvTransitionDebounceState(
+            stableActive = stable,
+            pendingActive = pending,
+            pendingSinceMs = prefs.getLong(KEY_PENDING_SINCE_MS, 0L),
+        )
+    }
+
+    fun save(context: Context, state: PvTransitionDebounceState) {
+        val edit = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        if (state.stableActive == null) {
+            edit.remove(KEY_HAS_STABLE)
+            edit.remove(KEY_STABLE_ACTIVE)
+        } else {
+            edit.putBoolean(KEY_HAS_STABLE, true)
+            edit.putBoolean(KEY_STABLE_ACTIVE, state.stableActive)
+        }
+
+        if (state.pendingActive == null) {
+            edit.remove(KEY_HAS_PENDING)
+            edit.remove(KEY_PENDING_ACTIVE)
+        } else {
+            edit.putBoolean(KEY_HAS_PENDING, true)
+            edit.putBoolean(KEY_PENDING_ACTIVE, state.pendingActive)
+        }
+
+        edit.putLong(KEY_PENDING_SINCE_MS, state.pendingSinceMs)
+        edit.apply()
+    }
+}
+
 private const val PV_ACTIVE_THRESHOLD_W = 80.0
+private const val PV_TRANSITION_DEBOUNCE_MIN_MS = 3_000L
+private const val PV_TRANSITION_DEBOUNCE_MAX_MS = 15_000L
 
 private fun JSONObject.optNullableString(key: String): String? {
     if (!has(key) || isNull(key)) return null
@@ -292,4 +425,3 @@ private fun JSONObject.optNullableBoolean(key: String): Boolean? {
         else -> null
     }
 }
-

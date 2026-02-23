@@ -21,7 +21,12 @@ class StatusWidgetRefreshWorker(
         return runCatching {
             val config = AppConfigStorage.load(applicationContext)
             val status = repository.fetchUnified(config)
-            StatusWidgetProvider.updateAllWidgets(applicationContext, status)
+            val suppressPulse = StatusWidgetProvider.shouldSuppressPulse(inputData)
+            StatusWidgetProvider.updateAllWidgets(
+                applicationContext,
+                status,
+                triggerPulse = !suppressPulse,
+            )
             Result.success()
         }.getOrElse { error ->
             Log.w(TAG, "Widget refresh failed: ${error.message}")
