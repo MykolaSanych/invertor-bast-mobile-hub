@@ -269,6 +269,11 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun setBoiler1AutoWindow(enabled: Boolean, start: String, end: String, requestId: String) {
+            runModeCommand(requestId) { cfg -> repository.setBoiler1AutoWindow(cfg, enabled, start, end) }
+        }
+
+        @JavascriptInterface
         fun setPumpMode(mode: String, requestId: String) {
             runModeCommand(requestId) { cfg -> repository.setPumpMode(cfg, mode.uppercase()) }
         }
@@ -276,6 +281,11 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun setPumpLock(mode: String, requestId: String) {
             runModeCommand(requestId) { cfg -> repository.setPumpLock(cfg, mode.uppercase()) }
+        }
+
+        @JavascriptInterface
+        fun setPumpAutoWindow(enabled: Boolean, start: String, end: String, requestId: String) {
+            runModeCommand(requestId) { cfg -> repository.setPumpAutoWindow(cfg, enabled, start, end) }
         }
 
         @JavascriptInterface
@@ -289,8 +299,18 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun setBoiler2AutoWindow(enabled: Boolean, start: String, end: String, requestId: String) {
+            runModeCommand(requestId) { cfg -> repository.setBoiler2AutoWindow(cfg, enabled, start, end) }
+        }
+
+        @JavascriptInterface
         fun triggerGate(requestId: String) {
             runModeCommand(requestId) { cfg -> repository.triggerGate(cfg) }
+        }
+
+        @JavascriptInterface
+        fun toggleGarageLight(requestId: String) {
+            runModeCommand(requestId) { cfg -> repository.toggleGarageLight(cfg) }
         }
 
         @JavascriptInterface
@@ -467,6 +487,7 @@ private fun InverterStatus.toJson(): JSONObject = JSONObject().apply {
     put("loadRelayOn", loadRelayOn)
     put("loadRelayReason", loadRelayReason)
     put("wifiStrength", wifiStrength)
+    put("uptimeSec", uptimeSec)
     put("rtcTime", rtcTime)
     put("rtcDate", rtcDate)
     put("updatedAtMs", updatedAtMs)
@@ -491,6 +512,14 @@ private fun LoadControllerStatus.toJson(): JSONObject = JSONObject().apply {
     put("pumpStateReason", pumpStateReason)
     put("boilerLock", boilerLock)
     put("pumpLock", pumpLock)
+    put("boiler1AutoWindowEnabled", boiler1AutoWindowEnabled)
+    put("boiler1AutoWindowStart", boiler1AutoWindowStart)
+    put("boiler1AutoWindowEnd", boiler1AutoWindowEnd)
+    put("boiler1AutoWindowActive", boiler1AutoWindowActive)
+    put("pumpAutoWindowEnabled", pumpAutoWindowEnabled)
+    put("pumpAutoWindowStart", pumpAutoWindowStart)
+    put("pumpAutoWindowEnd", pumpAutoWindowEnd)
+    put("pumpAutoWindowActive", pumpAutoWindowActive)
     put("boilerCurrent", boilerCurrent)
     put("boilerPower", boilerPower)
     put("dailyBoiler", dailyBoiler)
@@ -504,6 +533,7 @@ private fun LoadControllerStatus.toJson(): JSONObject = JSONObject().apply {
     put("batterySoc", batterySoc)
     put("batteryPower", batteryPower)
     put("wifiStrength", wifiStrength)
+    put("uptimeSec", uptimeSec)
     put("rtcTime", rtcTime)
     put("rtcDate", rtcDate)
     put("updatedAtMs", updatedAtMs)
@@ -519,6 +549,10 @@ private fun GarageStatus.toJson(): JSONObject = JSONObject().apply {
     put("boiler2On", boiler2On)
     put("boiler2StateReason", boiler2StateReason)
     put("boilerLock", boilerLock)
+    put("boiler2AutoWindowEnabled", boiler2AutoWindowEnabled)
+    put("boiler2AutoWindowStart", boiler2AutoWindowStart)
+    put("boiler2AutoWindowEnd", boiler2AutoWindowEnd)
+    put("boiler2AutoWindowActive", boiler2AutoWindowActive)
     put("boilerCurrent", boilerCurrent)
     put("boilerPower", boilerPower)
     put("dailyBoiler", dailyBoiler)
@@ -526,6 +560,8 @@ private fun GarageStatus.toJson(): JSONObject = JSONObject().apply {
     put("gateReason", gateReason)
     put("gateOpenPin", gateOpenPin)
     put("gateClosedPin", gateClosedPin)
+    put("garageLightOn", garageLightOn)
+    put("garageLightReason", garageLightReason)
     put("lineVoltage", lineVoltage)
     put("pvW", pvW)
     put("gridW", gridW)
@@ -533,6 +569,7 @@ private fun GarageStatus.toJson(): JSONObject = JSONObject().apply {
     put("batterySoc", batterySoc)
     put("batteryPower", batteryPower)
     put("wifiStrength", wifiStrength)
+    put("uptimeSec", uptimeSec)
     put("rtcTime", rtcTime)
     put("rtcDate", rtcDate)
     put("updatedAtMs", updatedAtMs)

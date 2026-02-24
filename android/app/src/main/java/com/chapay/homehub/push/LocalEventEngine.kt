@@ -13,40 +13,54 @@ data class LocalEvent(
 data class StatusSnapshot(
     val pvActive: Boolean?,
     val pvW: Double?,
+    val inverterBatterySoc: Double?,
     val gridRelayOn: Boolean?,
     val gridPresent: Boolean?,
     val gridVoltage: Double?,
     val gridRelayReason: String?,
     val gridMode: String?,
     val gridModeReason: String?,
+    val inverterUptimeSec: Long?,
+    val inverterRtcTime: String?,
     val loadMode: String?,
     val loadModeReason: String?,
+    val loadControllerUptimeSec: Long?,
+    val loadControllerRtcTime: String?,
     val boiler1Mode: String?,
     val boiler1ModeReason: String?,
     val pumpMode: String?,
     val pumpModeReason: String?,
     val boiler2Mode: String?,
     val boiler2ModeReason: String?,
+    val garageUptimeSec: Long?,
+    val garageRtcTime: String?,
     val gateState: String?,
     val gateReason: String?,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("pvActive", pvActive)
         put("pvW", pvW)
+        put("inverterBatterySoc", inverterBatterySoc)
         put("gridRelayOn", gridRelayOn)
         put("gridPresent", gridPresent)
         put("gridVoltage", gridVoltage)
         put("gridRelayReason", gridRelayReason)
         put("gridMode", gridMode)
         put("gridModeReason", gridModeReason)
+        put("inverterUptimeSec", inverterUptimeSec)
+        put("inverterRtcTime", inverterRtcTime)
         put("loadMode", loadMode)
         put("loadModeReason", loadModeReason)
+        put("loadControllerUptimeSec", loadControllerUptimeSec)
+        put("loadControllerRtcTime", loadControllerRtcTime)
         put("boiler1Mode", boiler1Mode)
         put("boiler1ModeReason", boiler1ModeReason)
         put("pumpMode", pumpMode)
         put("pumpModeReason", pumpModeReason)
         put("boiler2Mode", boiler2Mode)
         put("boiler2ModeReason", boiler2ModeReason)
+        put("garageUptimeSec", garageUptimeSec)
+        put("garageRtcTime", garageRtcTime)
         put("gateState", gateState)
         put("gateReason", gateReason)
     }
@@ -59,20 +73,27 @@ data class StatusSnapshot(
             return StatusSnapshot(
                 pvActive = inverter?.pvW?.let { it >= PV_ACTIVE_THRESHOLD_W },
                 pvW = inverter?.pvW,
+                inverterBatterySoc = inverter?.batterySoc,
                 gridRelayOn = inverter?.gridRelayOn,
                 gridPresent = inverter?.gridPresent,
                 gridVoltage = inverter?.lineVoltage,
                 gridRelayReason = inverter?.gridRelayReason,
                 gridMode = inverter?.mode,
                 gridModeReason = inverter?.modeReason,
+                inverterUptimeSec = inverter?.uptimeSec,
+                inverterRtcTime = inverter?.rtcTime,
                 loadMode = inverter?.loadMode,
                 loadModeReason = inverter?.loadModeReason,
+                loadControllerUptimeSec = load?.uptimeSec,
+                loadControllerRtcTime = load?.rtcTime,
                 boiler1Mode = load?.boiler1Mode,
                 boiler1ModeReason = load?.boiler1ModeReason,
                 pumpMode = load?.pumpMode,
                 pumpModeReason = load?.pumpModeReason,
                 boiler2Mode = garage?.boiler2Mode,
                 boiler2ModeReason = garage?.boiler2ModeReason,
+                garageUptimeSec = garage?.uptimeSec,
+                garageRtcTime = garage?.rtcTime,
                 gateState = garage?.gateState,
                 gateReason = garage?.gateReason,
             )
@@ -81,20 +102,27 @@ data class StatusSnapshot(
         fun fromJson(json: JSONObject): StatusSnapshot = StatusSnapshot(
             pvActive = json.optNullableBoolean("pvActive"),
             pvW = json.optNullableDouble("pvW"),
+            inverterBatterySoc = json.optNullableDouble("inverterBatterySoc"),
             gridRelayOn = json.optNullableBoolean("gridRelayOn"),
             gridPresent = json.optNullableBoolean("gridPresent"),
             gridVoltage = json.optNullableDouble("gridVoltage"),
             gridRelayReason = json.optNullableString("gridRelayReason"),
             gridMode = json.optNullableString("gridMode"),
             gridModeReason = json.optNullableString("gridModeReason"),
+            inverterUptimeSec = json.optNullableLong("inverterUptimeSec"),
+            inverterRtcTime = json.optNullableString("inverterRtcTime"),
             loadMode = json.optNullableString("loadMode"),
             loadModeReason = json.optNullableString("loadModeReason"),
+            loadControllerUptimeSec = json.optNullableLong("loadControllerUptimeSec"),
+            loadControllerRtcTime = json.optNullableString("loadControllerRtcTime"),
             boiler1Mode = json.optNullableString("boiler1Mode"),
             boiler1ModeReason = json.optNullableString("boiler1ModeReason"),
             pumpMode = json.optNullableString("pumpMode"),
             pumpModeReason = json.optNullableString("pumpModeReason"),
             boiler2Mode = json.optNullableString("boiler2Mode"),
             boiler2ModeReason = json.optNullableString("boiler2ModeReason"),
+            garageUptimeSec = json.optNullableLong("garageUptimeSec"),
+            garageRtcTime = json.optNullableString("garageRtcTime"),
             gateState = json.optNullableString("gateState"),
             gateReason = json.optNullableString("gateReason"),
         )
@@ -128,6 +156,8 @@ object LocalEventEngine {
     ): List<LocalEvent> {
         val events = mutableListOf<LocalEvent>()
 
+        appendUnexpectedRebootEvents(events, previous, current, config)
+
         if (config.inverterEnabled) {
             appendPvGenerationEventWithDebounce(
                 context = context,
@@ -141,7 +171,10 @@ object LocalEventEngine {
         if (config.inverterEnabled && config.notifyGridRelay) {
             if (previous.gridRelayOn != null && current.gridRelayOn != null && previous.gridRelayOn != current.gridRelayOn) {
                 val title = if (current.gridRelayOn) "GRID relay turned ON" else "GRID relay turned OFF"
-                events += LocalEvent(title, "Reason: ${current.gridRelayReason.normalizeReason()}")
+                events += LocalEvent(
+                    title,
+                    "Reason: ${current.gridRelayReason.normalizeGridReason(current.gridRelayOn, current.inverterBatterySoc)}",
+                )
             }
         }
 
@@ -159,7 +192,8 @@ object LocalEventEngine {
                 prevMode = previous.gridMode,
                 currMode = current.gridMode,
                 title = "GRID mode changed",
-                reason = current.gridModeReason,
+                reason = current.gridModeReason.normalizeGridReason(current.gridRelayOn, current.inverterBatterySoc),
+                reasonAlreadyNormalized = true,
             )
         }
         if (config.inverterEnabled && config.notifyLoadMode) {
@@ -286,13 +320,102 @@ object LocalEventEngine {
         currMode: String?,
         title: String,
         reason: String?,
+        reasonAlreadyNormalized: Boolean = false,
     ) {
         if (prevMode.isNullOrBlank() || currMode.isNullOrBlank()) return
         if (prevMode == currMode) return
+        val reasonText = if (reasonAlreadyNormalized) {
+            reason?.trim().takeUnless { it.isNullOrEmpty() } ?: "Manual change"
+        } else {
+            reason.normalizeReason()
+        }
         events += LocalEvent(
             title,
-            "$prevMode -> $currMode. Reason: ${reason.normalizeReason()}",
+            "$prevMode -> $currMode. Reason: $reasonText",
         )
+    }
+
+    private fun appendUnexpectedRebootEvents(
+        events: MutableList<LocalEvent>,
+        previous: StatusSnapshot,
+        current: StatusSnapshot,
+        config: AppConfig,
+    ) {
+        if (config.inverterEnabled &&
+            isUnexpectedReboot(previous.inverterUptimeSec, current.inverterUptimeSec, current.inverterRtcTime)
+        ) {
+            events += buildRebootEvent("Inverter", previous.inverterUptimeSec, current.inverterUptimeSec)
+        }
+        if (config.loadControllerEnabled &&
+            isUnexpectedReboot(previous.loadControllerUptimeSec, current.loadControllerUptimeSec, current.loadControllerRtcTime)
+        ) {
+            events += buildRebootEvent("Load controller", previous.loadControllerUptimeSec, current.loadControllerUptimeSec)
+        }
+        if (config.garageEnabled &&
+            isUnexpectedReboot(previous.garageUptimeSec, current.garageUptimeSec, current.garageRtcTime)
+        ) {
+            events += buildRebootEvent("Garage controller", previous.garageUptimeSec, current.garageUptimeSec)
+        }
+    }
+
+    private fun buildRebootEvent(
+        moduleName: String,
+        previousUptimeSec: Long?,
+        currentUptimeSec: Long?,
+    ): LocalEvent {
+        val prev = previousUptimeSec ?: 0L
+        val curr = currentUptimeSec ?: 0L
+        return LocalEvent(
+            "$moduleName: power failure suspected",
+            "Unexpected reboot detected (uptime reset: ${prev}s -> ${curr}s)",
+        )
+    }
+
+    private fun isUnexpectedReboot(previousUptimeSec: Long?, currentUptimeSec: Long?, rtcTime: String?): Boolean {
+        val prev = previousUptimeSec ?: return false
+        val curr = currentUptimeSec ?: return false
+        if (prev < 300L) return false
+        if (curr > 300L) return false
+        if (curr >= prev) return false
+        if ((prev - curr) < 120L) return false
+        if (isPlannedNightlyRebootWindow(rtcTime)) return false
+        return true
+    }
+
+    private fun isPlannedNightlyRebootWindow(rtcTime: String?): Boolean {
+        val minuteOfDay = parseMinuteOfDay(rtcTime) ?: return false
+        val plannedMinute = 1 // controllers reboot daily at 00:01
+        return minuteOfDay in 0..(plannedMinute + 4)
+    }
+
+    private fun parseMinuteOfDay(rtcTime: String?): Int? {
+        val raw = rtcTime?.trim().orEmpty()
+        if (!Regex("""^\d{2}:\d{2}(:\d{2})?$""").matches(raw)) return null
+        val hh = raw.substring(0, 2).toIntOrNull() ?: return null
+        val mm = raw.substring(3, 5).toIntOrNull() ?: return null
+        if (hh !in 0..23 || mm !in 0..59) return null
+        return hh * 60 + mm
+    }
+
+    private fun String?.normalizeGridReason(gridRelayOn: Boolean?, batterySoc: Double?): String {
+        val normalized = this?.trim().orEmpty().lowercase()
+        if (normalized.contains("низький заряд") || normalized.contains("акб")) {
+            return "низький рівень заряду батареї"
+        }
+        if (gridRelayOn == true && this.isStartupLikeReason() && (batterySoc ?: 999.0) < 70.0) {
+            return "низький рівень заряду батареї"
+        }
+        return this.normalizeReason()
+    }
+
+    private fun String?.isStartupLikeReason(): Boolean {
+        val value = this?.trim().orEmpty()
+        if (value.isEmpty()) return false
+        val normalized = value.lowercase()
+        return normalized.contains("старт системи") ||
+            normalized.contains("system start") ||
+            normalized.contains("startup") ||
+            normalized.contains("відновлено зі стану при старті")
     }
 
     private fun String?.normalizeReason(): String {
@@ -422,6 +545,16 @@ private fun JSONObject.optNullableBoolean(key: String): Boolean? {
                 else -> null
             }
         }
+        else -> null
+    }
+}
+
+private fun JSONObject.optNullableLong(key: String): Long? {
+    if (!has(key) || isNull(key)) return null
+    val raw = opt(key) ?: return null
+    return when (raw) {
+        is Number -> raw.toLong()
+        is String -> raw.trim().toLongOrNull()
         else -> null
     }
 }

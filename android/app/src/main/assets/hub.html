@@ -192,9 +192,15 @@
             <span class="door-time-value" id="gateLastClose">--</span>
           </div>
         </div>
+        <div class="garage-light-action">
+          <button class="action-btn small secondary garage-light-btn" id="garageLightActionBtn" type="button">
+            garage light: --
+          </button>
+        </div>
         <div class="card-details">
           <div class="detail-row"><span class="detail-label">state:</span><span class="detail-value" id="gateState">---</span></div>
           <div class="detail-row"><span class="detail-label">reason:</span><span class="detail-value" id="gateReason">---</span></div>
+          <div class="detail-row"><span class="detail-label">light:</span><span class="detail-value" id="garageLightState">---</span></div>
         </div>
       </article>
     </section>
@@ -368,6 +374,21 @@
           <button class="mode-btn-compact" id="btnBoiler1OFF" data-boiler1-mode="OFF">OFF</button>
           <button class="mode-btn-compact" id="btnBoiler1ON" data-boiler1-mode="ON">ON</button>
         </div>
+        <div class="auto-window-toolbar">
+          <button class="auto-window-btn" id="boiler1AutoWindowClockBtn" type="button">🕒 AUTO timer</button>
+          <div class="auto-window-status" id="boiler1AutoWindowStatus">AUTO: always active</div>
+        </div>
+        <div class="auto-window-editor" id="boiler1AutoWindowEditor">
+          <label class="auto-window-check"><input id="boiler1AutoWindowEnabled" type="checkbox"> active window enabled</label>
+          <div class="auto-window-row">
+            <label>from<input id="boiler1AutoWindowStart" type="time" value="00:00" step="60"></label>
+            <label>to<input id="boiler1AutoWindowEnd" type="time" value="00:00" step="60"></label>
+          </div>
+          <div class="auto-window-actions">
+            <button class="auto-window-action save" id="boiler1AutoWindowSave" type="button">save</button>
+            <button class="auto-window-action" id="boiler1AutoWindowCancel" type="button">cancel</button>
+          </div>
+        </div>
         <div class="reason-line">reason: <span id="boiler1ModalReason">---</span></div>
       </div>
     </div>
@@ -390,6 +411,21 @@
           <button class="mode-btn-compact" id="btnPumpOFF" data-pump-mode="OFF">OFF</button>
           <button class="mode-btn-compact" id="btnPumpON" data-pump-mode="ON">ON</button>
         </div>
+        <div class="auto-window-toolbar">
+          <button class="auto-window-btn" id="pumpAutoWindowClockBtn" type="button">🕒 AUTO timer</button>
+          <div class="auto-window-status" id="pumpAutoWindowStatus">AUTO: always active</div>
+        </div>
+        <div class="auto-window-editor" id="pumpAutoWindowEditor">
+          <label class="auto-window-check"><input id="pumpAutoWindowEnabled" type="checkbox"> active window enabled</label>
+          <div class="auto-window-row">
+            <label>from<input id="pumpAutoWindowStart" type="time" value="00:00" step="60"></label>
+            <label>to<input id="pumpAutoWindowEnd" type="time" value="00:00" step="60"></label>
+          </div>
+          <div class="auto-window-actions">
+            <button class="auto-window-action save" id="pumpAutoWindowSave" type="button">save</button>
+            <button class="auto-window-action" id="pumpAutoWindowCancel" type="button">cancel</button>
+          </div>
+        </div>
         <div class="reason-line">reason: <span id="pumpModalReason">---</span></div>
       </div>
     </div>
@@ -411,6 +447,21 @@
           <button class="mode-btn-compact" id="btnBoiler2AUTO" data-boiler2-mode="AUTO">AUTO</button>
           <button class="mode-btn-compact" id="btnBoiler2OFF" data-boiler2-mode="OFF">OFF</button>
           <button class="mode-btn-compact" id="btnBoiler2ON" data-boiler2-mode="ON">ON</button>
+        </div>
+        <div class="auto-window-toolbar">
+          <button class="auto-window-btn" id="boiler2AutoWindowClockBtn" type="button">🕒 AUTO timer</button>
+          <div class="auto-window-status" id="boiler2AutoWindowStatus">AUTO: always active</div>
+        </div>
+        <div class="auto-window-editor" id="boiler2AutoWindowEditor">
+          <label class="auto-window-check"><input id="boiler2AutoWindowEnabled" type="checkbox"> active window enabled</label>
+          <div class="auto-window-row">
+            <label>from<input id="boiler2AutoWindowStart" type="time" value="00:00" step="60"></label>
+            <label>to<input id="boiler2AutoWindowEnd" type="time" value="00:00" step="60"></label>
+          </div>
+          <div class="auto-window-actions">
+            <button class="auto-window-action save" id="boiler2AutoWindowSave" type="button">save</button>
+            <button class="auto-window-action" id="boiler2AutoWindowCancel" type="button">cancel</button>
+          </div>
         </div>
         <div class="reason-line">reason: <span id="boiler2ModalReason">---</span></div>
       </div>

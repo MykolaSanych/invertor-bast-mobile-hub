@@ -355,6 +355,24 @@ function setGateActionButtonLabel(stateName) {
   btn.classList.toggle("is-stop", label === "stop");
 }
 
+function setGarageLightActionButtonState({ disabled = false, on = false, reason = "" } = {}) {
+  const btn = document.getElementById("garageLightActionBtn");
+  if (!btn) return;
+
+  btn.disabled = !!disabled;
+  btn.classList.toggle("is-on", !disabled && !!on);
+  btn.classList.toggle("is-off", !disabled && !on);
+
+  if (disabled) {
+    btn.textContent = "garage light: disabled";
+    btn.title = "garage module disabled";
+    return;
+  }
+
+  btn.textContent = `garage light: ${on ? "ON" : "OFF"}`;
+  btn.title = reason ? `garage light (${reason})` : "garage light";
+}
+
 function readChecked(id, fallback = false) {
   const el = document.getElementById(id);
   if (!el) return fallback;
@@ -874,6 +892,14 @@ function closeModal(id) {
 
   modal.classList.remove("is-open");
 
+  if (id === "boiler1Modal") {
+    setAutoWindowEditorOpen("boiler1", false);
+  } else if (id === "pumpModal") {
+    setAutoWindowEditorOpen("pump", false);
+  } else if (id === "boiler2Modal") {
+    setAutoWindowEditorOpen("boiler2", false);
+  }
+
   if (returnToScheme) {
     state.schemeControlReturnToSchemeModalId = "";
     state.schemeControlLandscape = true;
@@ -1339,6 +1365,123 @@ async function sendPumpMode(mode, options = {}) {
   }
 }
 
+function normalizeAutoWindowHm(value, fallback = "00:00") {
+  const text = String(value || "").trim();
+  return /^\d{2}:\d{2}$/.test(text) ? text : fallback;
+}
+
+function setAutoWindowEditorOpen(prefix, open) {
+  const editor = document.getElementById(`${prefix}AutoWindowEditor`);
+  const btn = document.getElementById(`${prefix}AutoWindowClockBtn`);
+  if (editor) editor.classList.toggle("is-open", !!open);
+  if (btn && editor) btn.classList.toggle("active", !!open || btn.classList.contains("has-config"));
+}
+
+function isAutoWindowEditorOpen(prefix) {
+  const editor = document.getElementById(`${prefix}AutoWindowEditor`);
+  return !!editor && editor.classList.contains("is-open");
+}
+
+function renderAutoWindowBlock(prefix, stateData, options = {}) {
+  const { disabled = false } = options || {};
+  const { enabled = false, start = "00:00", end = "00:00", active = true } = stateData || {};
+  const normalizedStart = normalizeAutoWindowHm(start, "00:00");
+  const normalizedEnd = normalizeAutoWindowHm(end, "00:00");
+  const statusEl = document.getElementById(`${prefix}AutoWindowStatus`);
+  const btn = document.getElementById(`${prefix}AutoWindowClockBtn`);
+  const enabledEl = document.getElementById(`${prefix}AutoWindowEnabled`);
+  const startEl = document.getElementById(`${prefix}AutoWindowStart`);
+  const endEl = document.getElementById(`${prefix}AutoWindowEnd`);
+  const saveEl = document.getElementById(`${prefix}AutoWindowSave`);
+  const cancelEl = document.getElementById(`${prefix}AutoWindowCancel`);
+
+  if (statusEl) {
+    statusEl.classList.remove("enabled", "active-now", "inactive-now");
+    if (disabled) {
+      statusEl.textContent = "module disabled";
+    } else if (!enabled) {
+      statusEl.textContent = "AUTO: always active";
+    } else {
+      statusEl.classList.add("enabled");
+      statusEl.classList.add(active ? "active-now" : "inactive-now");
+      statusEl.textContent = `AUTO: ${normalizedStart}-${normalizedEnd} (${active ? "active now" : "inactive now"})`;
+    }
+  }
+
+  if (btn) {
+    btn.disabled = !!disabled;
+    btn.classList.toggle("has-config", !disabled && !!enabled);
+    btn.classList.toggle("active", isAutoWindowEditorOpen(prefix) || (!disabled && !!enabled));
+  }
+
+  if (enabledEl && !isAutoWindowEditorOpen(prefix)) enabledEl.checked = !!enabled;
+  if (startEl && !isAutoWindowEditorOpen(prefix)) startEl.value = normalizedStart;
+  if (endEl && !isAutoWindowEditorOpen(prefix)) endEl.value = normalizedEnd;
+
+  if (enabledEl) enabledEl.disabled = !!disabled;
+  if (startEl) startEl.disabled = !!disabled;
+  if (endEl) endEl.disabled = !!disabled;
+  if (saveEl) saveEl.disabled = !!disabled;
+  if (cancelEl) cancelEl.disabled = !!disabled;
+}
+
+async function sendBoiler1AutoWindow() {
+  const enabledEl = document.getElementById("boiler1AutoWindowEnabled");
+  const startEl = document.getElementById("boiler1AutoWindowStart");
+  const endEl = document.getElementById("boiler1AutoWindowEnd");
+  if (!enabledEl || !startEl || !endEl) return;
+  const enabled = !!enabledEl.checked;
+  const start = normalizeAutoWindowHm(startEl.value, "00:00");
+  const end = normalizeAutoWindowHm(endEl.value, "00:00");
+  try {
+    await bridgeRequest("cmd", (requestId) => {
+      window.AndroidHub.setBoiler1AutoWindow(enabled, start, end, requestId);
+    });
+    setAutoWindowEditorOpen("boiler1", false);
+    showToast("boiler1 AUTO timer updated");
+  } catch (error) {
+    showToast(`boiler1 AUTO timer failed: ${error.message}`);
+  }
+}
+
+async function sendPumpAutoWindow() {
+  const enabledEl = document.getElementById("pumpAutoWindowEnabled");
+  const startEl = document.getElementById("pumpAutoWindowStart");
+  const endEl = document.getElementById("pumpAutoWindowEnd");
+  if (!enabledEl || !startEl || !endEl) return;
+  const enabled = !!enabledEl.checked;
+  const start = normalizeAutoWindowHm(startEl.value, "00:00");
+  const end = normalizeAutoWindowHm(endEl.value, "00:00");
+  try {
+    await bridgeRequest("cmd", (requestId) => {
+      window.AndroidHub.setPumpAutoWindow(enabled, start, end, requestId);
+    });
+    setAutoWindowEditorOpen("pump", false);
+    showToast("pump AUTO timer updated");
+  } catch (error) {
+    showToast(`pump AUTO timer failed: ${error.message}`);
+  }
+}
+
+async function sendBoiler2AutoWindow() {
+  const enabledEl = document.getElementById("boiler2AutoWindowEnabled");
+  const startEl = document.getElementById("boiler2AutoWindowStart");
+  const endEl = document.getElementById("boiler2AutoWindowEnd");
+  if (!enabledEl || !startEl || !endEl) return;
+  const enabled = !!enabledEl.checked;
+  const start = normalizeAutoWindowHm(startEl.value, "00:00");
+  const end = normalizeAutoWindowHm(endEl.value, "00:00");
+  try {
+    await bridgeRequest("cmd", (requestId) => {
+      window.AndroidHub.setBoiler2AutoWindow(enabled, start, end, requestId);
+    });
+    setAutoWindowEditorOpen("boiler2", false);
+    showToast("boiler2 AUTO timer updated");
+  } catch (error) {
+    showToast(`boiler2 AUTO timer failed: ${error.message}`);
+  }
+}
+
 async function sendBoiler2Lock(mode, options = {}) {
   const { silent = false } = options;
   const lockMode = normalizeLockMode(mode);
@@ -1387,6 +1530,17 @@ async function triggerGate() {
     showToast("gate command sent");
   } catch (error) {
     showToast(`gate command failed: ${error.message}`);
+  }
+}
+
+async function toggleGarageLight() {
+  try {
+    await bridgeRequest("cmd", (requestId) => {
+      window.AndroidHub.toggleGarageLight(requestId);
+    });
+    showToast("garage light toggled");
+  } catch (error) {
+    showToast(`garage light failed: ${error.message}`);
   }
 }
 
@@ -1533,6 +1687,58 @@ function bindModeButtons() {
     },
   );
 
+  const boiler1AutoWindowClockBtn = document.getElementById("boiler1AutoWindowClockBtn");
+  if (boiler1AutoWindowClockBtn) {
+    boiler1AutoWindowClockBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (boiler1AutoWindowClockBtn.disabled) return;
+      setAutoWindowEditorOpen("boiler1", !isAutoWindowEditorOpen("boiler1"));
+    });
+  }
+  const boiler1AutoWindowSave = document.getElementById("boiler1AutoWindowSave");
+  if (boiler1AutoWindowSave) {
+    boiler1AutoWindowSave.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      sendBoiler1AutoWindow();
+    });
+  }
+  const boiler1AutoWindowCancel = document.getElementById("boiler1AutoWindowCancel");
+  if (boiler1AutoWindowCancel) {
+    boiler1AutoWindowCancel.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setAutoWindowEditorOpen("boiler1", false);
+    });
+  }
+
+  const pumpAutoWindowClockBtn = document.getElementById("pumpAutoWindowClockBtn");
+  if (pumpAutoWindowClockBtn) {
+    pumpAutoWindowClockBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (pumpAutoWindowClockBtn.disabled) return;
+      setAutoWindowEditorOpen("pump", !isAutoWindowEditorOpen("pump"));
+    });
+  }
+  const pumpAutoWindowSave = document.getElementById("pumpAutoWindowSave");
+  if (pumpAutoWindowSave) {
+    pumpAutoWindowSave.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      sendPumpAutoWindow();
+    });
+  }
+  const pumpAutoWindowCancel = document.getElementById("pumpAutoWindowCancel");
+  if (pumpAutoWindowCancel) {
+    pumpAutoWindowCancel.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setAutoWindowEditorOpen("pump", false);
+    });
+  }
+
   bindPointerClick("btnBoiler2AUTO", () => sendBoiler2Mode("AUTO"));
   bindLongPress(
     "btnBoiler2OFF",
@@ -1553,12 +1759,47 @@ function bindModeButtons() {
     },
   );
 
+  const boiler2AutoWindowClockBtn = document.getElementById("boiler2AutoWindowClockBtn");
+  if (boiler2AutoWindowClockBtn) {
+    boiler2AutoWindowClockBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (boiler2AutoWindowClockBtn.disabled) return;
+      setAutoWindowEditorOpen("boiler2", !isAutoWindowEditorOpen("boiler2"));
+    });
+  }
+  const boiler2AutoWindowSave = document.getElementById("boiler2AutoWindowSave");
+  if (boiler2AutoWindowSave) {
+    boiler2AutoWindowSave.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      sendBoiler2AutoWindow();
+    });
+  }
+  const boiler2AutoWindowCancel = document.getElementById("boiler2AutoWindowCancel");
+  if (boiler2AutoWindowCancel) {
+    boiler2AutoWindowCancel.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setAutoWindowEditorOpen("boiler2", false);
+    });
+  }
+
   const gateActionBtn = document.getElementById("gateActionBtn");
   if (gateActionBtn) {
     gateActionBtn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       triggerGate();
+    });
+  }
+  const garageLightActionBtn = document.getElementById("garageLightActionBtn");
+  if (garageLightActionBtn) {
+    garageLightActionBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (garageLightActionBtn.disabled) return;
+      toggleGarageLight();
     });
   }
 }
@@ -2405,6 +2646,22 @@ function normalizeClimatePayload(period, payload) {
   if (!payload || typeof payload !== "object") {
     throw new Error("Empty payload");
   }
+  if (safeText(payload.error, "") !== "") {
+    throw new Error(safeText(payload.error, "Climate data unavailable"));
+  }
+
+  const sanitizeClimateTriplets = (tempArr, humArr, pressArr) => {
+    const len = Math.max(tempArr.length, humArr.length, pressArr.length);
+    for (let i = 0; i < len; i += 1) {
+      const temp = Number.isFinite(tempArr[i]) ? tempArr[i] : null;
+      const hum = Number.isFinite(humArr[i]) ? humArr[i] : null;
+      const press = Number.isFinite(pressArr[i]) ? pressArr[i] : null;
+      const allZero = temp === 0 && hum === 0 && press === 0;
+      tempArr[i] = allZero ? null : temp;
+      humArr[i] = hum === 0 ? null : hum;
+      pressArr[i] = press === 0 ? null : press;
+    }
+  };
 
   if (period === "daily") {
     const rows = Array.isArray(payload.hours) ? payload.hours : [];
@@ -2437,6 +2694,9 @@ function normalizeClimatePayload(period, payload) {
         pressExt.push(Number.isFinite(Number(row.press_ext)) ? Number(row.press_ext) : null);
       });
     }
+
+    sanitizeClimateTriplets(tempInt, humInt, pressInt);
+    sanitizeClimateTriplets(tempExt, humExt, pressExt);
 
     const date = safeText(payload.date, document.getElementById("climateDateInput")?.value || todayIso());
     return {
@@ -2471,6 +2731,9 @@ function normalizeClimatePayload(period, payload) {
       pressExt.push(Number.isFinite(Number(row.press_ext)) ? Number(row.press_ext) : null);
     });
 
+    sanitizeClimateTriplets(tempInt, humInt, pressInt);
+    sanitizeClimateTriplets(tempExt, humExt, pressExt);
+
     const month = safeText(payload.month, document.getElementById("climateMonthInput")?.value || currentMonthIso());
     return {
       title: `climate graph - month ${month}`,
@@ -2486,15 +2749,23 @@ function normalizeClimatePayload(period, payload) {
 
   const labels = Array.isArray(payload.months) ? payload.months.map((v) => String(v)) : [];
   const year = safeText(payload.current_year, String(new Date().getFullYear()));
+  const tempInt = Array.isArray(payload.temp) ? payload.temp.map((v) => toFiniteNumber(v, null)) : [];
+  const humInt = Array.isArray(payload.hum) ? payload.hum.map((v) => toFiniteNumber(v, null)) : [];
+  const pressInt = Array.isArray(payload.press) ? payload.press.map((v) => toFiniteNumber(v, null)) : [];
+  const tempExt = Array.isArray(payload.temp_ext) ? payload.temp_ext.map((v) => toFiniteNumber(v, null)) : [];
+  const humExt = Array.isArray(payload.hum_ext) ? payload.hum_ext.map((v) => toFiniteNumber(v, null)) : [];
+  const pressExt = Array.isArray(payload.press_ext) ? payload.press_ext.map((v) => toFiniteNumber(v, null)) : [];
+  sanitizeClimateTriplets(tempInt, humInt, pressInt);
+  sanitizeClimateTriplets(tempExt, humExt, pressExt);
   return {
     title: `climate graph - year ${year}`,
     labels,
-    tempInt: Array.isArray(payload.temp) ? payload.temp.map((v) => toFiniteNumber(v, 0)) : [],
-    humInt: Array.isArray(payload.hum) ? payload.hum.map((v) => toFiniteNumber(v, 0)) : [],
-    pressInt: Array.isArray(payload.press) ? payload.press.map((v) => toFiniteNumber(v, 0)) : [],
-    tempExt: Array.isArray(payload.temp_ext) ? payload.temp_ext.map((v) => toFiniteNumber(v, 0)) : [],
-    humExt: Array.isArray(payload.hum_ext) ? payload.hum_ext.map((v) => toFiniteNumber(v, 0)) : [],
-    pressExt: Array.isArray(payload.press_ext) ? payload.press_ext.map((v) => toFiniteNumber(v, 0)) : [],
+    tempInt,
+    humInt,
+    pressInt,
+    tempExt,
+    humExt,
+    pressExt,
   };
 }
 
@@ -2544,18 +2815,37 @@ function renderClimateChart() {
 
   const meta = currentClimateMetricMeta();
   const selected = climateSeriesForMetric(model, state.climate.metric);
-  const series = [
-    {
-      label: `${meta.label} (${meta.unit})`,
+  const hasPrimary = collectSeriesFiniteValues([{ data: selected.primary || [] }]).length > 0;
+  const hasExternal = collectSeriesFiniteValues([{ data: selected.external || [] }]).length > 0;
+  const series = [];
+
+  if (hasPrimary) {
+    series.push({
+      label: `internal ${meta.label} (${meta.unit})`,
       color: "#7a5cff",
       data: selected.primary,
       lineWidth: 2.2,
       pointRadius: 1.4,
-      fillAlpha: 0.2,
-    },
-  ];
+      fillAlpha: 0.18,
+    });
+  }
+  if (hasExternal) {
+    series.push({
+      label: `external ${meta.label} (${meta.unit})`,
+      color: "#00d7ff",
+      data: selected.external,
+      lineWidth: 2,
+      pointRadius: 1.3,
+      fillAlpha: 0,
+    });
+  }
 
   setText("climateChartTitle", `${model.title} - ${meta.label}`);
+  if (!series.length) {
+    drawEmptyCanvas(canvas, "No climate data");
+    renderLegend("climateLegend", []);
+    return;
+  }
   drawLineChart(canvas, model.labels, series, {
     yTitle: `${meta.label} (${meta.unit})`,
   });
@@ -2894,6 +3184,12 @@ function renderAll() {
   setText("boiler1State", loadOff ? "---" : boolText(!!loadController.boiler1On));
   setText("boiler1ModalState", loadOff ? "---" : boolText(!!loadController.boiler1On));
   setText("boiler1ModalReason", loadOff ? "module disabled" : uiText(loadController.boiler1StateReason, "manual"));
+  renderAutoWindowBlock("boiler1", {
+    enabled: !!loadController.boiler1AutoWindowEnabled,
+    start: safeText(loadController.boiler1AutoWindowStart, "00:00"),
+    end: safeText(loadController.boiler1AutoWindowEnd, "00:00"),
+    active: loadController.boiler1AutoWindowActive !== false,
+  }, { disabled: loadOff });
 
   setText("pumpPower", loadOff ? "--" : num(pumpPowerCardW, 0));
   setText("pumpMode", loadOff ? "disabled" : safeText(loadController.pumpMode));
@@ -2902,6 +3198,12 @@ function renderAll() {
   setText("pumpState", loadOff ? "---" : boolText(!!loadController.pumpOn));
   setText("pumpModalState", loadOff ? "---" : boolText(!!loadController.pumpOn));
   setText("pumpModalReason", loadOff ? "module disabled" : uiText(loadController.pumpStateReason, "manual"));
+  renderAutoWindowBlock("pump", {
+    enabled: !!loadController.pumpAutoWindowEnabled,
+    start: safeText(loadController.pumpAutoWindowStart, "00:00"),
+    end: safeText(loadController.pumpAutoWindowEnd, "00:00"),
+    active: loadController.pumpAutoWindowActive !== false,
+  }, { disabled: loadOff });
 
   setText("boiler2Power", garageOff ? "--" : num(boiler2PowerCardW, 0));
   setText("boiler2Mode", garageOff ? "disabled" : safeText(garage.boiler2Mode));
@@ -2910,6 +3212,12 @@ function renderAll() {
   setText("boiler2State", garageOff ? "---" : boolText(!!garage.boiler2On));
   setText("boiler2ModalState", garageOff ? "---" : boolText(!!garage.boiler2On));
   setText("boiler2ModalReason", garageOff ? "module disabled" : uiText(garage.boiler2StateReason, "manual"));
+  renderAutoWindowBlock("boiler2", {
+    enabled: !!garage.boiler2AutoWindowEnabled,
+    start: safeText(garage.boiler2AutoWindowStart, "00:00"),
+    end: safeText(garage.boiler2AutoWindowEnd, "00:00"),
+    active: garage.boiler2AutoWindowActive !== false,
+  }, { disabled: garageOff });
 
   const gateNormalized = garageOff ? "unknown" : classifyGateState(garage);
   if (!garageOff) {
@@ -2933,6 +3241,14 @@ function renderAll() {
   setText("gateModalState", garageOff ? "disabled" : uiText(garage.gateState, gateNormalized));
   setText("gateModalReason", garageOff ? "module disabled" : uiText(garage.gateReason, "manual"));
   setGateActionButtonLabel(gateNormalized);
+  const garageLightReason = garageOff ? "module disabled" : uiText(garage.garageLightReason, "manual");
+  const garageLightOn = !garageOff && !!garage.garageLightOn;
+  setText("garageLightState", garageOff ? "disabled" : boolText(garageLightOn));
+  setGarageLightActionButtonState({
+    disabled: garageOff,
+    on: garageLightOn,
+    reason: garageLightReason,
+  });
 
   renderPowerScheme({
     inverter,

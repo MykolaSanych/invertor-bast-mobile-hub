@@ -315,6 +315,25 @@ class StatusRepository(
         )
     }
 
+    suspend fun setBoiler1AutoWindow(
+        config: AppConfig,
+        enabled: Boolean,
+        start: String,
+        end: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!config.loadControllerEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.loadControllerBaseUrl,
+            password = config.loadControllerPassword,
+            path = "/api/boilerautowindow",
+            formPairs = listOf(
+                "enabled" to if (enabled) "1" else "0",
+                "start" to start,
+                "end" to end,
+            ),
+        )
+    }
+
     suspend fun setPumpMode(config: AppConfig, mode: String): Boolean = withContext(Dispatchers.IO) {
         if (!config.loadControllerEnabled) return@withContext false
         postMode(config.loadControllerBaseUrl, config.loadControllerPassword, "/api/loadmode", mode)
@@ -327,6 +346,25 @@ class StatusRepository(
             password = config.loadControllerPassword,
             path = "/api/pumplock",
             formPairs = listOf("lock" to lockMode.uppercase()),
+        )
+    }
+
+    suspend fun setPumpAutoWindow(
+        config: AppConfig,
+        enabled: Boolean,
+        start: String,
+        end: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!config.loadControllerEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.loadControllerBaseUrl,
+            password = config.loadControllerPassword,
+            path = "/api/pumpautowindow",
+            formPairs = listOf(
+                "enabled" to if (enabled) "1" else "0",
+                "start" to start,
+                "end" to end,
+            ),
         )
     }
 
@@ -345,6 +383,25 @@ class StatusRepository(
         )
     }
 
+    suspend fun setBoiler2AutoWindow(
+        config: AppConfig,
+        enabled: Boolean,
+        start: String,
+        end: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!config.garageEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.garageBaseUrl,
+            password = config.garagePassword,
+            path = "/api/boilerautowindow",
+            formPairs = listOf(
+                "enabled" to if (enabled) "1" else "0",
+                "start" to start,
+                "end" to end,
+            ),
+        )
+    }
+
     suspend fun triggerGate(config: AppConfig): Boolean = withContext(Dispatchers.IO) {
         if (!config.garageEnabled) return@withContext false
         postForm(
@@ -352,6 +409,16 @@ class StatusRepository(
             password = config.garagePassword,
             path = "/api/door",
             formPairs = listOf("action" to "pulse"),
+        )
+    }
+
+    suspend fun toggleGarageLight(config: AppConfig): Boolean = withContext(Dispatchers.IO) {
+        if (!config.garageEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.garageBaseUrl,
+            password = config.garagePassword,
+            path = "/api/light",
+            formPairs = listOf("state" to "TOGGLE"),
         )
     }
 
@@ -413,6 +480,7 @@ class StatusRepository(
             loadRelayOn = json.optBooleanSafe("pinLoad_state"),
             loadRelayReason = json.optStringSafeAny("manual", "pinLoad_reason"),
             wifiStrength = json.optDoubleSafeAny("wifi_strength"),
+            uptimeSec = json.optLongSafeAny("uptime"),
             rtcTime = rtcTime,
             rtcDate = rtcDate,
             updatedAtMs = observedAtMs,
@@ -445,6 +513,22 @@ class StatusRepository(
             pumpStateReason = json.optStringSafeAny("manual", "pump_state_reason"),
             boilerLock = json.optStringSafeAny("NONE", "boiler_lock"),
             pumpLock = json.optStringSafeAny("NONE", "pump_lock"),
+            boiler1AutoWindowEnabled = json.optBooleanSafe("boiler_auto_window_enabled"),
+            boiler1AutoWindowStart = json.optStringSafeAny("00:00", "boiler_auto_window_start"),
+            boiler1AutoWindowEnd = json.optStringSafeAny("00:00", "boiler_auto_window_end"),
+            boiler1AutoWindowActive = if (json.has("boiler_auto_window_active")) {
+                json.optBooleanSafe("boiler_auto_window_active")
+            } else {
+                true
+            },
+            pumpAutoWindowEnabled = json.optBooleanSafe("pump_auto_window_enabled"),
+            pumpAutoWindowStart = json.optStringSafeAny("00:00", "pump_auto_window_start"),
+            pumpAutoWindowEnd = json.optStringSafeAny("00:00", "pump_auto_window_end"),
+            pumpAutoWindowActive = if (json.has("pump_auto_window_active")) {
+                json.optBooleanSafe("pump_auto_window_active")
+            } else {
+                true
+            },
             boilerCurrent = json.optDoubleSafeAny("boiler_current"),
             boilerPower = json.optDoubleSafeAny("boiler_power"),
             dailyBoiler = json.optDoubleSafeAny("daily_boiler"),
@@ -458,6 +542,7 @@ class StatusRepository(
             batterySoc = json.optDoubleSafeAny("battery"),
             batteryPower = json.optDoubleSafeAny("battery_power"),
             wifiStrength = json.optDoubleSafeAny("wifi_strength"),
+            uptimeSec = json.optLongSafeAny("uptime"),
             rtcTime = rtcTime,
             rtcDate = rtcDate,
             updatedAtMs = observedAtMs,
@@ -481,6 +566,14 @@ class StatusRepository(
             boiler2On = json.optBooleanSafe("boiler_on"),
             boiler2StateReason = json.optStringSafeAny("manual", "boiler_state_reason"),
             boilerLock = json.optStringSafeAny("NONE", "boiler_lock"),
+            boiler2AutoWindowEnabled = json.optBooleanSafe("boiler_auto_window_enabled"),
+            boiler2AutoWindowStart = json.optStringSafeAny("00:00", "boiler_auto_window_start"),
+            boiler2AutoWindowEnd = json.optStringSafeAny("00:00", "boiler_auto_window_end"),
+            boiler2AutoWindowActive = if (json.has("boiler_auto_window_active")) {
+                json.optBooleanSafe("boiler_auto_window_active")
+            } else {
+                true
+            },
             boilerCurrent = json.optDoubleSafeAny("boiler_current"),
             boilerPower = json.optDoubleSafeAny("boiler_power"),
             dailyBoiler = json.optDoubleSafeAny("daily_boiler"),
@@ -488,6 +581,8 @@ class StatusRepository(
             gateReason = json.optStringSafeAny("manual", "door_reason"),
             gateOpenPin = json.optInt("door_open_pin", -1),
             gateClosedPin = json.optInt("door_closed_pin", -1),
+            garageLightOn = json.optBooleanSafe("garage_light_on"),
+            garageLightReason = json.optStringSafeAny("manual", "garage_light_reason"),
             lineVoltage = json.optDoubleSafeAny("gridVolt"),
             pvW = json.optDoubleSafeAny("pv"),
             gridW = json.optDoubleSafeAny("ac_in", "grid"),
@@ -495,6 +590,7 @@ class StatusRepository(
             batterySoc = json.optDoubleSafeAny("battery"),
             batteryPower = json.optDoubleSafeAny("battery_power"),
             wifiStrength = json.optDoubleSafeAny("wifi_strength"),
+            uptimeSec = json.optLongSafeAny("uptime"),
             rtcTime = rtcTime,
             rtcDate = rtcDate,
             updatedAtMs = observedAtMs,
@@ -706,6 +802,20 @@ private fun JSONObject.optDoubleSafeAny(vararg keys: String): Double {
         if (value != null) return value
     }
     return 0.0
+}
+
+private fun JSONObject.optLongSafeAny(vararg keys: String): Long {
+    keys.forEach { key ->
+        if (!has(key) || isNull(key)) return@forEach
+        val raw = opt(key) ?: return@forEach
+        val value = when (raw) {
+            is Number -> raw.toLong()
+            is String -> raw.trim().toLongOrNull()
+            else -> null
+        }
+        if (value != null) return value
+    }
+    return 0L
 }
 
 private fun JSONObject.optStringSafeAny(fallback: String, vararg keys: String): String {
