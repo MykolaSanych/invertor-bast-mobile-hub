@@ -3,8 +3,7 @@ package com.chapay.homehub.data
 import android.content.Context
 import android.net.wifi.WifiManager
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.HttpUrl
@@ -29,6 +28,11 @@ class StatusRepository(
         .readTimeout(8, TimeUnit.SECONDS)
         .writeTimeout(8, TimeUnit.SECONDS)
         .build()
+    private val statusClient = client.newBuilder()
+        .connectTimeout(CONTROLLER_STATUS_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .readTimeout(CONTROLLER_STATUS_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .writeTimeout(CONTROLLER_STATUS_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .build()
     private val appContext = context?.applicationContext
 
     private val multicastCacheLock = Any()
@@ -43,45 +47,125 @@ class StatusRepository(
 
     suspend fun fetchUnified(config: AppConfig): UnifiedStatus {
         return runCatching {
-            fetchUnifiedHttp(config)
+            fetchUnifiedHybrid(config)
+        }.getOrElse {
+            UnifiedStatus(updatedAtMs = System.currentTimeMillis())
+        }
+    }
+
+    suspend fun fetchUnifiedProgressive(
+        config: AppConfig,
+        onPartialStatus: (moduleKey: String, status: UnifiedStatus) -> Unit,
+    ): UnifiedStatus {
+        return runCatching {
+            fetchUnifiedHybrid(config, onPartialStatus)
         }.getOrElse {
             UnifiedStatus(updatedAtMs = System.currentTimeMillis())
         }
     }
 
     suspend fun requestMulticastRefresh(config: AppConfig): UnifiedStatus {
-        return fetchUnified(config)
+        return runCatching {
+            fetchUnifiedFromMulticastDetailed(config, requestRefresh = true).status
+        }.getOrElse {
+            UnifiedStatus(updatedAtMs = System.currentTimeMillis())
+        }
     }
 
-    private suspend fun fetchUnifiedHttp(config: AppConfig): UnifiedStatus = coroutineScope {
-        val inverterDeferred = async {
-            if (!config.inverterEnabled) {
-                null
-            } else {
-                runCatching { fetchInverter(config) }.getOrNull()
-            }
+    private suspend fun fetchUnifiedHybrid(
+        config: AppConfig,
+        onPartialStatus: ((moduleKey: String, status: UnifiedStatus) -> Unit)? = null,
+    ): UnifiedStatus {
+        val multicastResult = runCatching {
+            fetchUnifiedFromMulticastDetailed(config, requestRefresh = true, onPartialStatus = onPartialStatus)
+        }.getOrElse {
+            MulticastFetchResult(
+                status = UnifiedStatus(updatedAtMs = System.currentTimeMillis()),
+                receivedModules = emptySet(),
+            )
         }
-        val loadDeferred = async {
-            if (!config.loadControllerEnabled) {
-                null
-            } else {
-                runCatching { fetchLoadController(config) }.getOrNull()
-            }
+
+        val needInverter = config.inverterEnabled && multicastResult.status.inverter == null
+        val needLoad = config.loadControllerEnabled && multicastResult.status.loadController == null
+        val needGarage = config.garageEnabled && multicastResult.status.garage == null
+        if (!needInverter && !needLoad && !needGarage) {
+            return multicastResult.status
         }
-        val garageDeferred = async {
-            if (!config.garageEnabled) {
-                null
-            } else {
-                runCatching { fetchGarage(config) }.getOrNull()
+
+        val onlyModules = mutableSetOf<String>()
+        if (needInverter) onlyModules += MODULE_INVERTER
+        if (needLoad) onlyModules += MODULE_LOAD
+        if (needGarage) onlyModules += MODULE_GARAGE
+
+        return fetchUnifiedHttp(
+            config = config,
+            onPartialStatus = onPartialStatus,
+            initialStatus = multicastResult.status,
+            onlyModules = onlyModules,
+        )
+    }
+
+    private suspend fun fetchUnifiedHttp(
+        config: AppConfig,
+        onPartialStatus: ((moduleKey: String, status: UnifiedStatus) -> Unit)? = null,
+        initialStatus: UnifiedStatus? = null,
+        onlyModules: Set<String>? = null,
+    ): UnifiedStatus {
+        var inverter: InverterStatus? = initialStatus?.inverter
+        var loadController: LoadControllerStatus? = initialStatus?.loadController
+        var garage: GarageStatus? = initialStatus?.garage
+        var hasSentControllerRequest = false
+
+        fun snapshotStatus(): UnifiedStatus {
+            return UnifiedStatus(
+                inverter = inverter,
+                loadController = loadController,
+                garage = garage,
+                updatedAtMs = System.currentTimeMillis(),
+            )
+        }
+
+        fun markRequestSent() {
+            hasSentControllerRequest = true
+        }
+
+        suspend fun delayBeforeNextControllerRequest() {
+            if (hasSentControllerRequest) {
+                delay(CONTROLLER_REQUEST_STAGGER_MS)
             }
         }
 
-        UnifiedStatus(
-            inverter = inverterDeferred.await(),
-            loadController = loadDeferred.await(),
-            garage = garageDeferred.await(),
-            updatedAtMs = System.currentTimeMillis(),
-        )
+        if (shouldFetchModuleHttp(config.inverterEnabled, onlyModules, MODULE_INVERTER)) {
+            inverter = runCatching { fetchInverter(config) }.getOrNull()
+            if (inverter != null) {
+                onPartialStatus?.invoke(MODULE_INVERTER, snapshotStatus())
+            }
+            markRequestSent()
+        }
+
+        if (shouldFetchModuleHttp(config.loadControllerEnabled, onlyModules, MODULE_LOAD)) {
+            delayBeforeNextControllerRequest()
+            loadController = runCatching { fetchLoadController(config) }.getOrNull()
+            if (loadController != null) {
+                onPartialStatus?.invoke(MODULE_LOAD, snapshotStatus())
+            }
+            markRequestSent()
+        }
+
+        if (shouldFetchModuleHttp(config.garageEnabled, onlyModules, MODULE_GARAGE)) {
+            delayBeforeNextControllerRequest()
+            garage = runCatching { fetchGarage(config) }.getOrNull()
+            if (garage != null) {
+                onPartialStatus?.invoke(MODULE_GARAGE, snapshotStatus())
+            }
+        }
+
+        return snapshotStatus()
+    }
+
+    private fun shouldFetchModuleHttp(enabled: Boolean, onlyModules: Set<String>?, moduleKey: String): Boolean {
+        if (!enabled) return false
+        return onlyModules == null || moduleKey in onlyModules
     }
 
     suspend fun fetchInverterDaily(config: AppConfig, date: String): JSONObject? = withContext(Dispatchers.IO) {
@@ -122,15 +206,34 @@ class StatusRepository(
         )
     }
 
-    private fun fetchUnifiedFromMulticast(
+    suspend fun fetchGarageDoorHistory(config: AppConfig): JSONObject? = withContext(Dispatchers.IO) {
+        if (!config.garageEnabled) return@withContext null
+        fetchJsonWithAuth(
+            baseUrlRaw = config.garageBaseUrl,
+            password = config.garagePassword,
+            path = "/api/doorhistory",
+        )
+    }
+
+    private fun fetchUnifiedFromMulticastDetailed(
         config: AppConfig,
         requestRefresh: Boolean = false,
-    ): UnifiedStatus {
-        val receivedMulticastPacket = pollMulticastPackets(
+        onPartialStatus: ((moduleKey: String, status: UnifiedStatus) -> Unit)? = null,
+    ): MulticastFetchResult {
+        val pollResult = pollMulticastPackets(
             windowMs = MULTICAST_LISTEN_WINDOW_MS,
             sendStatusRequest = requestRefresh,
+            onPacketApplied = { moduleKey ->
+                onPartialStatus?.invoke(moduleKey, snapshotMulticastUnifiedStatus(config, fromMulticast = true))
+            },
         )
+        return MulticastFetchResult(
+            status = snapshotMulticastUnifiedStatus(config, fromMulticast = pollResult.receivedAny),
+            receivedModules = pollResult.receivedModules,
+        )
+    }
 
+    private fun snapshotMulticastUnifiedStatus(config: AppConfig, fromMulticast: Boolean): UnifiedStatus {
         val now = System.currentTimeMillis()
         val inverter: InverterStatus?
         val loadController: LoadControllerStatus?
@@ -161,15 +264,17 @@ class StatusRepository(
             loadController = loadController,
             garage = garage,
             updatedAtMs = if (newestPacketAt > 0L) newestPacketAt else now,
-            fromMulticast = receivedMulticastPacket,
+            fromMulticast = fromMulticast,
         )
     }
 
     private fun pollMulticastPackets(
         windowMs: Long,
         sendStatusRequest: Boolean = false,
-    ): Boolean {
+        onPacketApplied: ((moduleKey: String) -> Unit)? = null,
+    ): MulticastPollResult {
         var receivedPacket = false
+        val receivedModules = linkedSetOf<String>()
         val multicastLock = runCatching {
             val wifiManager = appContext?.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             wifiManager?.createMulticastLock("my_home_multicast_lock")?.apply {
@@ -185,7 +290,7 @@ class StatusRepository(
                 bind(InetSocketAddress(MULTICAST_PORT))
                 joinGroup(multicastGroupAddress)
             }
-        }.getOrNull() ?: return false
+        }.getOrNull() ?: return MulticastPollResult(receivedAny = false, receivedModules = emptySet())
 
         try {
             if (sendStatusRequest) {
@@ -208,8 +313,10 @@ class StatusRepository(
                 }.getOrNull() ?: continue
 
                 val json = runCatching { JSONObject(payload) }.getOrNull() ?: continue
+                val moduleKey = applyMulticastPacket(json) ?: continue
                 receivedPacket = true
-                applyMulticastPacket(json)
+                receivedModules += moduleKey
+                onPacketApplied?.invoke(moduleKey)
             }
         } finally {
             runCatching { socket.leaveGroup(multicastGroupAddress) }
@@ -221,26 +328,45 @@ class StatusRepository(
             }
         }
 
-        return receivedPacket
+        return MulticastPollResult(
+            receivedAny = receivedPacket,
+            receivedModules = receivedModules,
+        )
     }
 
     private fun sendMulticastStatusRequest(socket: MulticastSocket) {
-        val payload = MULTICAST_STATUS_REQUEST_PAYLOAD.toByteArray(StandardCharsets.UTF_8)
+        val calendar = Calendar.getInstance()
+        val year = calendar.get(Calendar.YEAR)
+        val month = (calendar.get(Calendar.MONTH) + 1).toString().padStart(2, '0')
+        val day = calendar.get(Calendar.DAY_OF_MONTH).toString().padStart(2, '0')
+        val hour = calendar.get(Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
+        val minute = calendar.get(Calendar.MINUTE).toString().padStart(2, '0')
+        val second = calendar.get(Calendar.SECOND).toString().padStart(2, '0')
+        val payloadJson = JSONObject().apply {
+            put("kind", MULTICAST_STATUS_REQUEST_KIND_V2)
+            put("v", 2)
+            put("action", "status")
+            put("request_id", "android-${System.currentTimeMillis()}")
+            put("date", "$year-$month-$day")
+            put("time", "$hour:$minute:$second")
+        }.toString()
+        val payload = payloadJson.toByteArray(StandardCharsets.UTF_8)
         runCatching {
             val packet = DatagramPacket(payload, payload.size, multicastGroupAddress, MULTICAST_PORT)
             socket.send(packet)
         }
     }
 
-    private fun applyMulticastPacket(json: JSONObject) {
+    private fun applyMulticastPacket(json: JSONObject): String? {
         val now = System.currentTimeMillis()
-        when (detectModuleType(json)) {
+        return when (detectModuleType(json)) {
             MODULE_INVERTER -> {
                 val parsed = parseInverterStatus(json, now)
                 synchronized(multicastCacheLock) {
                     cachedInverter = parsed
                     cachedInverterAtMs = now
                 }
+                MODULE_INVERTER
             }
 
             MODULE_LOAD -> {
@@ -249,6 +375,7 @@ class StatusRepository(
                     cachedLoadController = parsed
                     cachedLoadAtMs = now
                 }
+                MODULE_LOAD
             }
 
             MODULE_GARAGE -> {
@@ -257,11 +384,19 @@ class StatusRepository(
                     cachedGarage = parsed
                     cachedGarageAtMs = now
                 }
+                MODULE_GARAGE
             }
+
+            else -> null
         }
     }
 
     private fun detectModuleType(json: JSONObject): String {
+        val kind = json.optStringSafe("kind", "").lowercase()
+        if (kind == MULTICAST_STATUS_REQUEST_KIND_V2) {
+            return ""
+        }
+
         val module = json.optStringSafe("module", "").lowercase()
         if (module == MODULE_INVERTER || module == "invertor" || module == "invertor-bast") {
             return MODULE_INVERTER
@@ -402,23 +537,39 @@ class StatusRepository(
         )
     }
 
-    suspend fun triggerGate(config: AppConfig): Boolean = withContext(Dispatchers.IO) {
+    suspend fun triggerGate(
+        config: AppConfig,
+        source: String = "mobile_hub",
+        reason: String = "mobile hub",
+    ): Boolean = withContext(Dispatchers.IO) {
         if (!config.garageEnabled) return@withContext false
         postForm(
             baseUrlRaw = config.garageBaseUrl,
             password = config.garagePassword,
             path = "/api/door",
-            formPairs = listOf("action" to "pulse"),
+            formPairs = listOf(
+                "action" to "pulse",
+                "source" to source,
+                "reason" to reason,
+            ),
         )
     }
 
-    suspend fun toggleGarageLight(config: AppConfig): Boolean = withContext(Dispatchers.IO) {
+    suspend fun toggleGarageLight(
+        config: AppConfig,
+        source: String = "mobile_hub",
+        reason: String = "mobile hub",
+    ): Boolean = withContext(Dispatchers.IO) {
         if (!config.garageEnabled) return@withContext false
         postForm(
             baseUrlRaw = config.garageBaseUrl,
             password = config.garagePassword,
             path = "/api/light",
-            formPairs = listOf("state" to "TOGGLE"),
+            formPairs = listOf(
+                "state" to "TOGGLE",
+                "source" to source,
+                "reason" to reason,
+            ),
         )
     }
 
@@ -579,6 +730,7 @@ class StatusRepository(
             dailyBoiler = json.optDoubleSafeAny("daily_boiler"),
             gateState = json.optStringSafeAny("unknown", "door_state", "door"),
             gateReason = json.optStringSafeAny("manual", "door_reason"),
+            gateSource = json.optStringSafeAny("remote", "door_source", "door_initiator"),
             gateOpenPin = json.optInt("door_open_pin", -1),
             gateClosedPin = json.optInt("door_closed_pin", -1),
             garageLightOn = json.optBooleanSafe("garage_light_on"),
@@ -602,11 +754,19 @@ class StatusRepository(
     }
 
     private fun fetchStatusJson(baseUrlRaw: String, password: String): JSONObject? {
-        return fetchJsonWithAuth(
-            baseUrlRaw = baseUrlRaw,
-            password = password,
-            path = "/api/status",
-        )
+        val baseUrl = normalizeBaseUrl(baseUrlRaw)
+        if (baseUrl.isEmpty()) return null
+
+        val url = buildUrl(baseUrl, "/api/status", emptyMap()) ?: return null
+        val firstAttempt = fetchJsonResult(url, statusClient)
+        firstAttempt.json?.let { return it }
+
+        // For polling, skip auth retries after timeout/no-response so one dead controller only
+        // blocks this module for ~2s and the app can move to the next one.
+        if (!firstAttempt.isUnauthorized || password.isBlank()) return null
+
+        authenticate(baseUrl, password, statusClient)
+        return fetchJsonResult(url, statusClient).json
     }
 
     private fun fetchJsonWithAuth(
@@ -733,20 +893,27 @@ class StatusRepository(
     }
 
     private fun fetchJson(url: HttpUrl): JSONObject? {
+        return fetchJsonResult(url, client).json
+    }
+
+    private fun fetchJsonResult(url: HttpUrl, httpClient: OkHttpClient): JsonFetchResult {
         val req = Request.Builder()
             .url(url)
             .get()
             .build()
         return runCatching {
-            client.newCall(req).execute().use { response ->
-                if (!response.isSuccessful) return null
-                val body = response.body?.string() ?: return null
-                runCatching { JSONObject(body) }.getOrNull()
+            httpClient.newCall(req).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@use JsonFetchResult(httpCode = response.code)
+                }
+                val body = response.body?.string()
+                val json = body?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
+                JsonFetchResult(json = json, httpCode = response.code)
             }
-        }.getOrNull()
+        }.getOrElse { JsonFetchResult() }
     }
 
-    private fun authenticate(baseUrl: String, password: String) {
+    private fun authenticate(baseUrl: String, password: String, httpClient: OkHttpClient = client) {
         if (password.isBlank()) return
         val authReq = Request.Builder()
             .url("$baseUrl/api/auth")
@@ -757,10 +924,28 @@ class StatusRepository(
             )
             .build()
         runCatching {
-            client.newCall(authReq).execute().close()
+            httpClient.newCall(authReq).execute().close()
         }
     }
 }
+
+private data class JsonFetchResult(
+    val json: JSONObject? = null,
+    val httpCode: Int? = null,
+) {
+    val isUnauthorized: Boolean
+        get() = httpCode == 401 || httpCode == 403
+}
+
+private data class MulticastPollResult(
+    val receivedAny: Boolean,
+    val receivedModules: Set<String>,
+)
+
+private data class MulticastFetchResult(
+    val status: UnifiedStatus,
+    val receivedModules: Set<String>,
+)
 
 private fun JSONObject.optStringSafe(key: String, fallback: String): String {
     val raw = opt(key)
@@ -829,14 +1014,17 @@ private fun JSONObject.optStringSafeAny(fallback: String, vararg keys: String): 
 }
 
 private const val TIME_SYNC_BROWSER_PATH = "/api/time/syncbrowser"
+private const val MULTICAST_STATUS_REQUEST_KIND_V2 = "homehub_status_request"
 
 private const val MULTICAST_GROUP = "239.255.0.1"
 private const val MULTICAST_PORT = 5005
 private const val MULTICAST_STATUS_REQUEST_PAYLOAD = "HOMEHUB_STATUS_REQUEST_V1"
-private const val MULTICAST_LISTEN_WINDOW_MS = 1500L
+private const val MULTICAST_LISTEN_WINDOW_MS = 2500L
 private const val MULTICAST_READ_TIMEOUT_MS = 300
 private const val MULTICAST_MAX_PACKET_SIZE = 4096
 private const val MULTICAST_CACHE_TTL_MS = 20_000L
+private const val CONTROLLER_REQUEST_STAGGER_MS = 2_000L
+private const val CONTROLLER_STATUS_TIMEOUT_MS = 2_000L
 
 private const val MODULE_INVERTER = "inverter"
 private const val MODULE_LOAD = "load_controller"

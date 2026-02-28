@@ -29,12 +29,14 @@ const LOAD_TIMELINE_MAX_SAMPLES = 1600;
 const CARD_NEON_POWER_THRESHOLD = 1;
 const DEVICE_POWER_NOISE_FLOOR_W = 27;
 const ZERO_VOLTAGE_THRESHOLD_V = 0.5;
+const MODULE_STALE_AFTER_MISSES = 3;
 
 const state = {
   config: { ...DEFAULT_CONFIG },
   status: null,
   pending: new Map(),
   reqSeq: 0,
+  statusRequestInFlight: false,
   pollHandle: null,
   signalAgeHandle: null,
   noBridgeToastShown: false,
@@ -69,8 +71,14 @@ const state = {
   events: {
     items: [],
     loadedAtMs: 0,
+    viewMode: "all",
   },
   moduleSignalAtMs: {
+    inverter: 0,
+    loadController: 0,
+    garage: 0,
+  },
+  moduleMissCounts: {
     inverter: 0,
     loadController: 0,
     garage: 0,
@@ -92,8 +100,12 @@ window.HubNative = {
       return;
     }
 
-    state.status = data;
+    const isPartial = isPartialStatusRequestId(requestId);
     updateModuleSignalTimes(data);
+    if (!isPartial) {
+      updateModuleMissCounts(data);
+    }
+    state.status = mergeStatusForUi(data, { isPartial });
     renderAll();
     trackConnectivityHealth(data);
 
@@ -170,6 +182,10 @@ function rejectPending(requestId, message) {
   if (!pending) return;
   state.pending.delete(requestId);
   pending.reject(new Error(message || "Request failed"));
+}
+
+function isPartialStatusRequestId(requestId) {
+  return typeof requestId === "string" && requestId.startsWith("partial-");
 }
 
 function normalizePayload(payload) {
@@ -322,15 +338,9 @@ function moduleUpdatedText(enabled, module) {
 }
 
 function classifyGateState(garage) {
-  const openPin = Number(garage?.gateOpenPin);
   const closedPin = Number(garage?.gateClosedPin);
-  const hasPins = Number.isFinite(openPin) && Number.isFinite(closedPin) && openPin >= 0 && closedPin >= 0;
-  if (hasPins) {
-    const openActive = openPin === 0;
-    const closedActive = closedPin === 0;
-    if (closedActive && !openActive) return "closed";
-    if (openActive && !closedActive) return "open";
-    return "moving";
+  if (Number.isFinite(closedPin) && closedPin >= 0) {
+    return closedPin === 0 ? "closed" : "open";
   }
 
   const raw = safeText(garage?.gateState, "").toLowerCase();
@@ -364,12 +374,12 @@ function setGarageLightActionButtonState({ disabled = false, on = false, reason 
   btn.classList.toggle("is-off", !disabled && !on);
 
   if (disabled) {
-    btn.textContent = "garage light: disabled";
+    btn.textContent = "light\n--";
     btn.title = "garage module disabled";
     return;
   }
 
-  btn.textContent = `garage light: ${on ? "ON" : "OFF"}`;
+  btn.textContent = `light\n${on ? "ON" : "OFF"}`;
   btn.title = reason ? `garage light (${reason})` : "garage light";
 }
 
@@ -676,7 +686,57 @@ async function openTimelineModal() {
   await loadLoadTimelineHistory({ force: true });
 }
 
-function renderEventJournal(items) {
+function normalizeEventJournalViewMode(value) {
+  return value === "gateDaily" ? "gateDaily" : "all";
+}
+
+function eventJournalViewTitle(viewMode) {
+  const mode = normalizeEventJournalViewMode(viewMode);
+  if (mode === "gateDaily") {
+    return `garage gate history (${loadTimelineDayKey(Date.now())})`;
+  }
+  return "event journal";
+}
+
+function eventJournalEmptyText(viewMode) {
+  const mode = normalizeEventJournalViewMode(viewMode);
+  if (mode === "gateDaily") {
+    return "no gate state changes today";
+  }
+  return "no events";
+}
+
+function syncEventJournalView(viewMode) {
+  const mode = normalizeEventJournalViewMode(viewMode);
+  state.events.viewMode = mode;
+  const clearBtn = document.getElementById("eventsClearBtn");
+  if (clearBtn) {
+    clearBtn.hidden = mode !== "all";
+  }
+}
+
+function eventDayKey(atMs) {
+  const ts = Number(atMs);
+  if (!Number.isFinite(ts) || ts <= 0) return "";
+  return loadTimelineDayKey(ts);
+}
+
+function isGateStateChangeEvent(entry) {
+  const title = safeText(entry?.title, "").toLowerCase();
+  const body = safeText(entry?.body, "").toLowerCase();
+  return title.includes("gate state changed") || (title.includes("gate") && body.includes("reason:"));
+}
+
+function filterEventJournalItems(items, viewMode) {
+  const list = Array.isArray(items) ? items : [];
+  const mode = normalizeEventJournalViewMode(viewMode);
+  if (mode !== "gateDaily") return list;
+  const todayKey = loadTimelineDayKey(Date.now());
+  return list.filter((entry) => isGateStateChangeEvent(entry) && eventDayKey(entry?.atMs) === todayKey);
+}
+
+function renderEventJournal(items, options = {}) {
+  const { emptyText = "no events" } = options;
   const root = document.getElementById("eventList");
   if (!root) return;
   root.innerHTML = "";
@@ -684,7 +744,7 @@ function renderEventJournal(items) {
   if (!Array.isArray(items) || !items.length) {
     const empty = document.createElement("div");
     empty.className = "event-item-empty";
-    empty.textContent = "no events";
+    empty.textContent = emptyText;
     root.appendChild(empty);
     return;
   }
@@ -702,7 +762,7 @@ function renderEventJournal(items) {
 
     const time = document.createElement("div");
     time.className = "event-item-time";
-    time.textContent = formatDateTimeFromMs(entry?.atMs);
+    time.textContent = safeText(entry?.atText, formatDateTimeFromMs(entry?.atMs));
 
     const body = document.createElement("div");
     body.className = "event-item-body";
@@ -716,14 +776,73 @@ function renderEventJournal(items) {
   });
 }
 
-async function loadEventJournal() {
+function mapGarageDoorHistoryPayloadToEvents(payload) {
+  const date = safeText(payload?.date, loadTimelineDayKey(Date.now()));
+  const rows = Array.isArray(payload?.items) ? payload.items : [];
+  const seen = new Set();
+  const items = rows.map((row) => {
+    const time = safeText(row?.time, "--:--:--");
+    const state = safeText(row?.state, "unknown");
+    const source = safeText(row?.source, "remote");
+    const stateReason = safeText(row?.state_reason, "unknown");
+    const triggerReason = safeText(row?.trigger_reason, "unknown");
+    const dedupeKey = `${time}|${state}|${source}|${stateReason}|${triggerReason}`;
+    if (seen.has(dedupeKey)) return null;
+    seen.add(dedupeKey);
+    const parsedAtMs = Date.parse(`${date}T${time}`);
+    const atMs = Number.isFinite(parsedAtMs) ? parsedAtMs : Date.now();
+    return {
+      atMs,
+      atText: `${date} ${time}`,
+      title: `gate: ${state}`,
+      body: `source: ${source}; trigger: ${triggerReason}; state: ${stateReason}`,
+    };
+  }).filter(Boolean);
+  return { date, items };
+}
+
+async function loadGarageGateHistory() {
+  const viewMode = "gateDaily";
+  syncEventJournalView(viewMode);
+  setText("eventChartTitle", eventJournalViewTitle(viewMode));
+
   if (!hasBridge()) {
-    renderEventJournal([]);
+    renderEventJournal([], { emptyText: eventJournalEmptyText(viewMode) });
+    showToast("Android bridge not available");
+    return;
+  }
+  if (!window.AndroidHub || typeof window.AndroidHub.fetchGarageDoorHistory !== "function") {
+    await loadEventJournal({ viewMode: "gateDaily" });
+    return;
+  }
+
+  setText("eventChartTitle", `${eventJournalViewTitle(viewMode)} - loading...`);
+  try {
+    const payload = await bridgeRequest("garage-door-history", (requestId) => {
+      window.AndroidHub.fetchGarageDoorHistory(requestId);
+    });
+    const mapped = mapGarageDoorHistoryPayloadToEvents(payload);
+    renderEventJournal(mapped.items, { emptyText: eventJournalEmptyText(viewMode) });
+    setText("eventChartTitle", `garage gate history (${safeText(mapped.date, loadTimelineDayKey(Date.now()))})`);
+  } catch (error) {
+    // Fallback to local app journal filter for older garage firmware.
+    await loadEventJournal({ viewMode: "gateDaily" });
+    showToast(`garage history fallback: ${error.message}`);
+  }
+}
+
+async function loadEventJournal(options = {}) {
+  const viewMode = normalizeEventJournalViewMode(options.viewMode || state.events.viewMode);
+  syncEventJournalView(viewMode);
+  setText("eventChartTitle", eventJournalViewTitle(viewMode));
+
+  if (!hasBridge()) {
+    renderEventJournal([], { emptyText: eventJournalEmptyText(viewMode) });
     showToast("Android bridge not available");
     return;
   }
 
-  setText("eventChartTitle", "event journal - loading...");
+  setText("eventChartTitle", `${eventJournalViewTitle(viewMode)} - loading...`);
   try {
     const payload = await bridgeRequest("events", (requestId) => {
       window.AndroidHub.fetchEventJournal(requestId);
@@ -731,11 +850,13 @@ async function loadEventJournal() {
     const items = Array.isArray(payload?.items) ? payload.items : [];
     state.events.items = items;
     state.events.loadedAtMs = Date.now();
-    renderEventJournal(items);
-    setText("eventChartTitle", "event journal");
+    renderEventJournal(filterEventJournalItems(items, viewMode), {
+      emptyText: eventJournalEmptyText(viewMode),
+    });
+    setText("eventChartTitle", eventJournalViewTitle(viewMode));
   } catch (error) {
-    renderEventJournal([]);
-    setText("eventChartTitle", "event journal - error");
+    renderEventJournal([], { emptyText: eventJournalEmptyText(viewMode) });
+    setText("eventChartTitle", `${eventJournalViewTitle(viewMode)} - error`);
     showToast(`event journal failed: ${error.message}`);
   }
 }
@@ -753,7 +874,7 @@ async function clearEventJournal() {
     });
     state.events.items = [];
     state.events.loadedAtMs = Date.now();
-    renderEventJournal([]);
+    renderEventJournal([], { emptyText: eventJournalEmptyText(state.events.viewMode) });
     showToast("event journal cleared");
   } catch (error) {
     showToast(`event clear failed: ${error.message}`);
@@ -762,7 +883,12 @@ async function clearEventJournal() {
 
 async function openEventModal() {
   openModal("eventModal");
-  await loadEventJournal();
+  await loadEventJournal({ viewMode: "all" });
+}
+
+async function openGateHistoryModal() {
+  openModal("eventModal");
+  await loadGarageGateHistory();
 }
 
 function updateButtonStates(selector, expected) {
@@ -1140,7 +1266,6 @@ function bindCardEvents() {
     ["cardBoiler1", "boiler1Modal"],
     ["cardPump", "pumpModal"],
     ["cardBoiler2", "boiler2Modal"],
-    ["cardGate", "gateModal"],
   ];
 
   modalBindings.forEach(([cardId, modalId]) => {
@@ -1162,6 +1287,13 @@ function bindCardEvents() {
   if (climateCard) {
     climateCard.addEventListener("click", () => {
       openClimateModal();
+    });
+  }
+
+  const gateCard = document.getElementById("cardGate");
+  if (gateCard) {
+    gateCard.addEventListener("click", () => {
+      openGateHistoryModal();
     });
   }
 
@@ -1189,7 +1321,11 @@ function bindCardEvents() {
   const eventsReloadBtn = document.getElementById("eventsReloadBtn");
   if (eventsReloadBtn) {
     eventsReloadBtn.addEventListener("click", () => {
-      loadEventJournal();
+      if (state.events.viewMode === "gateDaily") {
+        loadGarageGateHistory();
+        return;
+      }
+      loadEventJournal({ viewMode: state.events.viewMode });
     });
   }
 
@@ -1952,12 +2088,19 @@ async function requestStatus() {
     return;
   }
 
+  if (state.statusRequestInFlight) {
+    return;
+  }
+
+  state.statusRequestInFlight = true;
   try {
     await bridgeRequest("status", (requestId) => {
       window.AndroidHub.fetchStatus(requestId);
     });
   } catch (error) {
     showToast(`status failed: ${error.message}`);
+  } finally {
+    state.statusRequestInFlight = false;
   }
 }
 
@@ -1971,7 +2114,7 @@ async function requestMulticastRefreshNow() {
   if (btn) btn.disabled = true;
   try {
     await bridgeRequest("status", (requestId) => {
-      window.AndroidHub.fetchStatus(requestId);
+      window.AndroidHub.requestMulticastRefresh(requestId);
     });
     showToast("refresh requested");
   } catch (error) {
@@ -2025,15 +2168,64 @@ function updateModuleSignalTimes(status) {
   touchModule("garage", status?.garage);
 }
 
+function updateModuleMissCounts(status) {
+  const syncMissCount = (key, enabled, moduleData) => {
+    if (!enabled) {
+      state.moduleMissCounts[key] = 0;
+      return;
+    }
+    if (moduleData && typeof moduleData === "object") {
+      state.moduleMissCounts[key] = 0;
+      return;
+    }
+    const current = Number(state.moduleMissCounts[key]) || 0;
+    state.moduleMissCounts[key] = Math.min(999, current + 1);
+  };
+
+  syncMissCount("inverter", state.config.inverterEnabled, status?.inverter);
+  syncMissCount("loadController", state.config.loadControllerEnabled, status?.loadController);
+  syncMissCount("garage", state.config.garageEnabled, status?.garage);
+}
+
+function mergeStatusForUi(incomingStatus, options = {}) {
+  const { isPartial = false } = options;
+  const prev = state.status && typeof state.status === "object" ? state.status : null;
+  if (!incomingStatus || typeof incomingStatus !== "object") return prev;
+
+  const merged = { ...(prev || {}), ...incomingStatus };
+
+  const mergeModule = (key, enabled, nextModule) => {
+    if (!enabled) return null;
+    if (nextModule && typeof nextModule === "object") return nextModule;
+
+    const prevModule = prev?.[key];
+    if (!prevModule || typeof prevModule !== "object") return null;
+
+    if (isPartial) {
+      return prevModule;
+    }
+
+    const misses = Number(state.moduleMissCounts[key]) || 0;
+    return misses < MODULE_STALE_AFTER_MISSES ? prevModule : null;
+  };
+
+  merged.inverter = mergeModule("inverter", state.config.inverterEnabled, incomingStatus.inverter);
+  merged.loadController = mergeModule("loadController", state.config.loadControllerEnabled, incomingStatus.loadController);
+  merged.garage = mergeModule("garage", state.config.garageEnabled, incomingStatus.garage);
+  return merged;
+}
+
 function moduleSignalTimeoutMs() {
   return clampPoll(state.config.pollIntervalSec) * 2 * 1000;
 }
 
 function moduleHasFreshSignal(key, enabled, moduleData) {
   if (!enabled || !moduleData) return false;
+  const misses = Number(state.moduleMissCounts[key]) || 0;
+  if (misses >= MODULE_STALE_AFTER_MISSES) return false;
   const lastSignalTs = Number(state.moduleSignalAtMs[key]);
-  if (!Number.isFinite(lastSignalTs) || lastSignalTs <= 0) return false;
-  return Date.now() - lastSignalTs <= moduleSignalTimeoutMs();
+  if (!Number.isFinite(lastSignalTs) || lastSignalTs <= 0) return true;
+  return Date.now() - lastSignalTs <= moduleSignalTimeoutMs() * MODULE_STALE_AFTER_MISSES;
 }
 
 function setModuleCardsDisabled(cardIds, disabled) {
@@ -3267,7 +3459,7 @@ function renderAll() {
   applyCardNeonByPower("cardBoiler1", boiler1PowerCardW, !loadOff);
   applyCardNeonByPower("cardPump", pumpPowerCardW, !loadOff);
   applyCardNeonByPower("cardBoiler2", boiler2PowerCardW, !garageOff);
-  applyCardNeonByPower("cardGate", null, false);
+  applyCardNeonByPower("cardGate", CARD_NEON_POWER_THRESHOLD, !garageOff);
 
   renderClimateWideCard(inverter, loadController, garage);
 

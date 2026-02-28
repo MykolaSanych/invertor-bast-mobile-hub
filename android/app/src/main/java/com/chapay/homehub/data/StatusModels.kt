@@ -99,6 +99,7 @@ data class GarageStatus(
     val dailyBoiler: Double,
     val gateState: String,
     val gateReason: String,
+    val gateSource: String,
     val gateOpenPin: Int,
     val gateClosedPin: Int,
     val garageLightOn: Boolean,

@@ -20,7 +20,11 @@ class GateWidgetActionWorker(
         return runCatching {
             val config = AppConfigStorage.load(applicationContext)
             if (config.garageEnabled) {
-                repository.triggerGate(config)
+                repository.triggerGate(
+                    config = config,
+                    source = "android_widget",
+                    reason = "android widget",
+                )
             }
             val status = repository.fetchUnified(config)
             StatusWidgetProvider.updateAllWidgets(applicationContext, status)

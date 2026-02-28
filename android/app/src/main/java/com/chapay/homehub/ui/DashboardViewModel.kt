@@ -104,7 +104,13 @@ class DashboardViewModel(
     }
 
     fun triggerGate() {
-        submitCommand { repository.triggerGate(_uiState.value.config) }
+        submitCommand {
+            repository.triggerGate(
+                config = _uiState.value.config,
+                source = "mobile_hub",
+                reason = "mobile hub",
+            )
+        }
     }
 
     private fun submitCommand(action: suspend () -> Boolean) {

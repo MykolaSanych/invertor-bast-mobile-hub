@@ -132,15 +132,9 @@ class GateWidgetProvider : AppWidgetProvider() {
         private fun classifyGateState(garage: GarageStatus?): GateWidgetState {
             if (garage == null) return GateWidgetState.UNKNOWN
 
-            val openPin = garage.gateOpenPin
             val closedPin = garage.gateClosedPin
-            val hasPins = openPin >= 0 && closedPin >= 0
-            if (hasPins) {
-                val openActive = openPin == 0
-                val closedActive = closedPin == 0
-                if (closedActive && !openActive) return GateWidgetState.CLOSED
-                if (openActive && !closedActive) return GateWidgetState.OPEN
-                return GateWidgetState.MOVING
+            if (closedPin >= 0) {
+                return if (closedPin == 0) GateWidgetState.CLOSED else GateWidgetState.OPEN
             }
 
             val raw = garage.gateState.trim().lowercase()

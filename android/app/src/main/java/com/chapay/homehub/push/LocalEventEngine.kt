@@ -36,6 +36,7 @@ data class StatusSnapshot(
     val garageRtcTime: String?,
     val gateState: String?,
     val gateReason: String?,
+    val gateSource: String?,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("pvActive", pvActive)
@@ -63,6 +64,7 @@ data class StatusSnapshot(
         put("garageRtcTime", garageRtcTime)
         put("gateState", gateState)
         put("gateReason", gateReason)
+        put("gateSource", gateSource)
     }
 
     companion object {
@@ -96,6 +98,7 @@ data class StatusSnapshot(
                 garageRtcTime = garage?.rtcTime,
                 gateState = garage?.gateState,
                 gateReason = garage?.gateReason,
+                gateSource = garage?.gateSource,
             )
         }
 
@@ -125,6 +128,7 @@ data class StatusSnapshot(
             garageRtcTime = json.optNullableString("garageRtcTime"),
             gateState = json.optNullableString("gateState"),
             gateReason = json.optNullableString("gateReason"),
+            gateSource = json.optNullableString("gateSource"),
         )
     }
 }
@@ -234,11 +238,11 @@ object LocalEventEngine {
         }
 
         if (config.garageEnabled && config.notifyGateState) {
-            if (!previous.gateState.isNullOrBlank() &&
-                !current.gateState.isNullOrBlank() &&
-                previous.gateState != current.gateState
-            ) {
-                val body = "State: ${previous.gateState} -> ${current.gateState}. Reason: ${current.gateReason.normalizeReason()}"
+            val prevGateState = previous.gateState.normalizeGateState()
+            val currGateState = current.gateState.normalizeGateState()
+            if (prevGateState != null && currGateState != null && prevGateState != currGateState) {
+                val source = normalizeGateSource(current.gateSource, current.gateReason)
+                val body = "State: $prevGateState -> $currGateState. Source: $source. Reason: ${current.gateReason.normalizeReason()}"
                 events += LocalEvent("Gate state changed", body)
             }
         }
@@ -374,6 +378,7 @@ object LocalEventEngine {
     private fun isUnexpectedReboot(previousUptimeSec: Long?, currentUptimeSec: Long?, rtcTime: String?): Boolean {
         val prev = previousUptimeSec ?: return false
         val curr = currentUptimeSec ?: return false
+        if (curr <= 0L) return false
         if (prev < 300L) return false
         if (curr > 300L) return false
         if (curr >= prev) return false
@@ -395,6 +400,48 @@ object LocalEventEngine {
         val mm = raw.substring(3, 5).toIntOrNull() ?: return null
         if (hh !in 0..23 || mm !in 0..59) return null
         return hh * 60 + mm
+    }
+
+    private fun String?.normalizeGateState(): String? {
+        val normalized = this?.trim().orEmpty().lowercase()
+        if (normalized.isEmpty()) return null
+        return when {
+            normalized.contains("closed") ||
+                normalized.contains("close") ||
+                normalized.contains("зачинен") ||
+                normalized.contains("закрит") -> "closed"
+            normalized.contains("open") ||
+                normalized.contains("відчин") ||
+                normalized.contains("відкрит") -> "open"
+            else -> null
+        }
+    }
+
+    private fun normalizeGateSource(source: String?, reason: String?): String {
+        val normalized = source
+            ?.trim()
+            .orEmpty()
+            .lowercase()
+            .replace('-', '_')
+            .replace(' ', '_')
+
+        if (normalized == "button" || normalized.contains("button")) return "button"
+        if (normalized == "web" ||
+            normalized == "garage_web" ||
+            normalized == "mobile_hub" ||
+            normalized == "android_widget" ||
+            normalized.contains("web") ||
+            normalized.contains("hub") ||
+            normalized.contains("widget")
+        ) {
+            return "web"
+        }
+        if (normalized.isNotEmpty()) return "remote"
+
+        val reasonNorm = reason?.trim().orEmpty().lowercase()
+        if (reasonNorm.contains("button")) return "button"
+        if (reasonNorm.contains("web") || reasonNorm.contains("hub") || reasonNorm.contains("widget")) return "web"
+        return "remote"
     }
 
     private fun String?.normalizeGridReason(gridRelayOn: Boolean?, batterySoc: Double?): String {

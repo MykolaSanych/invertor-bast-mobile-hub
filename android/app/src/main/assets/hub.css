@@ -280,7 +280,10 @@ body {
   position: relative;
   overflow: hidden;
   min-height: 190px;
+  height: 100%;
   color: var(--card-accent);
+  display: flex;
+  flex-direction: column;
   transition: transform 0.22s ease, box-shadow 0.24s ease, border-color 0.24s ease;
   animation: cardBreathe 8s ease-in-out infinite;
 }
@@ -406,6 +409,12 @@ body {
   opacity: 0.35;
   filter: grayscale(0.78) saturate(0.62);
   pointer-events: none;
+}
+
+/* Garage controls should remain tappable even when the card is visually stale/disabled. */
+#cardGate.module-disabled,
+#cardGate.card-stale {
+  pointer-events: auto;
 }
 
 .card-live {
@@ -554,7 +563,7 @@ body {
 }
 
 .card-details {
-  margin-top: 10px;
+  margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid rgba(var(--card-accent-rgb), 0.3);
   display: grid;
@@ -583,14 +592,17 @@ body {
 .door-action {
   display: flex;
   justify-content: center;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .door-action-btn {
-  width: 100%;
-  min-height: 58px;
-  padding: 10px 14px;
-  font-size: 1.15rem;
+  width: 68px;
+  min-width: 68px;
+  height: 68px;
+  min-height: 68px;
+  padding: 6px;
+  font-size: 0.95rem;
   font-weight: 700;
   border-radius: 12px;
   border: 1px solid rgba(51, 255, 153, 0.55);
@@ -598,6 +610,12 @@ body {
   color: #04150f;
   cursor: pointer;
   text-transform: lowercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.05;
+  white-space: pre-line;
 }
 
 .door-action-btn.is-stop {
@@ -620,27 +638,31 @@ body {
   margin-top: 8px;
 }
 
-.garage-light-action {
-  margin-top: 8px;
-  display: flex;
-}
-
-.action-btn.garage-light-btn {
-  width: 100%;
-  justify-content: center;
+.garage-light-btn {
   text-transform: none;
   letter-spacing: 0.01em;
 }
 
-.action-btn.garage-light-btn.is-on {
+.garage-light-btn.is-on {
   border-color: rgba(255, 179, 71, 0.65);
-  background: rgba(255, 179, 71, 0.14);
-  color: var(--neon-amber);
-  box-shadow: 0 0 12px rgba(255, 179, 71, 0.22);
+  background: linear-gradient(135deg, rgba(255, 215, 102, 0.95), rgba(255, 179, 71, 0.92));
+  color: #241502;
+  box-shadow: 0 0 12px rgba(255, 179, 71, 0.28);
 }
 
-.action-btn.garage-light-btn.is-off {
-  opacity: 0.92;
+.garage-light-btn.is-off {
+  border-color: rgba(255, 179, 71, 0.38);
+  background: linear-gradient(135deg, rgba(42, 38, 22, 0.94), rgba(26, 21, 12, 0.94));
+  color: rgba(255, 220, 150, 0.9);
+  opacity: 0.96;
+}
+
+.garage-light-btn:disabled {
+  cursor: default;
+  border-color: rgba(160, 170, 190, 0.3);
+  background: linear-gradient(135deg, rgba(24, 28, 38, 0.92), rgba(16, 18, 24, 0.92));
+  color: rgba(180, 190, 210, 0.78);
+  box-shadow: none;
 }
 
 .door-time-row {
@@ -1784,6 +1806,14 @@ body {
   .data-card {
     min-height: 172px;
     padding: 14px 10px;
+  }
+
+  .door-action-btn {
+    width: 60px;
+    min-width: 60px;
+    height: 60px;
+    min-height: 60px;
+    font-size: 0.85rem;
   }
 
   .card-value {

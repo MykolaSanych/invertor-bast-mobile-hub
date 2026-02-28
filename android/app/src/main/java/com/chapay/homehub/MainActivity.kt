@@ -142,7 +142,13 @@ class MainActivity : ComponentActivity() {
         fun fetchStatus(requestId: String) {
             lifecycleScope.launch {
                 val cfg = AppConfigStorage.load(this@MainActivity)
-                runCatching { repository.fetchUnified(cfg) }
+                var partialSeq = 0
+                runCatching {
+                    repository.fetchUnifiedProgressive(cfg) { moduleKey, status ->
+                        partialSeq += 1
+                        sendStatus("partial-$requestId-$partialSeq-$moduleKey", status)
+                    }
+                }
                     .onSuccess { status -> sendStatus(requestId, status) }
                     .onFailure { err -> sendStatusError(requestId, err.message ?: "Status request failed") }
             }
@@ -152,7 +158,7 @@ class MainActivity : ComponentActivity() {
         fun requestMulticastRefresh(requestId: String) {
             lifecycleScope.launch {
                 val cfg = AppConfigStorage.load(this@MainActivity)
-                runCatching { repository.fetchUnified(cfg) }
+                runCatching { repository.requestMulticastRefresh(cfg) }
                     .onSuccess { status -> sendStatus(requestId, status) }
                     .onFailure { err -> sendStatusError(requestId, err.message ?: "Refresh failed") }
             }
@@ -219,6 +225,22 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     .onFailure { err -> sendDataError(requestId, err.message ?: "History data failed") }
+            }
+        }
+
+        @JavascriptInterface
+        fun fetchGarageDoorHistory(requestId: String) {
+            lifecycleScope.launch {
+                val cfg = AppConfigStorage.load(this@MainActivity)
+                runCatching { repository.fetchGarageDoorHistory(cfg) }
+                    .onSuccess { json ->
+                        if (json == null) {
+                            sendDataError(requestId, "No data")
+                        } else {
+                            sendDataResult(requestId, json.toString())
+                        }
+                    }
+                    .onFailure { err -> sendDataError(requestId, err.message ?: "Garage door history failed") }
             }
         }
 
@@ -305,12 +327,24 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun triggerGate(requestId: String) {
-            runModeCommand(requestId) { cfg -> repository.triggerGate(cfg) }
+            runModeCommand(requestId) { cfg ->
+                repository.triggerGate(
+                    config = cfg,
+                    source = "mobile_hub",
+                    reason = "mobile hub",
+                )
+            }
         }
 
         @JavascriptInterface
         fun toggleGarageLight(requestId: String) {
-            runModeCommand(requestId) { cfg -> repository.toggleGarageLight(cfg) }
+            runModeCommand(requestId) { cfg ->
+                repository.toggleGarageLight(
+                    config = cfg,
+                    source = "mobile_hub",
+                    reason = "mobile hub",
+                )
+            }
         }
 
         @JavascriptInterface
@@ -558,6 +592,7 @@ private fun GarageStatus.toJson(): JSONObject = JSONObject().apply {
     put("dailyBoiler", dailyBoiler)
     put("gateState", gateState)
     put("gateReason", gateReason)
+    put("gateSource", gateSource)
     put("gateOpenPin", gateOpenPin)
     put("gateClosedPin", gateClosedPin)
     put("garageLightOn", garageLightOn)
