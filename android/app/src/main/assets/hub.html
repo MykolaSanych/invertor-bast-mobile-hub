@@ -487,41 +487,92 @@
         <div class="scheme-link v scheme-chain-yellow link-pv" id="schemeLinkPv"><span class="flow"></span></div>
         <div class="scheme-link v scheme-chain-green link-battery" id="schemeLinkBattery"><span class="flow"></span></div>
         <div class="scheme-link h scheme-chain-red link-load" id="schemeLinkLoad"><span class="flow"></span></div>
-        <div class="scheme-link v scheme-chain-red link-house-trunk" id="schemeLinkHouseTrunk"><span class="flow"></span></div>
+        <div class="scheme-link v scheme-chain-red link-house-top" id="schemeLinkHouseTop"><span class="flow"></span></div>
+        <div class="scheme-link v scheme-chain-red link-house-bottom" id="schemeLinkHouseBottom"><span class="flow"></span></div>
         <div class="scheme-link h scheme-chain-red link-boiler1" id="schemeLinkBoiler1"><span class="flow"></span></div>
         <div class="scheme-link h scheme-chain-red link-pump" id="schemeLinkPump"><span class="flow"></span></div>
         <div class="scheme-link h scheme-chain-red link-boiler2" id="schemeLinkBoiler2"><span class="flow"></span></div>
 
         <div class="scheme-node grid-pole" id="schemeNodeGrid">
+          <svg class="scheme-node-icon scheme-icon-grid" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M16 4v22"></path>
+            <path d="M8 10h16"></path>
+            <path d="M10 15h12"></path>
+            <path d="M12 4l4 6 4-6"></path>
+            <path d="M13 26h6"></path>
+          </svg>
           <div class="scheme-node-title">grid</div>
           <div class="scheme-node-sub" id="schemeGridState">--</div>
         </div>
         <div class="scheme-node pv-array">
+          <svg class="scheme-node-icon scheme-icon-pv" viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="7" cy="7" r="3"></circle>
+            <rect x="10" y="13" width="14" height="9" rx="1.5"></rect>
+            <path d="M14.5 13v9"></path>
+            <path d="M19.5 13v9"></path>
+            <path d="M10 17.5h14"></path>
+            <path d="M16 22v4"></path>
+            <path d="M12.5 26h7"></path>
+          </svg>
           <div class="scheme-node-title">pv</div>
           <div class="scheme-node-sub">panels</div>
         </div>
         <div class="scheme-node battery-pack">
+          <svg class="scheme-node-icon scheme-icon-battery" viewBox="0 0 32 32" aria-hidden="true">
+            <rect class="battery-body" x="4" y="10" width="22" height="12" rx="2"></rect>
+            <rect class="battery-tip" x="26" y="13" width="2" height="6" rx="1"></rect>
+            <path class="battery-bolt" d="M15 12.5l-2 4h2.2l-1.2 3 4-5h-2.3l1.3-2z"></path>
+          </svg>
           <div class="scheme-node-title">battery</div>
           <div class="scheme-node-sub">soc: <span id="schemeBatterySoc">--%</span></div>
         </div>
         <div class="scheme-node inverter-core">
+          <svg class="scheme-node-icon scheme-icon-inverter" viewBox="0 0 32 32" aria-hidden="true">
+            <rect x="5" y="8" width="22" height="16" rx="3"></rect>
+            <path d="M8 16h4l2.1-4 3.8 8 2.1-4H24"></path>
+          </svg>
           <div class="scheme-node-title">inverter</div>
           <div class="scheme-node-sub">in: <span id="schemeInvInput">-- V</span></div>
           <div class="scheme-node-sub">out: <span id="schemeInvOutput">-- V</span></div>
         </div>
         <div class="scheme-node house-load">
+          <svg class="scheme-node-icon scheme-icon-house" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M6 14.5 16 7l10 7.5"></path>
+            <path d="M9 13.5V25h14V13.5"></path>
+            <rect x="14" y="18" width="4" height="7" rx="1"></rect>
+          </svg>
           <div class="scheme-node-title">house</div>
           <div class="scheme-node-sub">load: <span id="schemeHouseLoad">-- W</span></div>
         </div>
         <div class="scheme-node device-boiler1">
+          <svg class="scheme-node-icon scheme-icon-boiler" viewBox="0 0 32 32" aria-hidden="true">
+            <rect x="9" y="6" width="14" height="20" rx="5"></rect>
+            <path d="M13.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
+            <path d="M18.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
+          </svg>
           <div class="scheme-node-title">boiler1</div>
           <div class="scheme-node-sub" id="schemeBoiler1State">--</div>
         </div>
         <div class="scheme-node device-pump">
+          <svg class="scheme-node-icon scheme-icon-pump" viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="16" cy="16" r="6"></circle>
+            <path d="M16 10v4"></path>
+            <path d="M21.2 13 17.7 15"></path>
+            <path d="M20.8 19 17 17"></path>
+            <path d="M11.2 19 15 17"></path>
+            <path d="M10.8 13 14.2 15"></path>
+            <path d="M5 16h5"></path>
+            <path d="M22 16h5"></path>
+          </svg>
           <div class="scheme-node-title">pump</div>
           <div class="scheme-node-sub" id="schemePumpState">--</div>
         </div>
         <div class="scheme-node device-boiler2">
+          <svg class="scheme-node-icon scheme-icon-boiler" viewBox="0 0 32 32" aria-hidden="true">
+            <rect x="9" y="6" width="14" height="20" rx="5"></rect>
+            <path d="M13.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
+            <path d="M18.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
+          </svg>
           <div class="scheme-node-title">boiler2</div>
           <div class="scheme-node-sub" id="schemeBoiler2State">--</div>
         </div>

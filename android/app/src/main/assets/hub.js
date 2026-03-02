@@ -26,6 +26,8 @@ const LOAD_TIMELINE_POWER_ON_THRESHOLD = 50;
 const LOAD_TIMELINE_HISTORY_REFRESH_MS = 60 * 1000;
 const LOAD_TIMELINE_VISIBLE_HOURS = 6;
 const LOAD_TIMELINE_MAX_SAMPLES = 1600;
+const BRIDGE_REQUEST_TIMEOUT_MS = 15000;
+const CONSUMPTION_DISPLAY_THRESHOLD_W = 50;
 const CARD_NEON_POWER_THRESHOLD = 1;
 const DEVICE_POWER_NOISE_FLOOR_W = 27;
 const ZERO_VOLTAGE_THRESHOLD_V = 0.5;
@@ -112,6 +114,9 @@ window.HubNative = {
     const pending = state.pending.get(requestId);
     if (pending) {
       state.pending.delete(requestId);
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
       pending.resolve(data);
     }
   },
@@ -127,6 +132,9 @@ window.HubNative = {
     if (!pending) return;
 
     state.pending.delete(requestId);
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
     if (ok) {
       pending.resolve(true);
     } else {
@@ -143,6 +151,9 @@ window.HubNative = {
     const pending = state.pending.get(requestId);
     if (!pending) return;
     state.pending.delete(requestId);
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
     pending.resolve(data);
   },
 
@@ -167,11 +178,15 @@ function bridgeRequest(prefix, invoker) {
 
   const requestId = nextRequestId(prefix);
   return new Promise((resolve, reject) => {
-    state.pending.set(requestId, { resolve, reject });
+    const timer = setTimeout(() => {
+      rejectPending(requestId, `Request timeout after ${BRIDGE_REQUEST_TIMEOUT_MS} ms`);
+    }, BRIDGE_REQUEST_TIMEOUT_MS);
+    state.pending.set(requestId, { resolve, reject, timer });
     try {
       invoker(requestId);
     } catch (error) {
       state.pending.delete(requestId);
+      clearTimeout(timer);
       reject(error);
     }
   });
@@ -181,6 +196,9 @@ function rejectPending(requestId, message) {
   const pending = state.pending.get(requestId);
   if (!pending) return;
   state.pending.delete(requestId);
+  if (pending.timer) {
+    clearTimeout(pending.timer);
+  }
   pending.reject(new Error(message || "Request failed"));
 }
 
@@ -252,6 +270,12 @@ function pickNumber(values, fallback = 0) {
 }
 
 function applyPowerNoiseFloor(value, thresholdW = DEVICE_POWER_NOISE_FLOOR_W) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return Math.abs(n) < thresholdW ? 0 : n;
+}
+
+function applyConsumptionDisplayFloor(value, thresholdW = CONSUMPTION_DISPLAY_THRESHOLD_W) {
   const n = Number(value);
   if (!Number.isFinite(n)) return value;
   return Math.abs(n) < thresholdW ? 0 : n;
@@ -3214,14 +3238,15 @@ function renderPowerScheme({
   gridPresent,
 }) {
   const gridPowerDisplayW = zeroGridPowerWhenNoVoltage(inverter.gridW, inverter.lineVoltage);
-  const boiler1PowerDisplayW = applyPowerNoiseFloor(loadController.boilerPower);
-  const pumpPowerDisplayW = applyPowerNoiseFloor(loadController.pumpPower);
-  const boiler2PowerDisplayW = applyPowerNoiseFloor(garage.boilerPower);
+  const loadPowerDisplayW = applyConsumptionDisplayFloor(inverter.loadW);
+  const boiler1PowerDisplayW = applyConsumptionDisplayFloor(loadController.boilerPower);
+  const pumpPowerDisplayW = applyConsumptionDisplayFloor(loadController.pumpPower);
+  const boiler2PowerDisplayW = applyConsumptionDisplayFloor(garage.boilerPower);
 
   setText("schemeGridPower", invOff ? "-- W" : formatSchemePower(gridPowerDisplayW));
   setText("schemePvPower", invOff ? "-- W" : formatSchemePower(inverter.pvW));
   setText("schemeBatteryPower", invOff ? "-- W" : formatSchemePower(inverter.batteryPower));
-  setText("schemeLoadPower", invOff ? "-- W" : formatSchemePower(inverter.loadW));
+  setText("schemeLoadPower", invOff ? "-- W" : formatSchemePower(loadPowerDisplayW));
   setText("schemeBoiler1Power", loadOff ? "-- W" : formatSchemePower(boiler1PowerDisplayW));
   setText("schemePumpPower", loadOff ? "-- W" : formatSchemePower(pumpPowerDisplayW));
   setText("schemeBoiler2Power", garageOff ? "-- W" : formatSchemePower(boiler2PowerDisplayW));
@@ -3229,7 +3254,7 @@ function renderPowerScheme({
   setText("schemeInvInput", invOff ? "-- V" : `${num(inverter.lineVoltage, 1, "--")} V`);
   setText("schemeInvOutput", invOff ? "-- V" : `${num(inverter.outputVoltage, 1, "--")} V`);
   setText("schemeBatterySoc", invOff ? "--%" : `${num(inverter.batterySoc, 0, "--")}%`);
-  setText("schemeHouseLoad", invOff ? "-- W" : formatSchemePower(inverter.loadW));
+  setText("schemeHouseLoad", invOff ? "-- W" : formatSchemePower(loadPowerDisplayW));
 
   setText("schemeBoiler1State", loadOff ? "disabled" : boolText(!!loadController.boiler1On));
   setText("schemePumpState", loadOff ? "disabled" : boolText(!!loadController.pumpOn));
@@ -3257,10 +3282,13 @@ function renderPowerScheme({
   setSchemeLinkState("schemeLinkGrid", gridPowerDisplayW, !invOff && !!gridPresent && gridSwitchOn === true);
   setSchemeLinkState("schemeLinkPv", inverter.pvW, !invOff);
   setSchemeLinkState("schemeLinkBattery", inverter.batteryPower, !invOff);
-  setSchemeLinkState("schemeLinkLoad", inverter.loadW, !invOff && loadSwitchOn === true);
+  setSchemeLinkState("schemeLinkLoad", loadPowerDisplayW, !invOff && loadSwitchOn === true);
 
-  const anyBranchActive = (boiler1SwitchOn === true) || (pumpSwitchOn === true) || (boiler2SwitchOn === true);
-  setSchemeLinkState("schemeLinkHouseTrunk", inverter.loadW, !invOff && loadSwitchOn === true && anyBranchActive);
+  const topBranchActive = boiler1SwitchOn === true;
+  const bottomBranchActive = boiler2SwitchOn === true;
+  // Верхня вертикаль має рух зверху/знизу в протилежному напрямі до нижньої.
+  setSchemeLinkState("schemeLinkHouseTop", -boiler1PowerDisplayW, !invOff && loadSwitchOn === true && topBranchActive);
+  setSchemeLinkState("schemeLinkHouseBottom", boiler2PowerDisplayW, !invOff && loadSwitchOn === true && bottomBranchActive);
   setSchemeLinkState("schemeLinkBoiler1", boiler1PowerDisplayW, !loadOff && boiler1SwitchOn === true);
   setSchemeLinkState("schemeLinkPump", pumpPowerDisplayW, !loadOff && pumpSwitchOn === true);
   setSchemeLinkState("schemeLinkBoiler2", boiler2PowerDisplayW, !garageOff && boiler2SwitchOn === true);
@@ -3282,7 +3310,8 @@ function renderAll() {
   ]);
   const topPv = pickNumber([inverter.pvW, loadController.pvW, garage.pvW]);
   const topGrid = pickNumber([inverter.gridW, loadController.gridW, garage.gridW]);
-  const topLoad = pickNumber([inverter.loadW, loadController.loadW, garage.loadW]);
+  const topLoadRaw = pickNumber([inverter.loadW, loadController.loadW, garage.loadW]);
+  const topLoad = applyConsumptionDisplayFloor(topLoadRaw);
   const topBatSoc = pickNumber([
     inverter.batterySoc,
     loadController.batterySoc,
@@ -3334,9 +3363,10 @@ function renderAll() {
   }
 
   const gridPowerCardW = zeroGridPowerWhenNoVoltage(inverter.gridW, inverter.lineVoltage);
-  const boiler1PowerCardW = applyPowerNoiseFloor(loadController.boilerPower);
-  const pumpPowerCardW = applyPowerNoiseFloor(loadController.pumpPower);
-  const boiler2PowerCardW = applyPowerNoiseFloor(garage.boilerPower);
+  const loadPowerCardW = applyConsumptionDisplayFloor(inverter.loadW);
+  const boiler1PowerCardW = applyConsumptionDisplayFloor(loadController.boilerPower);
+  const pumpPowerCardW = applyConsumptionDisplayFloor(loadController.pumpPower);
+  const boiler2PowerCardW = applyConsumptionDisplayFloor(garage.boilerPower);
 
   setText("pvValue", invOff ? "--" : num(inverter.pvW, 0));
   setText("pvVoltage", invOff ? "--" : num(inverter.pvVoltage, 1));
@@ -3355,7 +3385,7 @@ function renderAll() {
   setText("gridModalState", invOff ? "---" : boolText(!!inverter.gridRelayOn));
   setText("gridModalReason", invOff ? "module disabled" : uiText(inverter.gridRelayReason, "manual"));
 
-  setText("loadValue", invOff ? "--" : num(inverter.loadW, 0));
+  setText("loadValue", invOff ? "--" : num(loadPowerCardW, 0));
   setText("outputVoltage", invOff ? "--" : num(inverter.outputVoltage, 1));
   setText("outputFrequency", invOff ? "--" : num(inverter.outputFrequency, 1));
   setText("dailyHome", invOff ? "--" : num(inverter.dailyHome, 1));
@@ -3454,7 +3484,7 @@ function renderAll() {
 
   applyCardNeonByPower("cardPv", inverter.pvW, !invOff);
   applyCardNeonByPower("cardGrid", inverter.gridW, !invOff);
-  applyCardNeonByPower("cardLoad", inverter.loadW, !invOff);
+  applyCardNeonByPower("cardLoad", loadPowerCardW, !invOff);
   applyCardNeonByPower("cardBattery", inverter.batteryPower, !invOff);
   applyCardNeonByPower("cardBoiler1", boiler1PowerCardW, !loadOff);
   applyCardNeonByPower("cardPump", pumpPowerCardW, !loadOff);

@@ -19,6 +19,7 @@ import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
 class StatusRepository(
     private val context: Context? = null,
@@ -42,6 +43,11 @@ class StatusRepository(
     private var cachedInverterAtMs: Long = 0L
     private var cachedLoadAtMs: Long = 0L
     private var cachedGarageAtMs: Long = 0L
+    private val multicastStatusRequestLock = Any()
+    private var lastMulticastStatusRequestSeenAtMs: Long = 0L
+    private var lastMulticastStatusRequestSentAtMs: Long = 0L
+    private val controllerTimeSyncLock = Any()
+    private val controllerTimeSyncAtMs = mutableMapOf<String, Long>()
 
     private val multicastGroupAddress = InetAddress.getByName(MULTICAST_GROUP)
 
@@ -293,12 +299,38 @@ class StatusRepository(
         }.getOrNull() ?: return MulticastPollResult(receivedAny = false, receivedModules = emptySet())
 
         try {
-            if (sendStatusRequest) {
-                sendMulticastStatusRequest(socket)
-            }
             val endAt = System.currentTimeMillis() + windowMs
+            val prelistenUntil = if (sendStatusRequest) {
+                minOf(endAt, System.currentTimeMillis() + MULTICAST_STATUS_REQUEST_PRELISTEN_MS)
+            } else {
+                0L
+            }
+            var requestSent = false
+            var requestSendAttempt = 0
+            var fallbackAttemptAtMs = 0L
             val buffer = ByteArray(MULTICAST_MAX_PACKET_SIZE)
             while (System.currentTimeMillis() < endAt) {
+                val now = System.currentTimeMillis()
+                if (sendStatusRequest && !requestSent) {
+                    val shouldTryInitialSend =
+                        requestSendAttempt == 0 &&
+                            now >= prelistenUntil &&
+                            !receivedPacket
+                    val shouldTryFallbackSend =
+                        requestSendAttempt == 1 &&
+                            fallbackAttemptAtMs > 0L &&
+                            now >= fallbackAttemptAtMs &&
+                            !receivedPacket
+
+                    if (shouldTryInitialSend || shouldTryFallbackSend) {
+                        requestSendAttempt += 1
+                        requestSent = maybeSendMulticastStatusRequest(socket)
+                        if (!requestSent && requestSendAttempt == 1) {
+                            fallbackAttemptAtMs = now + MULTICAST_STATUS_REQUEST_FALLBACK_MS
+                        }
+                    }
+                }
+
                 val packet = DatagramPacket(buffer, buffer.size)
                 try {
                     socket.receive(packet)
@@ -312,7 +344,16 @@ class StatusRepository(
                     String(packet.data, packet.offset, packet.length, StandardCharsets.UTF_8)
                 }.getOrNull() ?: continue
 
+                if (payload.trim() == MULTICAST_STATUS_REQUEST_PAYLOAD) {
+                    markMulticastStatusRequestSeen()
+                    continue
+                }
+
                 val json = runCatching { JSONObject(payload) }.getOrNull() ?: continue
+                if (isMulticastStatusRequestPacket(json)) {
+                    markMulticastStatusRequestSeen()
+                    continue
+                }
                 val moduleKey = applyMulticastPacket(json) ?: continue
                 receivedPacket = true
                 receivedModules += moduleKey
@@ -332,6 +373,63 @@ class StatusRepository(
             receivedAny = receivedPacket,
             receivedModules = receivedModules,
         )
+    }
+
+    private fun maybeSendMulticastStatusRequest(socket: MulticastSocket): Boolean {
+        if (!shouldSendMulticastStatusRequestNow()) {
+            return false
+        }
+
+        val jitterMs = if (MULTICAST_STATUS_REQUEST_JITTER_MAX_MS > 0L) {
+            Random.nextLong(
+                MULTICAST_STATUS_REQUEST_JITTER_MIN_MS,
+                MULTICAST_STATUS_REQUEST_JITTER_MAX_MS + 1L,
+            )
+        } else {
+            0L
+        }
+        if (jitterMs > 0L) {
+            runCatching { Thread.sleep(jitterMs) }
+        }
+
+        if (!shouldSendMulticastStatusRequestNow()) {
+            return false
+        }
+
+        sendMulticastStatusRequest(socket)
+        markMulticastStatusRequestSent()
+        return true
+    }
+
+    private fun isMulticastStatusRequestPacket(json: JSONObject): Boolean {
+        val kind = json.optStringSafe("kind", "").lowercase()
+        return kind == MULTICAST_STATUS_REQUEST_KIND_V2
+    }
+
+    private fun shouldSendMulticastStatusRequestNow(nowMs: Long = System.currentTimeMillis()): Boolean {
+        synchronized(multicastStatusRequestLock) {
+            val lastActivityMs = maxOf(lastMulticastStatusRequestSeenAtMs, lastMulticastStatusRequestSentAtMs)
+            return nowMs - lastActivityMs >= MULTICAST_STATUS_REQUEST_SUPPRESS_MS
+        }
+    }
+
+    private fun markMulticastStatusRequestSeen(nowMs: Long = System.currentTimeMillis()) {
+        synchronized(multicastStatusRequestLock) {
+            if (nowMs > lastMulticastStatusRequestSeenAtMs) {
+                lastMulticastStatusRequestSeenAtMs = nowMs
+            }
+        }
+    }
+
+    private fun markMulticastStatusRequestSent(nowMs: Long = System.currentTimeMillis()) {
+        synchronized(multicastStatusRequestLock) {
+            if (nowMs > lastMulticastStatusRequestSentAtMs) {
+                lastMulticastStatusRequestSentAtMs = nowMs
+            }
+            if (nowMs > lastMulticastStatusRequestSeenAtMs) {
+                lastMulticastStatusRequestSeenAtMs = nowMs
+            }
+        }
     }
 
     private fun sendMulticastStatusRequest(socket: MulticastSocket) {
@@ -778,7 +876,7 @@ class StatusRepository(
         val baseUrl = normalizeBaseUrl(baseUrlRaw)
         if (baseUrl.isEmpty()) return null
 
-        if (path != TIME_SYNC_BROWSER_PATH) {
+        if (path != TIME_SYNC_BROWSER_PATH && shouldSyncControllerTime(baseUrl)) {
             runCatching { syncControllerTimeWithAuth(baseUrl, password) }
         }
 
@@ -817,7 +915,7 @@ class StatusRepository(
         val baseUrl = normalizeBaseUrl(baseUrlRaw)
         if (baseUrl.isEmpty()) return false
 
-        if (syncTimeFirst && path != TIME_SYNC_BROWSER_PATH) {
+        if (syncTimeFirst && path != TIME_SYNC_BROWSER_PATH && shouldSyncControllerTime(baseUrl)) {
             runCatching { syncControllerTimeWithAuth(baseUrl, password) }
         }
 
@@ -875,6 +973,18 @@ class StatusRepository(
             trimmed
         } else {
             "http://$trimmed"
+        }
+    }
+
+    private fun shouldSyncControllerTime(baseUrl: String): Boolean {
+        val now = System.currentTimeMillis()
+        synchronized(controllerTimeSyncLock) {
+            val lastSyncedAt = controllerTimeSyncAtMs[baseUrl] ?: 0L
+            if (now - lastSyncedAt < CONTROLLER_TIME_SYNC_THROTTLE_MS) {
+                return false
+            }
+            controllerTimeSyncAtMs[baseUrl] = now
+            return true
         }
     }
 
@@ -1023,8 +1133,14 @@ private const val MULTICAST_LISTEN_WINDOW_MS = 2500L
 private const val MULTICAST_READ_TIMEOUT_MS = 300
 private const val MULTICAST_MAX_PACKET_SIZE = 4096
 private const val MULTICAST_CACHE_TTL_MS = 20_000L
+private const val MULTICAST_STATUS_REQUEST_PRELISTEN_MS = 350L
+private const val MULTICAST_STATUS_REQUEST_SUPPRESS_MS = 1_500L
+private const val MULTICAST_STATUS_REQUEST_FALLBACK_MS = 900L
+private const val MULTICAST_STATUS_REQUEST_JITTER_MIN_MS = 50L
+private const val MULTICAST_STATUS_REQUEST_JITTER_MAX_MS = 180L
 private const val CONTROLLER_REQUEST_STAGGER_MS = 2_000L
 private const val CONTROLLER_STATUS_TIMEOUT_MS = 2_000L
+private const val CONTROLLER_TIME_SYNC_THROTTLE_MS = 60_000L
 
 private const val MODULE_INVERTER = "inverter"
 private const val MODULE_LOAD = "load_controller"
