@@ -32,6 +32,33 @@ const CARD_NEON_POWER_THRESHOLD = 1;
 const DEVICE_POWER_NOISE_FLOOR_W = 27;
 const ZERO_VOLTAGE_THRESHOLD_V = 0.5;
 const MODULE_STALE_AFTER_MISSES = 3;
+const SCHEME_FLOW_COLORS = Object.freeze({
+  pv: [255, 179, 71],
+  grid: [79, 124, 255],
+  battery: [51, 255, 153],
+  loadFallback: [255, 77, 109],
+});
+const GRAPH_CACHE_STORAGE_KEY = "hub.graphCache.v1";
+const GRAPH_CACHE_SCHEMA_VERSION = 1;
+const GRAPH_CACHE_MAX_ENTRIES_PER_TYPE = 180;
+const GRAPH_SYNC_MIN_GLOBAL_GAP_MS = 3500;
+const GRAPH_SYNC_MIN_PER_KEY_GAP_MS = 25000;
+const GRAPH_SYNC_INTERVAL_MS = 15 * 60 * 1000;
+const GRAPH_SYNC_INTERVAL_JITTER_MS = 45 * 1000;
+const GRAPH_SYNC_MAX_ITEMS_PER_CYCLE = 2;
+const GRAPH_SYNC_VIEW_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const GRAPH_CACHE_TTL_MS = Object.freeze({
+  energy: Object.freeze({
+    daily: 5 * 60 * 1000,
+    monthly: 40 * 60 * 1000,
+    yearly: 6 * 60 * 60 * 1000,
+  }),
+  climate: Object.freeze({
+    daily: 5 * 60 * 1000,
+    monthly: 40 * 60 * 1000,
+    yearly: 6 * 60 * 60 * 1000,
+  }),
+});
 
 const state = {
   config: { ...DEFAULT_CONFIG },
@@ -51,6 +78,20 @@ const state = {
     period: "daily",
     metric: "temp",
     last: null,
+  },
+  graphCache: {
+    loaded: false,
+    persistHandle: null,
+    energy: {},
+    climate: {},
+  },
+  graphSync: {
+    queue: null,
+    inFlight: new Map(),
+    lastGlobalFetchAtMs: 0,
+    lastAttemptByKey: {},
+    timer: null,
+    cycleInFlight: false,
   },
   gate: {
     lastState: "",
@@ -217,6 +258,193 @@ function normalizePayload(payload) {
   }
   if (typeof payload === "object") return payload;
   return null;
+}
+
+function sleepMs(ms) {
+  const delay = Math.max(0, Number(ms) || 0);
+  return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+function ensureGraphSyncQueue() {
+  if (!state.graphSync.queue) {
+    state.graphSync.queue = Promise.resolve();
+  }
+}
+
+function graphEntryKey(period, selector) {
+  return `${safeText(period, "daily")}::${safeText(selector, "current")}`;
+}
+
+function parseGraphEntryKey(key) {
+  const raw = safeText(key, "");
+  const sep = raw.indexOf("::");
+  if (sep < 0) {
+    return {
+      period: raw || "daily",
+      selector: "current",
+    };
+  }
+  return {
+    period: raw.substring(0, sep) || "daily",
+    selector: raw.substring(sep + 2) || "current",
+  };
+}
+
+function graphCacheTtlMs(graphType, period) {
+  const bucket = GRAPH_CACHE_TTL_MS[graphType];
+  if (!bucket) return 5 * 60 * 1000;
+  return bucket[period] || bucket.daily || 5 * 60 * 1000;
+}
+
+function getGraphCacheSlot(graphType) {
+  return graphType === "climate" ? state.graphCache.climate : state.graphCache.energy;
+}
+
+function pruneGraphCacheSlot(slot) {
+  const keys = Object.keys(slot || {});
+  if (keys.length <= GRAPH_CACHE_MAX_ENTRIES_PER_TYPE) return;
+
+  keys.sort((a, b) => {
+    const ea = slot[a] || {};
+    const eb = slot[b] || {};
+    const sa = Number(ea.viewedAtMs || ea.fetchedAtMs || 0);
+    const sb = Number(eb.viewedAtMs || eb.fetchedAtMs || 0);
+    return sb - sa;
+  });
+
+  keys.slice(GRAPH_CACHE_MAX_ENTRIES_PER_TYPE).forEach((key) => {
+    delete slot[key];
+  });
+}
+
+function persistGraphCacheNow() {
+  if (!state.graphCache.loaded) return;
+  try {
+    const payload = {
+      version: GRAPH_CACHE_SCHEMA_VERSION,
+      energy: state.graphCache.energy || {},
+      climate: state.graphCache.climate || {},
+      savedAtMs: Date.now(),
+    };
+    localStorage.setItem(GRAPH_CACHE_STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    // Ignore storage errors (quota/private mode).
+  }
+}
+
+function scheduleGraphCachePersist() {
+  if (state.graphCache.persistHandle) {
+    clearTimeout(state.graphCache.persistHandle);
+  }
+  state.graphCache.persistHandle = setTimeout(() => {
+    state.graphCache.persistHandle = null;
+    persistGraphCacheNow();
+  }, 400);
+}
+
+function loadGraphCacheFromStorage() {
+  if (state.graphCache.loaded) return;
+  ensureGraphSyncQueue();
+  state.graphCache.loaded = true;
+  state.graphCache.energy = {};
+  state.graphCache.climate = {};
+
+  try {
+    const raw = localStorage.getItem(GRAPH_CACHE_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+    if (Number(parsed.version) !== GRAPH_CACHE_SCHEMA_VERSION) return;
+    if (parsed.energy && typeof parsed.energy === "object") {
+      state.graphCache.energy = parsed.energy;
+    }
+    if (parsed.climate && typeof parsed.climate === "object") {
+      state.graphCache.climate = parsed.climate;
+    }
+    pruneGraphCacheSlot(state.graphCache.energy);
+    pruneGraphCacheSlot(state.graphCache.climate);
+  } catch (error) {
+    // Ignore invalid cache payload.
+  }
+}
+
+function getGraphCacheEntry(graphType, period, selector) {
+  loadGraphCacheFromStorage();
+  const slot = getGraphCacheSlot(graphType);
+  const key = graphEntryKey(period, selector);
+  const entry = slot[key];
+  if (!entry || typeof entry !== "object" || !entry.model) return null;
+  return entry;
+}
+
+function touchGraphCacheEntry(graphType, period, selector, viewedAtMs = Date.now()) {
+  loadGraphCacheFromStorage();
+  const slot = getGraphCacheSlot(graphType);
+  const key = graphEntryKey(period, selector);
+  const entry = slot[key];
+  if (!entry || typeof entry !== "object") return;
+  entry.viewedAtMs = viewedAtMs;
+  scheduleGraphCachePersist();
+}
+
+function upsertGraphCacheEntry(graphType, period, selector, model, fetchedAtMs = Date.now()) {
+  loadGraphCacheFromStorage();
+  const slot = getGraphCacheSlot(graphType);
+  const key = graphEntryKey(period, selector);
+  const previous = slot[key];
+  const viewedAtMs = Number(previous?.viewedAtMs || fetchedAtMs);
+  slot[key] = {
+    model,
+    fetchedAtMs,
+    viewedAtMs,
+  };
+  pruneGraphCacheSlot(slot);
+  scheduleGraphCachePersist();
+}
+
+function isGraphCacheStale(entry, graphType, period, nowMs = Date.now()) {
+  if (!entry || typeof entry !== "object") return true;
+  const fetchedAtMs = Number(entry.fetchedAtMs || 0);
+  if (!Number.isFinite(fetchedAtMs) || fetchedAtMs <= 0) return true;
+  const ttlMs = graphCacheTtlMs(graphType, period);
+  return nowMs - fetchedAtMs > ttlMs;
+}
+
+function shouldThrottleGraphSyncKey(syncKey, force = false, nowMs = Date.now()) {
+  if (force) return false;
+  const lastAttempt = Number(state.graphSync.lastAttemptByKey[syncKey] || 0);
+  if (lastAttempt > 0 && nowMs - lastAttempt < GRAPH_SYNC_MIN_PER_KEY_GAP_MS) {
+    return true;
+  }
+  state.graphSync.lastAttemptByKey[syncKey] = nowMs;
+  return false;
+}
+
+function enqueueGraphSync(syncKey, fetcher) {
+  ensureGraphSyncQueue();
+  const existing = state.graphSync.inFlight.get(syncKey);
+  if (existing) return existing;
+
+  const taskRunner = async () => {
+    const nowMs = Date.now();
+    const gapLeftMs = GRAPH_SYNC_MIN_GLOBAL_GAP_MS - (nowMs - state.graphSync.lastGlobalFetchAtMs);
+    if (gapLeftMs > 0) {
+      await sleepMs(gapLeftMs);
+    }
+    const result = await fetcher();
+    state.graphSync.lastGlobalFetchAtMs = Date.now();
+    return result;
+  };
+
+  const task = state.graphSync.queue.then(taskRunner, taskRunner);
+  state.graphSync.queue = task.catch(() => undefined);
+  state.graphSync.inFlight.set(syncKey, task);
+  task.finally(() => {
+    if (state.graphSync.inFlight.get(syncKey) === task) {
+      state.graphSync.inFlight.delete(syncKey);
+    }
+  });
+  return task;
 }
 
 function toFiniteNumber(value, fallback = 0) {
@@ -2819,43 +3047,407 @@ function renderEnergyChart(model) {
   renderLegend("energyLegend", series);
 }
 
-async function loadEnergyData() {
-  if (!hasBridge()) {
-    drawEmptyCanvas(document.getElementById("energyCanvas"), "Bridge unavailable");
+function resolveEnergySelector(period) {
+  if (period === "daily") {
+    return document.getElementById("energyDateInput")?.value || todayIso();
+  }
+  if (period === "monthly") {
+    return document.getElementById("energyMonthInput")?.value || currentMonthIso();
+  }
+  return "current";
+}
+
+function resolveClimateSelector(period) {
+  if (period === "daily") {
+    return document.getElementById("climateDateInput")?.value || todayIso();
+  }
+  if (period === "monthly") {
+    return document.getElementById("climateMonthInput")?.value || currentMonthIso();
+  }
+  return "current";
+}
+
+function isCurrentEnergySelection(period, selector) {
+  const activePeriod = selectedRadioValue("energyPeriod", state.energy.period);
+  if (activePeriod !== period) return false;
+  return resolveEnergySelector(activePeriod) === selector;
+}
+
+function isCurrentClimateSelection(period, selector) {
+  const activePeriod = selectedRadioValue("climatePeriod", state.climate.period);
+  if (activePeriod !== period) return false;
+  return resolveClimateSelector(activePeriod) === selector;
+}
+
+async function fetchEnergyModelFromBridge(period, selector) {
+  let payload;
+  if (period === "daily") {
+    payload = await bridgeRequest("daily", (requestId) => {
+      window.AndroidHub.fetchInverterDaily(selector, requestId);
+    });
+  } else if (period === "monthly") {
+    payload = await bridgeRequest("monthly", (requestId) => {
+      window.AndroidHub.fetchInverterMonthly(selector, requestId);
+    });
+  } else {
+    payload = await bridgeRequest("yearly", (requestId) => {
+      window.AndroidHub.fetchInverterYearly(requestId);
+    });
+  }
+  return normalizeEnergyPayload(period, payload);
+}
+
+function seriesHasFiniteValue(series) {
+  if (!Array.isArray(series)) return false;
+  return series.some((value) => {
+    if (value === null || value === undefined || value === "") return false;
+    return Number.isFinite(Number(value));
+  });
+}
+
+function evaluateClimateFallbackNeeds(model) {
+  const corridorMissing = !seriesHasFiniteValue(model?.tempCorridor)
+    && !seriesHasFiniteValue(model?.humCorridor)
+    && !seriesHasFiniteValue(model?.pressCorridor);
+  const garageMissing = !seriesHasFiniteValue(model?.tempGarage)
+    && !seriesHasFiniteValue(model?.humGarage)
+    && !seriesHasFiniteValue(model?.pressGarage);
+  return {
+    corridorMissing,
+    garageMissing,
+  };
+}
+
+async function fetchClimateModelFromBridge(period, selector) {
+  let payload;
+  if (period === "daily") {
+    payload = await bridgeRequest("climate-daily", (requestId) => {
+      window.AndroidHub.fetchInverterDaily(selector, requestId);
+    });
+  } else if (period === "monthly") {
+    payload = await bridgeRequest("climate-monthly", (requestId) => {
+      window.AndroidHub.fetchInverterMonthly(selector, requestId);
+    });
+  } else {
+    payload = await bridgeRequest("climate-yearly", (requestId) => {
+      window.AndroidHub.fetchInverterYearly(requestId);
+    });
+  }
+
+  const model = normalizeClimatePayload(period, payload);
+  if (period === "daily") {
+    const fallbackNeeds = evaluateClimateFallbackNeeds(model);
+    if (fallbackNeeds.corridorMissing || fallbackNeeds.garageMissing) {
+      await enrichDailyClimateModelWithModuleHistory(model, {
+        corridor: fallbackNeeds.corridorMissing,
+        garage: fallbackNeeds.garageMissing,
+      });
+    }
+  }
+  return model;
+}
+
+async function syncGraphModel(graphType, period, selector, options = {}) {
+  const force = !!options.force;
+  const syncKey = `${graphType}::${period}::${selector}`;
+  const cachedEntry = getGraphCacheEntry(graphType, period, selector);
+  const nowMs = Date.now();
+
+  if (shouldThrottleGraphSyncKey(syncKey, force, nowMs) && cachedEntry?.model) {
+    return cachedEntry.model;
+  }
+  state.graphSync.lastAttemptByKey[syncKey] = nowMs;
+
+  const model = await enqueueGraphSync(syncKey, async () => {
+    if (graphType === "climate") {
+      return fetchClimateModelFromBridge(period, selector);
+    }
+    return fetchEnergyModelFromBridge(period, selector);
+  });
+  upsertGraphCacheEntry(graphType, period, selector, model, Date.now());
+  return model;
+}
+
+function applyGraphModelIfCurrent(graphType, period, selector, model) {
+  if (!model) return;
+  if (graphType === "climate") {
+    if (!isCurrentClimateSelection(period, selector)) return;
+    state.climate.last = model;
+    renderClimateChart();
     return;
   }
+  if (!isCurrentEnergySelection(period, selector)) return;
+  state.energy.last = model;
+  renderEnergyChart(model);
+}
+
+function collectBackgroundGraphSyncCandidates(nowMs = Date.now()) {
+  loadGraphCacheFromStorage();
+  const candidates = [];
+  const appendCandidates = (graphType) => {
+    const slot = getGraphCacheSlot(graphType);
+    Object.entries(slot).forEach(([entryKey, entry]) => {
+      if (!entry || typeof entry !== "object" || !entry.model) return;
+      const viewedAtMs = Number(entry.viewedAtMs || entry.fetchedAtMs || 0);
+      if (!Number.isFinite(viewedAtMs) || viewedAtMs <= 0) return;
+      if (nowMs - viewedAtMs > GRAPH_SYNC_VIEW_WINDOW_MS) return;
+      const parsed = parseGraphEntryKey(entryKey);
+      if (!isGraphCacheStale(entry, graphType, parsed.period, nowMs)) return;
+      candidates.push({
+        graphType,
+        period: parsed.period,
+        selector: parsed.selector,
+        viewedAtMs,
+      });
+    });
+  };
+
+  appendCandidates("energy");
+  appendCandidates("climate");
+  candidates.sort((a, b) => b.viewedAtMs - a.viewedAtMs);
+  return candidates.slice(0, GRAPH_SYNC_MAX_ITEMS_PER_CYCLE);
+}
+
+async function runGraphBackgroundSyncCycle() {
+  if (state.graphSync.cycleInFlight) return;
+  if (!hasBridge() || document.hidden) return;
+
+  state.graphSync.cycleInFlight = true;
+  try {
+    const candidates = collectBackgroundGraphSyncCandidates(Date.now());
+    for (const candidate of candidates) {
+      try {
+        const model = await syncGraphModel(candidate.graphType, candidate.period, candidate.selector, { force: false });
+        applyGraphModelIfCurrent(candidate.graphType, candidate.period, candidate.selector, model);
+      } catch (error) {
+        // Silent: background sync must not interrupt UI.
+      }
+    }
+  } finally {
+    state.graphSync.cycleInFlight = false;
+  }
+}
+
+function scheduleNextGraphBackgroundSync(delayMs = 0) {
+  if (state.graphSync.timer) {
+    clearTimeout(state.graphSync.timer);
+  }
+  const jitterMs = Math.floor(Math.random() * GRAPH_SYNC_INTERVAL_JITTER_MS);
+  const nextDelayMs = Math.max(10 * 1000, delayMs || (GRAPH_SYNC_INTERVAL_MS + jitterMs));
+  state.graphSync.timer = setTimeout(async () => {
+    state.graphSync.timer = null;
+    await runGraphBackgroundSyncCycle();
+    scheduleNextGraphBackgroundSync();
+  }, nextDelayMs);
+}
+
+function initGraphSync() {
+  loadGraphCacheFromStorage();
+  ensureGraphSyncQueue();
+  scheduleNextGraphBackgroundSync(45 * 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      runGraphBackgroundSyncCycle();
+    }
+  });
+  window.addEventListener("beforeunload", () => {
+    if (state.graphCache.persistHandle) {
+      clearTimeout(state.graphCache.persistHandle);
+      state.graphCache.persistHandle = null;
+    }
+    persistGraphCacheNow();
+  });
+}
+
+async function loadEnergyData(options = {}) {
+  const forceRefresh = !!options.forceRefresh;
+  loadGraphCacheFromStorage();
 
   const period = selectedRadioValue("energyPeriod", state.energy.period);
   state.energy.period = period;
   syncEnergyToolbar();
-  setText("energyChartTitle", "energy graph - loading...");
+  const selector = resolveEnergySelector(period);
+  const cacheEntry = getGraphCacheEntry("energy", period, selector);
+  let renderedFromCache = false;
+
+  if (cacheEntry?.model) {
+    state.energy.last = cacheEntry.model;
+    touchGraphCacheEntry("energy", period, selector);
+    renderEnergyChart(cacheEntry.model);
+    renderedFromCache = true;
+  } else {
+    setText("energyChartTitle", "energy graph - loading...");
+  }
+
+  if (!hasBridge()) {
+    if (!renderedFromCache) {
+      drawEmptyCanvas(document.getElementById("energyCanvas"), "Bridge unavailable");
+    }
+    return;
+  }
+
+  const stale = !cacheEntry || isGraphCacheStale(cacheEntry, "energy", period, Date.now());
+  if (!forceRefresh && cacheEntry?.model && !stale) {
+    return;
+  }
+
+  const syncTask = syncGraphModel("energy", period, selector, { force: forceRefresh });
+  if (cacheEntry?.model && !forceRefresh) {
+    syncTask
+      .then((model) => {
+        applyGraphModelIfCurrent("energy", period, selector, model);
+      })
+      .catch(() => {
+        // Keep stale cache on silent background refresh failure.
+      });
+    return;
+  }
 
   try {
-    let payload;
-    if (period === "daily") {
-      const date = document.getElementById("energyDateInput")?.value || todayIso();
-      payload = await bridgeRequest("daily", (requestId) => {
-        window.AndroidHub.fetchInverterDaily(date, requestId);
-      });
-    } else if (period === "monthly") {
-      const month = document.getElementById("energyMonthInput")?.value || currentMonthIso();
-      payload = await bridgeRequest("monthly", (requestId) => {
-        window.AndroidHub.fetchInverterMonthly(month, requestId);
-      });
-    } else {
-      payload = await bridgeRequest("yearly", (requestId) => {
-        window.AndroidHub.fetchInverterYearly(requestId);
-      });
-    }
-
-    const model = normalizeEnergyPayload(period, payload);
-    state.energy.last = model;
-    renderEnergyChart(model);
+    const model = await syncTask;
+    applyGraphModelIfCurrent("energy", period, selector, model);
   } catch (error) {
-    drawEmptyCanvas(document.getElementById("energyCanvas"), "Failed to load data");
-    setText("energyChartTitle", "energy graph - error");
-    showToast(`energy data failed: ${error.message}`);
+    if (!renderedFromCache) {
+      drawEmptyCanvas(document.getElementById("energyCanvas"), "Failed to load data");
+      setText("energyChartTitle", "energy graph - error");
+      showToast(`energy data failed: ${error.message}`);
+    }
   }
+}
+
+function getClimatePathValue(source, path) {
+  if (!source || typeof source !== "object") return undefined;
+  if (!path || typeof path !== "string") return undefined;
+  if (!path.includes(".")) return source[path];
+
+  const chunks = path.split(".");
+  let cursor = source;
+  for (const chunk of chunks) {
+    if (!cursor || typeof cursor !== "object" || !(chunk in cursor)) return undefined;
+    cursor = cursor[chunk];
+  }
+  return cursor;
+}
+
+function climateNumberFromCandidates(source, keys) {
+  if (!Array.isArray(keys)) return null;
+  for (const key of keys) {
+    const raw = getClimatePathValue(source, key);
+    const numValue = Number(raw);
+    if (Number.isFinite(numValue)) return numValue;
+  }
+  return null;
+}
+
+function climateArrayFromCandidates(source, keys) {
+  if (!source || typeof source !== "object" || !Array.isArray(keys)) return [];
+  for (const key of keys) {
+    const raw = getClimatePathValue(source, key);
+    if (Array.isArray(raw)) {
+      return raw.map((value) => toFiniteNumber(value, null));
+    }
+  }
+  return [];
+}
+
+function normalizeHistoryTemperatureValue(rawValue) {
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.abs(parsed) > 120 ? parsed / 10 : parsed;
+}
+
+function mapHistoryPayloadToHourlyTemperature(payload, expectedDate = "") {
+  const hourly = Array(24).fill(null);
+  if (!payload || typeof payload !== "object") return hourly;
+
+  const historyDate = safeText(payload.date, "");
+  if (expectedDate && historyDate && expectedDate !== historyDate) {
+    return hourly;
+  }
+
+  const rows = Array.isArray(payload.samples) ? payload.samples : [];
+  if (!rows.length) return hourly;
+
+  const sums = Array(24).fill(0);
+  const counts = Array(24).fill(0);
+  rows.forEach((row) => {
+    const minute = Number(row?.m);
+    const temp = normalizeHistoryTemperatureValue(row?.t);
+    if (!Number.isFinite(minute) || !Number.isFinite(temp)) return;
+    const hour = Math.floor(minute / 60);
+    if (hour < 0 || hour > 23) return;
+    sums[hour] += temp;
+    counts[hour] += 1;
+  });
+
+  for (let hour = 0; hour < 24; hour += 1) {
+    if (!counts[hour]) continue;
+    hourly[hour] = Math.round((sums[hour] / counts[hour]) * 10) / 10;
+  }
+  return hourly;
+}
+
+function mergeClimateSeries(baseSeries, fallbackSeries, requiredLength = 0) {
+  const base = Array.isArray(baseSeries) ? baseSeries : [];
+  const fallback = Array.isArray(fallbackSeries) ? fallbackSeries : [];
+  const len = Math.max(requiredLength, base.length, fallback.length);
+  const merged = [];
+  for (let i = 0; i < len; i += 1) {
+    const baseValue = Number(base[i]);
+    if (Number.isFinite(baseValue)) {
+      merged.push(baseValue);
+      continue;
+    }
+    const fallbackValue = Number(fallback[i]);
+    merged.push(Number.isFinite(fallbackValue) ? fallbackValue : null);
+  }
+  return merged;
+}
+
+async function enrichDailyClimateModelWithModuleHistory(model, options = {}) {
+  if (!model || typeof model !== "object") return;
+  const needCorridor = options.corridor !== false;
+  const needGarage = options.garage !== false;
+  if (!needCorridor && !needGarage) return;
+
+  const expectedDate = safeText(model.date, "");
+  const labelCount = Array.isArray(model.labels) ? model.labels.length : 24;
+  const pending = [];
+
+  if (
+    needCorridor &&
+    state.config.loadControllerEnabled &&
+    window.AndroidHub &&
+    typeof window.AndroidHub.fetchLoadControllerHistory === "function"
+  ) {
+    pending.push(
+      bridgeRequest("climate-corridor-history", (requestId) => {
+        window.AndroidHub.fetchLoadControllerHistory(requestId);
+      }).then((historyPayload) => {
+        const corridorHourly = mapHistoryPayloadToHourlyTemperature(historyPayload, expectedDate);
+        model.tempCorridor = mergeClimateSeries(model.tempCorridor, corridorHourly, labelCount);
+      }),
+    );
+  }
+
+  if (
+    needGarage &&
+    state.config.garageEnabled &&
+    window.AndroidHub &&
+    typeof window.AndroidHub.fetchGarageHistory === "function"
+  ) {
+    pending.push(
+      bridgeRequest("climate-garage-history", (requestId) => {
+        window.AndroidHub.fetchGarageHistory(requestId);
+      }).then((historyPayload) => {
+        const garageHourly = mapHistoryPayloadToHourlyTemperature(historyPayload, expectedDate);
+        model.tempGarage = mergeClimateSeries(model.tempGarage, garageHourly, labelCount);
+      }),
+    );
+  }
+
+  if (!pending.length) return;
+  await Promise.allSettled(pending);
 }
 
 function normalizeClimatePayload(period, payload) {
@@ -2865,6 +3457,29 @@ function normalizeClimatePayload(period, payload) {
   if (safeText(payload.error, "") !== "") {
     throw new Error(safeText(payload.error, "Climate data unavailable"));
   }
+
+  const climateKeys = {
+    internal: {
+      temp: ["temp", "temp_int", "temp_internal", "inside_temp", "internal.temp"],
+      hum: ["hum", "hum_int", "hum_internal", "inside_hum", "internal.hum"],
+      press: ["press", "press_int", "press_internal", "inside_press", "internal.press"],
+    },
+    external: {
+      temp: ["temp_ext", "external_temp", "outside_temp", "external.temp"],
+      hum: ["hum_ext", "external_hum", "outside_hum", "external.hum"],
+      press: ["press_ext", "external_press", "outside_press", "external.press"],
+    },
+    corridor: {
+      temp: ["temp_corridor", "corridor_temp", "temp_load", "temp_lc", "corridor.temp"],
+      hum: ["hum_corridor", "corridor_hum", "hum_load", "hum_lc", "corridor.hum"],
+      press: ["press_corridor", "corridor_press", "press_load", "press_lc", "corridor.press"],
+    },
+    garage: {
+      temp: ["temp_garage", "garage_temp", "garage.temp"],
+      hum: ["hum_garage", "garage_hum", "garage.hum"],
+      press: ["press_garage", "garage_press", "garage.press"],
+    },
+  };
 
   const sanitizeClimateTriplets = (tempArr, humArr, pressArr) => {
     const len = Math.max(tempArr.length, humArr.length, pressArr.length);
@@ -2888,6 +3503,12 @@ function normalizeClimatePayload(period, payload) {
     const tempExt = [];
     const humExt = [];
     const pressExt = [];
+    const tempCorridor = [];
+    const humCorridor = [];
+    const pressCorridor = [];
+    const tempGarage = [];
+    const humGarage = [];
+    const pressGarage = [];
 
     if (rows.length === 0) {
       for (let i = 0; i < 24; i += 1) {
@@ -2898,25 +3519,40 @@ function normalizeClimatePayload(period, payload) {
         tempExt.push(null);
         humExt.push(null);
         pressExt.push(null);
+        tempCorridor.push(null);
+        humCorridor.push(null);
+        pressCorridor.push(null);
+        tempGarage.push(null);
+        humGarage.push(null);
+        pressGarage.push(null);
       }
     } else {
       rows.forEach((row, idx) => {
         labels.push(safeText(row.hour_label, `${idx}:00`));
-        tempInt.push(Number.isFinite(Number(row.temp)) ? Number(row.temp) : null);
-        humInt.push(Number.isFinite(Number(row.hum)) ? Number(row.hum) : null);
-        pressInt.push(Number.isFinite(Number(row.press)) ? Number(row.press) : null);
-        tempExt.push(Number.isFinite(Number(row.temp_ext)) ? Number(row.temp_ext) : null);
-        humExt.push(Number.isFinite(Number(row.hum_ext)) ? Number(row.hum_ext) : null);
-        pressExt.push(Number.isFinite(Number(row.press_ext)) ? Number(row.press_ext) : null);
+        tempInt.push(climateNumberFromCandidates(row, climateKeys.internal.temp));
+        humInt.push(climateNumberFromCandidates(row, climateKeys.internal.hum));
+        pressInt.push(climateNumberFromCandidates(row, climateKeys.internal.press));
+        tempExt.push(climateNumberFromCandidates(row, climateKeys.external.temp));
+        humExt.push(climateNumberFromCandidates(row, climateKeys.external.hum));
+        pressExt.push(climateNumberFromCandidates(row, climateKeys.external.press));
+        tempCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.temp));
+        humCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.hum));
+        pressCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.press));
+        tempGarage.push(climateNumberFromCandidates(row, climateKeys.garage.temp));
+        humGarage.push(climateNumberFromCandidates(row, climateKeys.garage.hum));
+        pressGarage.push(climateNumberFromCandidates(row, climateKeys.garage.press));
       });
     }
 
     sanitizeClimateTriplets(tempInt, humInt, pressInt);
     sanitizeClimateTriplets(tempExt, humExt, pressExt);
+    sanitizeClimateTriplets(tempCorridor, humCorridor, pressCorridor);
+    sanitizeClimateTriplets(tempGarage, humGarage, pressGarage);
 
     const date = safeText(payload.date, document.getElementById("climateDateInput")?.value || todayIso());
     return {
       title: `climate graph - day ${date}`,
+      date,
       labels,
       tempInt,
       humInt,
@@ -2924,6 +3560,12 @@ function normalizeClimatePayload(period, payload) {
       tempExt,
       humExt,
       pressExt,
+      tempCorridor,
+      humCorridor,
+      pressCorridor,
+      tempGarage,
+      humGarage,
+      pressGarage,
     };
   }
 
@@ -2936,23 +3578,38 @@ function normalizeClimatePayload(period, payload) {
     const tempExt = [];
     const humExt = [];
     const pressExt = [];
+    const tempCorridor = [];
+    const humCorridor = [];
+    const pressCorridor = [];
+    const tempGarage = [];
+    const humGarage = [];
+    const pressGarage = [];
 
     rows.forEach((row, idx) => {
       labels.push(safeText(row.day, String(idx + 1)));
-      tempInt.push(Number.isFinite(Number(row.temp)) ? Number(row.temp) : null);
-      humInt.push(Number.isFinite(Number(row.hum)) ? Number(row.hum) : null);
-      pressInt.push(Number.isFinite(Number(row.press)) ? Number(row.press) : null);
-      tempExt.push(Number.isFinite(Number(row.temp_ext)) ? Number(row.temp_ext) : null);
-      humExt.push(Number.isFinite(Number(row.hum_ext)) ? Number(row.hum_ext) : null);
-      pressExt.push(Number.isFinite(Number(row.press_ext)) ? Number(row.press_ext) : null);
+      tempInt.push(climateNumberFromCandidates(row, climateKeys.internal.temp));
+      humInt.push(climateNumberFromCandidates(row, climateKeys.internal.hum));
+      pressInt.push(climateNumberFromCandidates(row, climateKeys.internal.press));
+      tempExt.push(climateNumberFromCandidates(row, climateKeys.external.temp));
+      humExt.push(climateNumberFromCandidates(row, climateKeys.external.hum));
+      pressExt.push(climateNumberFromCandidates(row, climateKeys.external.press));
+      tempCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.temp));
+      humCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.hum));
+      pressCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.press));
+      tempGarage.push(climateNumberFromCandidates(row, climateKeys.garage.temp));
+      humGarage.push(climateNumberFromCandidates(row, climateKeys.garage.hum));
+      pressGarage.push(climateNumberFromCandidates(row, climateKeys.garage.press));
     });
 
     sanitizeClimateTriplets(tempInt, humInt, pressInt);
     sanitizeClimateTriplets(tempExt, humExt, pressExt);
+    sanitizeClimateTriplets(tempCorridor, humCorridor, pressCorridor);
+    sanitizeClimateTriplets(tempGarage, humGarage, pressGarage);
 
     const month = safeText(payload.month, document.getElementById("climateMonthInput")?.value || currentMonthIso());
     return {
       title: `climate graph - month ${month}`,
+      month,
       labels,
       tempInt,
       humInt,
@@ -2960,21 +3617,36 @@ function normalizeClimatePayload(period, payload) {
       tempExt,
       humExt,
       pressExt,
+      tempCorridor,
+      humCorridor,
+      pressCorridor,
+      tempGarage,
+      humGarage,
+      pressGarage,
     };
   }
 
   const labels = Array.isArray(payload.months) ? payload.months.map((v) => String(v)) : [];
   const year = safeText(payload.current_year, String(new Date().getFullYear()));
-  const tempInt = Array.isArray(payload.temp) ? payload.temp.map((v) => toFiniteNumber(v, null)) : [];
-  const humInt = Array.isArray(payload.hum) ? payload.hum.map((v) => toFiniteNumber(v, null)) : [];
-  const pressInt = Array.isArray(payload.press) ? payload.press.map((v) => toFiniteNumber(v, null)) : [];
-  const tempExt = Array.isArray(payload.temp_ext) ? payload.temp_ext.map((v) => toFiniteNumber(v, null)) : [];
-  const humExt = Array.isArray(payload.hum_ext) ? payload.hum_ext.map((v) => toFiniteNumber(v, null)) : [];
-  const pressExt = Array.isArray(payload.press_ext) ? payload.press_ext.map((v) => toFiniteNumber(v, null)) : [];
+  const tempInt = climateArrayFromCandidates(payload, climateKeys.internal.temp);
+  const humInt = climateArrayFromCandidates(payload, climateKeys.internal.hum);
+  const pressInt = climateArrayFromCandidates(payload, climateKeys.internal.press);
+  const tempExt = climateArrayFromCandidates(payload, climateKeys.external.temp);
+  const humExt = climateArrayFromCandidates(payload, climateKeys.external.hum);
+  const pressExt = climateArrayFromCandidates(payload, climateKeys.external.press);
+  const tempCorridor = climateArrayFromCandidates(payload, climateKeys.corridor.temp);
+  const humCorridor = climateArrayFromCandidates(payload, climateKeys.corridor.hum);
+  const pressCorridor = climateArrayFromCandidates(payload, climateKeys.corridor.press);
+  const tempGarage = climateArrayFromCandidates(payload, climateKeys.garage.temp);
+  const humGarage = climateArrayFromCandidates(payload, climateKeys.garage.hum);
+  const pressGarage = climateArrayFromCandidates(payload, climateKeys.garage.press);
   sanitizeClimateTriplets(tempInt, humInt, pressInt);
   sanitizeClimateTriplets(tempExt, humExt, pressExt);
+  sanitizeClimateTriplets(tempCorridor, humCorridor, pressCorridor);
+  sanitizeClimateTriplets(tempGarage, humGarage, pressGarage);
   return {
     title: `climate graph - year ${year}`,
+    year,
     labels,
     tempInt,
     humInt,
@@ -2982,6 +3654,12 @@ function normalizeClimatePayload(period, payload) {
     tempExt,
     humExt,
     pressExt,
+    tempCorridor,
+    humCorridor,
+    pressCorridor,
+    tempGarage,
+    humGarage,
+    pressGarage,
   };
 }
 
@@ -3000,17 +3678,23 @@ function climateSeriesForMetric(model, metric) {
     return {
       primary: model.humInt,
       external: model.humExt,
+      corridor: model.humCorridor,
+      garage: model.humGarage,
     };
   }
   if (metric === "press") {
     return {
       primary: model.pressInt,
       external: model.pressExt,
+      corridor: model.pressCorridor,
+      garage: model.pressGarage,
     };
   }
   return {
     primary: model.tempInt,
     external: model.tempExt,
+    corridor: model.tempCorridor,
+    garage: model.tempGarage,
   };
 }
 
@@ -3031,30 +3715,45 @@ function renderClimateChart() {
 
   const meta = currentClimateMetricMeta();
   const selected = climateSeriesForMetric(model, state.climate.metric);
-  const hasPrimary = collectSeriesFiniteValues([{ data: selected.primary || [] }]).length > 0;
-  const hasExternal = collectSeriesFiniteValues([{ data: selected.external || [] }]).length > 0;
   const series = [];
-
-  if (hasPrimary) {
-    series.push({
+  const candidates = [
+    {
       label: `internal ${meta.label} (${meta.unit})`,
       color: "#7a5cff",
       data: selected.primary,
       lineWidth: 2.2,
       pointRadius: 1.4,
       fillAlpha: 0.18,
-    });
-  }
-  if (hasExternal) {
-    series.push({
-      label: `external ${meta.label} (${meta.unit})`,
+    },
+    {
+      label: `outside ${meta.label} (${meta.unit})`,
       color: "#00d7ff",
       data: selected.external,
       lineWidth: 2,
       pointRadius: 1.3,
       fillAlpha: 0,
-    });
-  }
+    },
+    {
+      label: `corridor ${meta.label} (${meta.unit})`,
+      color: "#ff9f43",
+      data: selected.corridor,
+      lineWidth: 1.9,
+      pointRadius: 1.2,
+      fillAlpha: 0,
+    },
+    {
+      label: `garage ${meta.label} (${meta.unit})`,
+      color: "#33d6a6",
+      data: selected.garage,
+      lineWidth: 1.9,
+      pointRadius: 1.2,
+      fillAlpha: 0,
+    },
+  ];
+  candidates.forEach((item) => {
+    const hasData = collectSeriesFiniteValues([{ data: item.data || [] }]).length > 0;
+    if (hasData) series.push(item);
+  });
 
   setText("climateChartTitle", `${model.title} - ${meta.label}`);
   if (!series.length) {
@@ -3068,42 +3767,59 @@ function renderClimateChart() {
   renderLegend("climateLegend", series);
 }
 
-async function loadClimateData() {
-  if (!hasBridge()) {
-    drawEmptyCanvas(document.getElementById("climateCanvas"), "Bridge unavailable");
-    return;
-  }
+async function loadClimateData(options = {}) {
+  const forceRefresh = !!options.forceRefresh;
+  loadGraphCacheFromStorage();
 
   const period = selectedRadioValue("climatePeriod", state.climate.period);
   state.climate.period = period;
   syncClimateToolbar();
-  setText("climateChartTitle", "climate graph - loading...");
+  const selector = resolveClimateSelector(period);
+  const cacheEntry = getGraphCacheEntry("climate", period, selector);
+  let renderedFromCache = false;
+
+  if (cacheEntry?.model) {
+    state.climate.last = cacheEntry.model;
+    touchGraphCacheEntry("climate", period, selector);
+    renderClimateChart();
+    renderedFromCache = true;
+  } else {
+    setText("climateChartTitle", "climate graph - loading...");
+  }
+
+  if (!hasBridge()) {
+    if (!renderedFromCache) {
+      drawEmptyCanvas(document.getElementById("climateCanvas"), "Bridge unavailable");
+    }
+    return;
+  }
+
+  const stale = !cacheEntry || isGraphCacheStale(cacheEntry, "climate", period, Date.now());
+  if (!forceRefresh && cacheEntry?.model && !stale) {
+    return;
+  }
+
+  const syncTask = syncGraphModel("climate", period, selector, { force: forceRefresh });
+  if (cacheEntry?.model && !forceRefresh) {
+    syncTask
+      .then((model) => {
+        applyGraphModelIfCurrent("climate", period, selector, model);
+      })
+      .catch(() => {
+        // Keep stale cache on silent background refresh failure.
+      });
+    return;
+  }
 
   try {
-    let payload;
-    if (period === "daily") {
-      const date = document.getElementById("climateDateInput")?.value || todayIso();
-      payload = await bridgeRequest("climate-daily", (requestId) => {
-        window.AndroidHub.fetchInverterDaily(date, requestId);
-      });
-    } else if (period === "monthly") {
-      const month = document.getElementById("climateMonthInput")?.value || currentMonthIso();
-      payload = await bridgeRequest("climate-monthly", (requestId) => {
-        window.AndroidHub.fetchInverterMonthly(month, requestId);
-      });
-    } else {
-      payload = await bridgeRequest("climate-yearly", (requestId) => {
-        window.AndroidHub.fetchInverterYearly(requestId);
-      });
-    }
-
-    const model = normalizeClimatePayload(period, payload);
-    state.climate.last = model;
-    renderClimateChart();
+    const model = await syncTask;
+    applyGraphModelIfCurrent("climate", period, selector, model);
   } catch (error) {
-    drawEmptyCanvas(document.getElementById("climateCanvas"), "Failed to load data");
-    setText("climateChartTitle", "climate graph - error");
-    showToast(`climate data failed: ${error.message}`);
+    if (!renderedFromCache) {
+      drawEmptyCanvas(document.getElementById("climateCanvas"), "Failed to load data");
+      setText("climateChartTitle", "climate graph - error");
+      showToast(`climate data failed: ${error.message}`);
+    }
   }
 }
 
@@ -3118,7 +3834,9 @@ function bindEnergyControls() {
 
   const loadBtn = document.getElementById("energyLoadBtn");
   if (loadBtn) {
-    loadBtn.addEventListener("click", loadEnergyData);
+    loadBtn.addEventListener("click", () => {
+      loadEnergyData({ forceRefresh: true });
+    });
   }
 }
 
@@ -3133,7 +3851,9 @@ function bindClimateControls() {
 
   const loadBtn = document.getElementById("climateLoadBtn");
   if (loadBtn) {
-    loadBtn.addEventListener("click", loadClimateData);
+    loadBtn.addEventListener("click", () => {
+      loadClimateData({ forceRefresh: true });
+    });
   }
 
   document.querySelectorAll("[data-climate-metric]").forEach((btn) => {
@@ -3212,7 +3932,36 @@ function setSchemeSwitchState(id, isClosed) {
   }
 }
 
-function setSchemeLinkState(id, powerValue, enabled = true) {
+function colorToRgbString(color) {
+  if (!Array.isArray(color) || color.length !== 3) return "";
+  const r = Math.max(0, Math.min(255, Math.round(Number(color[0]) || 0)));
+  const g = Math.max(0, Math.min(255, Math.round(Number(color[1]) || 0)));
+  const b = Math.max(0, Math.min(255, Math.round(Number(color[2]) || 0)));
+  return `${r}, ${g}, ${b}`;
+}
+
+function buildSchemeSupplyMixColor(pvPowerW, gridPowerW, batteryPowerW) {
+  const pv = Math.max(0, Number(pvPowerW) || 0);
+  const grid = Math.max(0, Number(gridPowerW) || 0);
+  const battery = Math.max(0, Number(batteryPowerW) || 0);
+  const total = pv + grid + battery;
+  if (total <= 0) return null;
+
+  const mix = [0, 0, 0];
+  const applyWeight = (weight, color) => {
+    if (weight <= 0) return;
+    mix[0] += weight * color[0];
+    mix[1] += weight * color[1];
+    mix[2] += weight * color[2];
+  };
+
+  applyWeight(pv / total, SCHEME_FLOW_COLORS.pv);
+  applyWeight(grid / total, SCHEME_FLOW_COLORS.grid);
+  applyWeight(battery / total, SCHEME_FLOW_COLORS.battery);
+  return mix;
+}
+
+function setSchemeLinkState(id, powerValue, enabled = true, color = null) {
   const el = document.getElementById(id);
   if (!el) return;
 
@@ -3226,6 +3975,13 @@ function setSchemeLinkState(id, powerValue, enabled = true) {
   el.classList.toggle("is-reverse", reverse);
   el.style.setProperty("--flow-direction", reverse ? "reverse" : "normal");
   el.style.setProperty("--flow-duration", `${Math.max(420, durationMs)}ms`);
+
+  const rgb = colorToRgbString(color);
+  if (rgb) {
+    el.style.setProperty("--chain-rgb", rgb);
+  } else {
+    el.style.removeProperty("--chain-rgb");
+  }
 }
 
 function renderPowerScheme({
@@ -3272,6 +4028,8 @@ function renderPowerScheme({
   const boiler1SwitchOn = loadOff ? null : !!loadController.boiler1On;
   const pumpSwitchOn = loadOff ? null : !!loadController.pumpOn;
   const boiler2SwitchOn = garageOff ? null : !!garage.boiler2On;
+  const mixedSupplyColor = buildSchemeSupplyMixColor(inverter.pvW, gridPowerDisplayW, inverter.batteryPower)
+    || SCHEME_FLOW_COLORS.loadFallback;
 
   setSchemeSwitchState("schemeSwitchGrid", gridSwitchOn);
   setSchemeSwitchState("schemeSwitchLoad", loadSwitchOn);
@@ -3279,19 +4037,19 @@ function renderPowerScheme({
   setSchemeSwitchState("schemeSwitchPump", pumpSwitchOn);
   setSchemeSwitchState("schemeSwitchBoiler2", boiler2SwitchOn);
 
-  setSchemeLinkState("schemeLinkGrid", gridPowerDisplayW, !invOff && !!gridPresent && gridSwitchOn === true);
-  setSchemeLinkState("schemeLinkPv", inverter.pvW, !invOff);
-  setSchemeLinkState("schemeLinkBattery", inverter.batteryPower, !invOff);
-  setSchemeLinkState("schemeLinkLoad", loadPowerDisplayW, !invOff && loadSwitchOn === true);
+  setSchemeLinkState("schemeLinkGrid", gridPowerDisplayW, !invOff && !!gridPresent && gridSwitchOn === true, SCHEME_FLOW_COLORS.grid);
+  setSchemeLinkState("schemeLinkPv", inverter.pvW, !invOff, SCHEME_FLOW_COLORS.pv);
+  setSchemeLinkState("schemeLinkBattery", inverter.batteryPower, !invOff, SCHEME_FLOW_COLORS.battery);
+  setSchemeLinkState("schemeLinkLoad", loadPowerDisplayW, !invOff && loadSwitchOn === true, mixedSupplyColor);
 
   const topBranchActive = boiler1SwitchOn === true;
   const bottomBranchActive = boiler2SwitchOn === true;
   // Верхня вертикаль має рух зверху/знизу в протилежному напрямі до нижньої.
-  setSchemeLinkState("schemeLinkHouseTop", -boiler1PowerDisplayW, !invOff && loadSwitchOn === true && topBranchActive);
-  setSchemeLinkState("schemeLinkHouseBottom", boiler2PowerDisplayW, !invOff && loadSwitchOn === true && bottomBranchActive);
-  setSchemeLinkState("schemeLinkBoiler1", boiler1PowerDisplayW, !loadOff && boiler1SwitchOn === true);
-  setSchemeLinkState("schemeLinkPump", pumpPowerDisplayW, !loadOff && pumpSwitchOn === true);
-  setSchemeLinkState("schemeLinkBoiler2", boiler2PowerDisplayW, !garageOff && boiler2SwitchOn === true);
+  setSchemeLinkState("schemeLinkHouseTop", -boiler1PowerDisplayW, !invOff && loadSwitchOn === true && topBranchActive, mixedSupplyColor);
+  setSchemeLinkState("schemeLinkHouseBottom", boiler2PowerDisplayW, !invOff && loadSwitchOn === true && bottomBranchActive, mixedSupplyColor);
+  setSchemeLinkState("schemeLinkBoiler1", boiler1PowerDisplayW, !loadOff && boiler1SwitchOn === true, mixedSupplyColor);
+  setSchemeLinkState("schemeLinkPump", pumpPowerDisplayW, !loadOff && pumpSwitchOn === true, mixedSupplyColor);
+  setSchemeLinkState("schemeLinkBoiler2", boiler2PowerDisplayW, !garageOff && boiler2SwitchOn === true, mixedSupplyColor);
 }
 
 function renderAll() {
@@ -3553,6 +4311,7 @@ function bindResizeRedraw() {
 }
 
 function initUi() {
+  initGraphSync();
   bindCardEvents();
   bindSchemeSwipe();
   bindModeButtons();

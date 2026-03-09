@@ -221,6 +221,15 @@ class StatusRepository(
         )
     }
 
+    suspend fun fetchGarageHistory(config: AppConfig): JSONObject? = withContext(Dispatchers.IO) {
+        if (!config.garageEnabled) return@withContext null
+        fetchJsonWithAuth(
+            baseUrlRaw = config.garageBaseUrl,
+            password = config.garagePassword,
+            path = "/api/history",
+        )
+    }
+
     private fun fetchUnifiedFromMulticastDetailed(
         config: AppConfig,
         requestRefresh: Boolean = false,

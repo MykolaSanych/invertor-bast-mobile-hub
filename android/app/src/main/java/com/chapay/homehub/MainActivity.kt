@@ -245,6 +245,22 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun fetchGarageHistory(requestId: String) {
+            lifecycleScope.launch {
+                val cfg = AppConfigStorage.load(this@MainActivity)
+                runCatching { repository.fetchGarageHistory(cfg) }
+                    .onSuccess { json ->
+                        if (json == null) {
+                            sendDataError(requestId, "No data")
+                        } else {
+                            sendDataResult(requestId, json.toString())
+                        }
+                    }
+                    .onFailure { err -> sendDataError(requestId, err.message ?: "Garage history data failed") }
+            }
+        }
+
+        @JavascriptInterface
         fun fetchEventJournal(requestId: String) {
             lifecycleScope.launch {
                 runCatching { EventJournalStore.toJson(this@MainActivity) }
