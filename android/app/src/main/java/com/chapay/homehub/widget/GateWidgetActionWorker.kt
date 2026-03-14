@@ -9,6 +9,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.chapay.homehub.data.AppConfigStorage
 import com.chapay.homehub.data.StatusRepository
+import com.chapay.homehub.push.StatusChangeProcessor
 
 class GateWidgetActionWorker(
     appContext: Context,
@@ -27,6 +28,12 @@ class GateWidgetActionWorker(
                 )
             }
             val status = repository.fetchUnified(config)
+            StatusChangeProcessor.process(
+                context = applicationContext,
+                status = status,
+                config = config,
+                emitNotifications = false,
+            )
             StatusWidgetProvider.updateAllWidgets(applicationContext, status)
             Result.success()
         }.getOrElse { error ->
@@ -34,6 +41,12 @@ class GateWidgetActionWorker(
             runCatching {
                 val config = AppConfigStorage.load(applicationContext)
                 val status = repository.fetchUnified(config)
+                StatusChangeProcessor.process(
+                    context = applicationContext,
+                    status = status,
+                    config = config,
+                    emitNotifications = false,
+                )
                 StatusWidgetProvider.updateAllWidgets(applicationContext, status, triggerPulse = false)
             }
             Result.success()

@@ -2,6 +2,7 @@ android/.gradle/
 android/local.properties
 android/**/build/
 android/app/google-services.json
+/.venv/
 
 push-bridge/.env
 push-bridge/service-account.json
@@ -10,3 +11,8 @@ push-bridge/__pycache__/
 push-bridge/*.pyc
 
 android/_tools/
+windows/__pycache__/
+windows/*.pyc
+windows/edge-profile/
+windows/data/*
+!windows/data/.gitkeep

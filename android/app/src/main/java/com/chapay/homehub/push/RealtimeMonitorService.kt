@@ -71,14 +71,12 @@ class RealtimeMonitorService : Service() {
 
     private suspend fun pollOnce(config: AppConfig) {
         val status = repository.fetchUnified(config)
-        val current = StatusSnapshot.fromUnified(status)
-        val previous = StatusSnapshotStore.load(this)
-        if (previous != null) {
-            LocalEventEngine.detect(this, previous, current, config).forEach { event ->
-                showPushNotification(this, event.title, event.body)
-            }
-        }
-        StatusSnapshotStore.save(this, current)
+        StatusChangeProcessor.process(
+            context = this,
+            status = status,
+            config = config,
+            emitNotifications = true,
+        )
         StatusWidgetProvider.updateAllWidgets(this, status)
     }
 

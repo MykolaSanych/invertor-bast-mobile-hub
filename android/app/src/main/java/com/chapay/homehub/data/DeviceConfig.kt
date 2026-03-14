@@ -2,13 +2,16 @@ package com.chapay.homehub.data
 
 import android.content.Context
 
+private const val DEFAULT_WEB_PASSWORD = "0961737595"
+private const val LEGACY_WEB_PASSWORD = "admin"
+
 data class AppConfig(
     val inverterBaseUrl: String = "http://192.168.1.2",
-    val inverterPassword: String = "admin",
+    val inverterPassword: String = DEFAULT_WEB_PASSWORD,
     val loadControllerBaseUrl: String = "http://192.168.1.3",
-    val loadControllerPassword: String = "admin",
+    val loadControllerPassword: String = DEFAULT_WEB_PASSWORD,
     val garageBaseUrl: String = "http://192.168.1.4",
-    val garagePassword: String = "admin",
+    val garagePassword: String = DEFAULT_WEB_PASSWORD,
     val pollIntervalSec: Int = 5,
     val inverterEnabled: Boolean = true,
     val loadControllerEnabled: Boolean = true,
@@ -24,6 +27,9 @@ data class AppConfig(
     val notifyPumpMode: Boolean = true,
     val notifyBoiler2Mode: Boolean = true,
     val notifyGateState: Boolean = true,
+    val notifyModuleOffline: Boolean = true,
+    val notifyPowerOverload: Boolean = true,
+    val notifyLogicUnstable: Boolean = true,
 )
 
 object AppConfigStorage {
@@ -49,16 +55,28 @@ object AppConfigStorage {
     private const val K_N_PUMP = "n_pump"
     private const val K_N_BOILER2 = "n_boiler2"
     private const val K_N_GATE = "n_gate"
+    private const val K_N_MODULE_OFFLINE = "n_module_offline"
+    private const val K_N_POWER_OVERLOAD = "n_power_overload"
+    private const val K_N_LOGIC_UNSTABLE = "n_logic_unstable"
+
+    private fun normalizePassword(value: String?): String {
+        val trimmed = value?.trim()
+        return when {
+            trimmed.isNullOrEmpty() -> DEFAULT_WEB_PASSWORD
+            trimmed == LEGACY_WEB_PASSWORD -> DEFAULT_WEB_PASSWORD
+            else -> trimmed
+        }
+    }
 
     fun load(context: Context): AppConfig {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         return AppConfig(
             inverterBaseUrl = p.getString(K_INV_URL, "http://192.168.1.2") ?: "http://192.168.1.2",
-            inverterPassword = p.getString(K_INV_PASS, "admin") ?: "admin",
+            inverterPassword = normalizePassword(p.getString(K_INV_PASS, DEFAULT_WEB_PASSWORD)),
             loadControllerBaseUrl = p.getString(K_LOAD_URL, "http://192.168.1.3") ?: "http://192.168.1.3",
-            loadControllerPassword = p.getString(K_LOAD_PASS, "admin") ?: "admin",
+            loadControllerPassword = normalizePassword(p.getString(K_LOAD_PASS, DEFAULT_WEB_PASSWORD)),
             garageBaseUrl = p.getString(K_GARAGE_URL, "http://192.168.1.4") ?: "http://192.168.1.4",
-            garagePassword = p.getString(K_GARAGE_PASS, "admin") ?: "admin",
+            garagePassword = normalizePassword(p.getString(K_GARAGE_PASS, DEFAULT_WEB_PASSWORD)),
             pollIntervalSec = p.getInt(K_POLL_SEC, 5).coerceIn(2, 60),
             inverterEnabled = p.getBoolean(K_INV_ENABLED, true),
             loadControllerEnabled = p.getBoolean(K_LOAD_ENABLED, true),
@@ -74,6 +92,9 @@ object AppConfigStorage {
             notifyPumpMode = p.getBoolean(K_N_PUMP, true),
             notifyBoiler2Mode = p.getBoolean(K_N_BOILER2, true),
             notifyGateState = p.getBoolean(K_N_GATE, true),
+            notifyModuleOffline = p.getBoolean(K_N_MODULE_OFFLINE, true),
+            notifyPowerOverload = p.getBoolean(K_N_POWER_OVERLOAD, true),
+            notifyLogicUnstable = p.getBoolean(K_N_LOGIC_UNSTABLE, true),
         )
     }
 
@@ -101,6 +122,9 @@ object AppConfigStorage {
             .putBoolean(K_N_PUMP, cfg.notifyPumpMode)
             .putBoolean(K_N_BOILER2, cfg.notifyBoiler2Mode)
             .putBoolean(K_N_GATE, cfg.notifyGateState)
+            .putBoolean(K_N_MODULE_OFFLINE, cfg.notifyModuleOffline)
+            .putBoolean(K_N_POWER_OVERLOAD, cfg.notifyPowerOverload)
+            .putBoolean(K_N_LOGIC_UNSTABLE, cfg.notifyLogicUnstable)
             .apply()
     }
 }

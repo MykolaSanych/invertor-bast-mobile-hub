@@ -542,6 +542,46 @@ class StatusRepository(
         )
     }
 
+    suspend fun setInverterGridLogic(
+        config: AppConfig,
+        pvThresholdW: Double,
+        offDelaySec: Int,
+        onDelaySec: Int,
+        forceGridOnW: Double,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!config.inverterEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.inverterBaseUrl,
+            password = config.inverterPassword,
+            path = "/api/gridlogic",
+            formPairs = listOf(
+                "pv_threshold_w" to pvThresholdW.toString(),
+                "off_delay_sec" to offDelaySec.toString(),
+                "on_delay_sec" to onDelaySec.toString(),
+                "force_grid_on_w" to forceGridOnW.toString(),
+            ),
+        )
+    }
+
+    suspend fun setInverterLoadLogic(
+        config: AppConfig,
+        pvThresholdW: Double,
+        shutdownDelaySec: Int,
+        overloadPowerW: Double,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!config.inverterEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.inverterBaseUrl,
+            password = config.inverterPassword,
+            path = "/api/loadlogic",
+            formPairs = listOf(
+                "pv_threshold_w" to pvThresholdW.toString(),
+                "shutdown_delay_sec" to shutdownDelaySec.toString(),
+                "overload_power_w" to overloadPowerW.toString(),
+            ),
+        )
+    }
+
     suspend fun setBoiler1Mode(config: AppConfig, mode: String): Boolean = withContext(Dispatchers.IO) {
         if (!config.loadControllerEnabled) return@withContext false
         postMode(config.loadControllerBaseUrl, config.loadControllerPassword, "/api/mode", mode)
@@ -554,6 +594,29 @@ class StatusRepository(
             password = config.loadControllerPassword,
             path = "/api/boilerlock",
             formPairs = listOf("lock" to lockMode.uppercase()),
+        )
+    }
+
+    suspend fun setBoiler1Logic(
+        config: AppConfig,
+        pvThresholdW: Double,
+        shutdownDelaySec: Int,
+        batteryShutoffW: Double,
+        batteryResumeW: Double,
+        peerActiveW: Double,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!config.loadControllerEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.loadControllerBaseUrl,
+            password = config.loadControllerPassword,
+            path = "/api/boilerlogic",
+            formPairs = listOf(
+                "pv_threshold_w" to pvThresholdW.toString(),
+                "shutdown_delay_sec" to shutdownDelaySec.toString(),
+                "battery_shutoff_w" to batteryShutoffW.toString(),
+                "battery_resume_w" to batteryResumeW.toString(),
+                "peer_active_w" to peerActiveW.toString(),
+            ),
         )
     }
 
@@ -591,6 +654,23 @@ class StatusRepository(
         )
     }
 
+    suspend fun setPumpLogic(
+        config: AppConfig,
+        pvThresholdW: Double,
+        shutdownDelaySec: Int,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!config.loadControllerEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.loadControllerBaseUrl,
+            password = config.loadControllerPassword,
+            path = "/api/pumplogic",
+            formPairs = listOf(
+                "pv_threshold_w" to pvThresholdW.toString(),
+                "shutdown_delay_sec" to shutdownDelaySec.toString(),
+            ),
+        )
+    }
+
     suspend fun setPumpAutoWindow(
         config: AppConfig,
         enabled: Boolean,
@@ -622,6 +702,29 @@ class StatusRepository(
             password = config.garagePassword,
             path = "/api/boilerlock",
             formPairs = listOf("lock" to lockMode.uppercase()),
+        )
+    }
+
+    suspend fun setBoiler2Logic(
+        config: AppConfig,
+        pvThresholdW: Double,
+        shutdownDelaySec: Int,
+        batteryShutoffW: Double,
+        batteryResumeW: Double,
+        peerActiveW: Double,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!config.garageEnabled) return@withContext false
+        postForm(
+            baseUrlRaw = config.garageBaseUrl,
+            password = config.garagePassword,
+            path = "/api/boilerlogic",
+            formPairs = listOf(
+                "pv_threshold_w" to pvThresholdW.toString(),
+                "shutdown_delay_sec" to shutdownDelaySec.toString(),
+                "battery_shutoff_w" to batteryShutoffW.toString(),
+                "battery_resume_w" to batteryResumeW.toString(),
+                "peer_active_w" to peerActiveW.toString(),
+            ),
         )
     }
 
@@ -732,6 +835,8 @@ class StatusRepository(
             modeReason = json.optStringSafeAny("manual", "mode_reason"),
             loadMode = json.optStringSafeAny("---", "load_mode"),
             loadModeReason = json.optStringSafeAny("manual", "load_mode_reason"),
+            gridLogic = parseInverterGridLogic(json),
+            loadLogic = parseInverterLoadLogic(json),
             gridRelayOn = json.optBooleanSafe("pin34_state"),
             gridPresent = gridPresent,
             gridRelayReason = json.optStringSafeAny("manual", "pin34_reason"),
@@ -771,6 +876,8 @@ class StatusRepository(
             pumpStateReason = json.optStringSafeAny("manual", "pump_state_reason"),
             boilerLock = json.optStringSafeAny("NONE", "boiler_lock"),
             pumpLock = json.optStringSafeAny("NONE", "pump_lock"),
+            boilerLogic = parseBoilerLogic(json),
+            pumpLogic = parsePumpLogic(json),
             boiler1AutoWindowEnabled = json.optBooleanSafe("boiler_auto_window_enabled"),
             boiler1AutoWindowStart = json.optStringSafeAny("00:00", "boiler_auto_window_start"),
             boiler1AutoWindowEnd = json.optStringSafeAny("00:00", "boiler_auto_window_end"),
@@ -824,6 +931,7 @@ class StatusRepository(
             boiler2On = json.optBooleanSafe("boiler_on"),
             boiler2StateReason = json.optStringSafeAny("manual", "boiler_state_reason"),
             boilerLock = json.optStringSafeAny("NONE", "boiler_lock"),
+            boilerLogic = parseBoilerLogic(json),
             boiler2AutoWindowEnabled = json.optBooleanSafe("boiler_auto_window_enabled"),
             boiler2AutoWindowStart = json.optStringSafeAny("00:00", "boiler_auto_window_start"),
             boiler2AutoWindowEnd = json.optStringSafeAny("00:00", "boiler_auto_window_end"),
@@ -857,6 +965,52 @@ class StatusRepository(
             bmeTemp = bmeTemp,
             bmeHum = bmeHum,
             bmePress = bmePress,
+        )
+    }
+
+    private fun parseInverterGridLogic(json: JSONObject): InverterGridLogicConfig {
+        val nested = json.optJSONObject("grid_logic")
+        return InverterGridLogicConfig(
+            pvThresholdW = nested?.optDoubleSafeAny("pv_threshold_w") ?: 150.0,
+            offDelaySec = nested?.optInt("off_delay_sec", 300) ?: 300,
+            onDelaySec = nested?.optInt("on_delay_sec", 1800) ?: 1800,
+            forceGridOnW = nested?.optDoubleSafeAny("force_grid_on_w") ?: 3000.0,
+            batteryLowSocPct = nested?.optDoubleSafeAny("battery_low_soc_pct") ?: 70.0,
+            offMinSocPct = nested?.optDoubleSafeAny("off_min_soc_pct") ?: 85.0,
+        )
+    }
+
+    private fun parseInverterLoadLogic(json: JSONObject): InverterLoadLogicConfig {
+        val nested = json.optJSONObject("load_logic")
+        return InverterLoadLogicConfig(
+            pvThresholdW = nested?.optDoubleSafeAny("pv_threshold_w") ?: 100.0,
+            shutdownDelaySec = nested?.optInt("shutdown_delay_sec", 120) ?: 120,
+            overloadPowerW = nested?.optDoubleSafeAny("overload_power_w") ?: 4500.0,
+            gridRestoreV = nested?.optDoubleSafeAny("grid_restore_v") ?: 180.0,
+            overloadGridV = nested?.optDoubleSafeAny("overload_grid_v") ?: 190.0,
+        )
+    }
+
+    private fun parseBoilerLogic(json: JSONObject): BoilerLogicConfig {
+        val nested = json.optJSONObject("boiler_logic")
+        return BoilerLogicConfig(
+            pvThresholdW = nested?.optDoubleSafeAny("pv_threshold_w") ?: 100.0,
+            shutdownDelaySec = nested?.optInt("shutdown_delay_sec", 120) ?: 120,
+            batteryShutoffW = nested?.optDoubleSafeAny("battery_shutoff_w") ?: -1800.0,
+            batteryResumeW = nested?.optDoubleSafeAny("battery_resume_w") ?: 200.0,
+            peerActiveW = nested?.optDoubleSafeAny("peer_active_w") ?: 1000.0,
+            gridRestoreV = nested?.optDoubleSafeAny("grid_restore_v") ?: 180.0,
+            batteryReleaseGridV = nested?.optDoubleSafeAny("battery_release_grid_v") ?: 190.0,
+            batteryReleaseSocPct = nested?.optDoubleSafeAny("battery_release_soc_pct") ?: 90.0,
+        )
+    }
+
+    private fun parsePumpLogic(json: JSONObject): PumpLogicConfig {
+        val nested = json.optJSONObject("pump_logic")
+        return PumpLogicConfig(
+            pvThresholdW = nested?.optDoubleSafeAny("pv_threshold_w") ?: 100.0,
+            shutdownDelaySec = nested?.optInt("shutdown_delay_sec", 120) ?: 120,
+            gridRestoreV = nested?.optDoubleSafeAny("grid_restore_v") ?: 180.0,
         )
     }
 

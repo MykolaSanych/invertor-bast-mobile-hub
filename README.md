@@ -10,6 +10,7 @@ Background notifications are generated locally in Android (no cloud required).
 ## Structure
 
 - `android/` - Android app.
+- `windows/` - desktop launcher that reuses the same hub assets and bridge model.
 - `push-bridge/` - optional legacy FCM bridge (not required for local background notifications).
 
 ## Local background notifications

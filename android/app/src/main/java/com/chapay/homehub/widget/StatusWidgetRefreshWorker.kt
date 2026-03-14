@@ -6,6 +6,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.chapay.homehub.data.AppConfigStorage
 import com.chapay.homehub.data.StatusRepository
+import com.chapay.homehub.push.StatusChangeProcessor
 
 class StatusWidgetRefreshWorker(
     appContext: Context,
@@ -21,6 +22,12 @@ class StatusWidgetRefreshWorker(
         return runCatching {
             val config = AppConfigStorage.load(applicationContext)
             val status = repository.fetchUnified(config)
+            StatusChangeProcessor.process(
+                context = applicationContext,
+                status = status,
+                config = config,
+                emitNotifications = false,
+            )
             val suppressPulse = StatusWidgetProvider.shouldSuppressPulse(inputData)
             StatusWidgetProvider.updateAllWidgets(
                 applicationContext,

@@ -73,6 +73,11 @@
       </div>
     </section>
 
+    <section class="alert-strip" id="alertsStrip" hidden>
+      <div class="alert-strip-title">system alerts</div>
+      <div class="alert-strip-list" id="alertsList"></div>
+    </section>
+
     <section class="climate-wide-card clickable" id="climateWideCard">
       <div class="climate-wide-header">
         <div class="climate-wide-title">climate sensors</div>
@@ -318,6 +323,9 @@
           <button class="mode-btn-compact" id="btnGridOFF" data-grid-mode="OFF">OFF</button>
           <button class="mode-btn-compact" id="btnGridON" data-grid-mode="ON">ON</button>
         </div>
+        <div class="modal-tools-row">
+          <button class="logic-launch-btn" type="button" data-open-logic="grid" data-logic-parent="gridModal">AUTO logic</button>
+        </div>
         <div class="reason-line">reason: <span id="gridModalReason">---</span></div>
       </div>
     </div>
@@ -339,6 +347,9 @@
           <button class="mode-btn-compact" id="btnLoadAUTO" data-load-mode="AUTO">AUTO</button>
           <button class="mode-btn-compact" id="btnLoadOFF" data-load-mode="OFF">OFF</button>
           <button class="mode-btn-compact" id="btnLoadON" data-load-mode="ON">ON</button>
+        </div>
+        <div class="modal-tools-row">
+          <button class="logic-launch-btn" type="button" data-open-logic="load" data-logic-parent="loadModal">AUTO logic</button>
         </div>
         <div class="reason-line">reason: <span id="loadModalReason">---</span></div>
       </div>
@@ -363,7 +374,8 @@
           <button class="mode-btn-compact" id="btnBoiler1ON" data-boiler1-mode="ON">ON</button>
         </div>
         <div class="auto-window-toolbar">
-          <button class="auto-window-btn" id="boiler1AutoWindowClockBtn" type="button">🕒 AUTO timer</button>
+          <button class="logic-launch-btn" type="button" data-open-logic="boiler1" data-logic-parent="boiler1Modal">AUTO logic</button>
+          <button class="auto-window-btn" id="boiler1AutoWindowClockBtn" type="button">AUTO timer</button>
           <div class="auto-window-status" id="boiler1AutoWindowStatus">AUTO: always active</div>
         </div>
         <div class="auto-window-editor" id="boiler1AutoWindowEditor">
@@ -400,7 +412,8 @@
           <button class="mode-btn-compact" id="btnPumpON" data-pump-mode="ON">ON</button>
         </div>
         <div class="auto-window-toolbar">
-          <button class="auto-window-btn" id="pumpAutoWindowClockBtn" type="button">🕒 AUTO timer</button>
+          <button class="logic-launch-btn" type="button" data-open-logic="pump" data-logic-parent="pumpModal">AUTO logic</button>
+          <button class="auto-window-btn" id="pumpAutoWindowClockBtn" type="button">AUTO timer</button>
           <div class="auto-window-status" id="pumpAutoWindowStatus">AUTO: always active</div>
         </div>
         <div class="auto-window-editor" id="pumpAutoWindowEditor">
@@ -437,7 +450,8 @@
           <button class="mode-btn-compact" id="btnBoiler2ON" data-boiler2-mode="ON">ON</button>
         </div>
         <div class="auto-window-toolbar">
-          <button class="auto-window-btn" id="boiler2AutoWindowClockBtn" type="button">🕒 AUTO timer</button>
+          <button class="logic-launch-btn" type="button" data-open-logic="boiler2" data-logic-parent="boiler2Modal">AUTO logic</button>
+          <button class="auto-window-btn" id="boiler2AutoWindowClockBtn" type="button">AUTO timer</button>
           <div class="auto-window-status" id="boiler2AutoWindowStatus">AUTO: always active</div>
         </div>
         <div class="auto-window-editor" id="boiler2AutoWindowEditor">
@@ -470,6 +484,52 @@
         </div>
         <div class="reason-line">reason: <span id="gateModalReason">---</span></div>
         <button class="action-btn" id="gateToggleBtn" type="button">toggle gate</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-root" id="logicModal">
+    <div class="chart-overlay" data-close-modal="logicModal"></div>
+    <div class="chart-box logic-modal-box">
+      <div class="chart-header">
+        <div class="chart-title" id="logicModalTitle">mode logic</div>
+        <button class="close-graph-btn" type="button" data-close-modal="logicModal">x</button>
+      </div>
+      <div class="logic-meta-row">
+        <div class="logic-meta-pill" id="logicModalMode">mode: ---</div>
+        <div class="logic-meta-pill" id="logicModalState">state: ---</div>
+      </div>
+      <div class="logic-facts" id="logicModalFacts"></div>
+      <div class="logic-alerts" id="logicModalAlerts"></div>
+      <div class="logic-history-shell">
+        <div class="logic-history-toolbar">
+          <div class="logic-history-title" id="logicHistoryTitle">logic history</div>
+          <div class="logic-history-range">
+            <button class="action-btn tiny secondary" type="button" data-logic-hours="1">1h</button>
+            <button class="action-btn tiny secondary" type="button" data-logic-hours="3">3h</button>
+            <button class="action-btn tiny secondary" type="button" data-logic-hours="6">6h</button>
+          </div>
+        </div>
+        <div class="logic-history-meta" id="logicHistoryMeta">history: loading...</div>
+        <div class="logic-history-canvas-wrap">
+          <canvas id="logicHistoryCanvas" width="720" height="260"></canvas>
+        </div>
+      </div>
+      <div class="logic-flow" id="logicModalFlow"></div>
+      <div class="logic-journal">
+        <div class="logic-journal-title">transition journal</div>
+        <div class="event-list logic-journal-list" id="logicJournalList">
+          <div class="event-item-empty">no transitions yet</div>
+        </div>
+      </div>
+      <div class="logic-editor-block">
+        <div class="logic-editor-title">thresholds and delays</div>
+        <div class="logic-form-grid" id="logicModalForm"></div>
+        <div class="logic-fixed-note" id="logicModalFixedNote"></div>
+        <div class="logic-actions">
+          <button class="action-btn small" id="logicModalSave" type="button">save</button>
+          <button class="action-btn small secondary" id="logicModalReset" type="button">reload</button>
+        </div>
       </div>
     </div>
   </div>
@@ -645,6 +705,9 @@
         <label class="settings-check"><input id="cfgNotifyPump" type="checkbox"> pump mode changed</label>
         <label class="settings-check"><input id="cfgNotifyBoiler2" type="checkbox"> boiler2 mode changed</label>
         <label class="settings-check"><input id="cfgNotifyGate" type="checkbox"> gate state changed</label>
+        <label class="settings-check"><input id="cfgNotifyModuleOffline" type="checkbox"> controller restart / power loss</label>
+        <label class="settings-check"><input id="cfgNotifyPowerOverload" type="checkbox"> overload / power limit exceeded</label>
+        <label class="settings-check"><input id="cfgNotifyLogicUnstable" type="checkbox"> unstable logic / too many switches</label>
 
         <div class="settings-actions">
           <button class="action-btn" id="settingsSaveBtn" type="button">save</button>

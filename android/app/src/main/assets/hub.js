@@ -1,10 +1,10 @@
 const DEFAULT_CONFIG = {
   inverterBaseUrl: "http://192.168.1.2",
-  inverterPassword: "admin",
+  inverterPassword: "0961737595",
   loadControllerBaseUrl: "http://192.168.1.3",
-  loadControllerPassword: "admin",
+  loadControllerPassword: "0961737595",
   garageBaseUrl: "http://192.168.1.4",
-  garagePassword: "admin",
+  garagePassword: "0961737595",
   pollIntervalSec: 5,
   inverterEnabled: true,
   loadControllerEnabled: true,
@@ -20,12 +20,20 @@ const DEFAULT_CONFIG = {
   notifyPumpMode: true,
   notifyBoiler2Mode: true,
   notifyGateState: true,
+  notifyModuleOffline: true,
+  notifyPowerOverload: true,
+  notifyLogicUnstable: true,
 };
 
 const LOAD_TIMELINE_POWER_ON_THRESHOLD = 50;
 const LOAD_TIMELINE_HISTORY_REFRESH_MS = 60 * 1000;
 const LOAD_TIMELINE_VISIBLE_HOURS = 6;
 const LOAD_TIMELINE_MAX_SAMPLES = 1600;
+const AUTOMATION_HISTORY_REFRESH_MS = 60 * 1000;
+const AUTOMATION_HISTORY_DEFAULT_HOURS = 6;
+const LOGIC_HISTORY_DEFAULT_HOURS = 3;
+const LOGIC_UNSTABLE_TRANSITIONS = 4;
+const LOGIC_UNSTABLE_WINDOW_MS = 30 * 60 * 1000;
 const BRIDGE_REQUEST_TIMEOUT_MS = 15000;
 const CONSUMPTION_DISPLAY_THRESHOLD_W = 50;
 const CARD_NEON_POWER_THRESHOLD = 1;
@@ -116,6 +124,15 @@ const state = {
     loadedAtMs: 0,
     viewMode: "all",
   },
+  automationHistory: {
+    items: [],
+    loadedAtMs: 0,
+    hours: 0,
+  },
+  capabilities: null,
+  alerts: {
+    active: [],
+  },
   moduleSignalAtMs: {
     inverter: 0,
     loadController: 0,
@@ -129,6 +146,12 @@ const state = {
   schemeGesture: {
     touch: null,
     suppressClickUntilMs: 0,
+  },
+  logic: {
+    currentKey: "",
+    returnModalId: "",
+    formDirty: false,
+    historyHours: LOGIC_HISTORY_DEFAULT_HOURS,
   },
   schemeControlLandscape: false,
   schemeControlReturnToSchemeModalId: "",
@@ -149,8 +172,15 @@ window.HubNative = {
       updateModuleMissCounts(data);
     }
     state.status = mergeStatusForUi(data, { isPartial });
+    state.capabilities = buildHubCapabilities(state.status);
+    if (!isPartial) {
+      appendAutomationHistorySampleFromStatus(state.status);
+    }
     renderAll();
     trackConnectivityHealth(data);
+    if (!isPartial) {
+      void ensureAutomationHistory(AUTOMATION_HISTORY_DEFAULT_HOURS, { silent: true });
+    }
 
     const pending = state.pending.get(requestId);
     if (pending) {
@@ -453,6 +483,12 @@ function toFiniteNumber(value, fallback = 0) {
   return parsed;
 }
 
+function maybeFiniteNumber(value, fallback = null) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function num(value, digits = 0, fallback = "0") {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -487,6 +523,65 @@ function isGarbledUiText(value) {
 function uiText(value, fallback = "---") {
   const text = safeText(value, fallback);
   return isGarbledUiText(text) ? fallback : text;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+const LOGIC_KEYS = Object.freeze(["grid", "load", "boiler1", "pump", "boiler2"]);
+
+function readArrayStrings(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => safeText(item, "")).filter(Boolean);
+}
+
+function buildHubCapabilities(status) {
+  const root = status?.capabilities;
+  const rootLogicKeys = readArrayStrings(root?.logicKeys);
+  const moduleCaps = root?.modules && typeof root.modules === "object" ? root.modules : {};
+  const fallbackLogicKeys = LOGIC_KEYS.filter((logicKey) => {
+    const def = getLogicModalDefinition(logicKey);
+    if (!def) return false;
+    const moduleState = def.getModule(status || {});
+    const config = def.getConfig(status || {});
+    return !!moduleState && !!config;
+  });
+
+  return {
+    logicKeys: rootLogicKeys.length ? rootLogicKeys : fallbackLogicKeys,
+    historyHours: Math.max(1, Number(root?.historyHours) || AUTOMATION_HISTORY_DEFAULT_HOURS),
+    eventJournal: root?.eventJournal !== false,
+    automationHistory: root?.automationHistory !== false,
+    modules: {
+      inverter: moduleCaps.inverter || status?.inverter?.capabilities || {},
+      loadController: moduleCaps.loadController || status?.loadController?.capabilities || {},
+      garage: moduleCaps.garage || status?.garage?.capabilities || {},
+    },
+  };
+}
+
+function isLogicAvailable(logicKey, status = state.status) {
+  const caps = state.capabilities || buildHubCapabilities(status);
+  return Array.isArray(caps.logicKeys) && caps.logicKeys.includes(logicKey);
+}
+
+function logicCapability(logicKey, status = state.status) {
+  const def = getLogicModalDefinition(logicKey);
+  if (!def) return { available: false, moduleKey: "" };
+  const moduleKey = safeText(def.moduleKey, "");
+  const caps = state.capabilities || buildHubCapabilities(status);
+  const moduleCaps = moduleKey ? caps.modules?.[moduleKey] || {} : {};
+  return {
+    available: isLogicAvailable(logicKey, status),
+    moduleKey,
+    moduleCaps,
+  };
 }
 
 function pickNumber(values, fallback = 0) {
@@ -988,44 +1083,8 @@ function filterEventJournalItems(items, viewMode) {
 }
 
 function renderEventJournal(items, options = {}) {
-  const { emptyText = "no events" } = options;
   const root = document.getElementById("eventList");
-  if (!root) return;
-  root.innerHTML = "";
-
-  if (!Array.isArray(items) || !items.length) {
-    const empty = document.createElement("div");
-    empty.className = "event-item-empty";
-    empty.textContent = emptyText;
-    root.appendChild(empty);
-    return;
-  }
-
-  items.forEach((entry) => {
-    const item = document.createElement("div");
-    item.className = "event-item";
-
-    const head = document.createElement("div");
-    head.className = "event-item-head";
-
-    const title = document.createElement("div");
-    title.className = "event-item-title";
-    title.textContent = safeText(entry?.title, "event");
-
-    const time = document.createElement("div");
-    time.className = "event-item-time";
-    time.textContent = safeText(entry?.atText, formatDateTimeFromMs(entry?.atMs));
-
-    const body = document.createElement("div");
-    body.className = "event-item-body";
-    body.textContent = safeText(entry?.body, "-");
-
-    head.appendChild(title);
-    head.appendChild(time);
-    item.appendChild(head);
-    item.appendChild(body);
-    root.appendChild(item);
-  });
+  renderEventList(root, items, options);
 }
 
 function mapGarageDoorHistoryPayloadToEvents(payload) {
@@ -1267,6 +1326,8 @@ function closeModal(id) {
   const affectsLandscape = modalNeedsLandscape(id) || id === "schemeModal" || isSchemeControlModal(id);
   const returnToScheme = isSchemeControlModal(id) && state.schemeControlReturnToSchemeModalId === id;
   const schemeToControlTransition = id === "schemeModal" && state.schemeControlPendingModalId.length > 0;
+  const returnToLogicParent = id === "logicModal" && state.logic.returnModalId.length > 0;
+  const logicReturnModalId = state.logic.returnModalId;
 
   modal.classList.remove("is-open");
 
@@ -1276,6 +1337,9 @@ function closeModal(id) {
     setAutoWindowEditorOpen("pump", false);
   } else if (id === "boiler2Modal") {
     setAutoWindowEditorOpen("boiler2", false);
+  } else if (id === "logicModal") {
+    state.logic.formDirty = false;
+    state.logic.currentKey = "";
   }
 
   if (returnToScheme) {
@@ -1285,8 +1349,18 @@ function closeModal(id) {
     return;
   }
 
+  if (returnToLogicParent) {
+    state.logic.returnModalId = "";
+    openModal(logicReturnModalId);
+    return;
+  }
+
   if (isSchemeControlModal(id)) {
     state.schemeControlReturnToSchemeModalId = "";
+  }
+
+  if (id === "logicModal") {
+    state.logic.returnModalId = "";
   }
 
   if (id === "schemeModal" && !anySchemeControlModalOpen() && !schemeToControlTransition) {
@@ -1305,6 +1379,9 @@ function closeAllModals() {
   document.querySelectorAll(".modal-root").forEach((modal) => {
     modal.classList.remove("is-open");
   });
+  state.logic.currentKey = "";
+  state.logic.returnModalId = "";
+  state.logic.formDirty = false;
   state.schemeControlLandscape = false;
   state.schemeControlReturnToSchemeModalId = "";
   state.schemeControlPendingModalId = "";
@@ -1335,6 +1412,1075 @@ function hasOtherOpenModal(exceptId) {
     return true;
   }
   return false;
+}
+
+function formatLogicAutoWindowFact(enabled, start, end, active) {
+  if (!enabled) return "AUTO window: always active";
+  return `AUTO window: ${safeText(start, "00:00")}-${safeText(end, "00:00")} (${active ? "active now" : "inactive now"})`;
+}
+
+function getLogicModalDefinition(key) {
+  const defs = {
+    grid: {
+      moduleKey: "inverter",
+      title: "grid AUTO logic",
+      getModule: (status) => status?.inverter || null,
+      getConfig: (status) => status?.inverter?.gridLogic || null,
+      getMode: (status) => safeText(status?.inverter?.mode),
+      getState: (status) => boolText(!!status?.inverter?.gridRelayOn),
+      fields: [
+        { key: "pvThresholdW", label: "PV threshold", unit: "W", step: "1", min: "0", max: "20000" },
+        { key: "offDelaySec", label: "GRID OFF delay", unit: "sec", step: "1", min: "0", max: "86400" },
+        { key: "onDelaySec", label: "GRID ON delay", unit: "sec", step: "1", min: "0", max: "86400" },
+        { key: "forceGridOnW", label: "Force GRID ON by LOAD", unit: "W", step: "1", min: "0", max: "20000" },
+      ],
+      getFacts: (_status, cfg) => [
+        `Battery rescue below ${num(cfg.batteryLowSocPct, 0)}%`,
+        `GRID OFF allowed only above ${num(cfg.offMinSocPct, 0)}% battery`,
+      ],
+      getSteps: (_status, cfg) => [
+        { tone: "warn", when: `LOAD > ${num(cfg.forceGridOnW, 0)} W`, action: "GRID ON immediately" },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} W and battery > ${num(cfg.offMinSocPct, 0)} %`, delay: `wait ${num(cfg.offDelaySec, 0)} sec`, action: "GRID OFF" },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} W`, delay: `wait ${num(cfg.onDelaySec, 0)} sec`, action: "GRID ON" },
+        { tone: "alert", when: `battery < ${num(cfg.batteryLowSocPct, 0)} %`, action: "GRID ON immediately" },
+      ],
+      fixedNote: (cfg) => `Fixed conditions: battery rescue ${num(cfg.batteryLowSocPct, 0)}%, GRID OFF requires battery above ${num(cfg.offMinSocPct, 0)}%.`,
+      invokeSave: (values, requestId) => {
+        window.AndroidHub.setInverterGridLogic(values.pvThresholdW, values.offDelaySec, values.onDelaySec, values.forceGridOnW, requestId);
+      },
+      saveSuccessMessage: "grid logic updated",
+    },
+    load: {
+      moduleKey: "inverter",
+      title: "load AUTO logic",
+      getModule: (status) => status?.inverter || null,
+      getConfig: (status) => status?.inverter?.loadLogic || null,
+      getMode: (status) => safeText(status?.inverter?.loadMode),
+      getState: (status) => boolText(!!status?.inverter?.loadRelayOn),
+      fields: [
+        { key: "pvThresholdW", label: "PV threshold", unit: "W", step: "1", min: "0", max: "20000" },
+        { key: "shutdownDelaySec", label: "Shutdown delay", unit: "sec", step: "1", min: "0", max: "86400" },
+        { key: "overloadPowerW", label: "Overload threshold", unit: "W", step: "1", min: "0", max: "20000" },
+      ],
+      getFacts: (_status, cfg) => [
+        `GRID restore threshold ${num(cfg.gridRestoreV, 0)} V`,
+        `Overload guard works only below ${num(cfg.overloadGridV, 0)} V grid`,
+      ],
+      getSteps: (_status, cfg) => [
+        { tone: "alert", when: `LOAD > ${num(cfg.overloadPowerW, 0)} W and GRID < ${num(cfg.overloadGridV, 0)} V`, action: "mode switches to OFF" },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} W and GRID < ${num(cfg.gridRestoreV, 0)} V`, delay: `wait ${num(cfg.shutdownDelaySec, 0)} sec`, action: "LOAD relay OFF" },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} W or GRID >= ${num(cfg.gridRestoreV, 0)} V`, action: "LOAD relay ON" },
+      ],
+      fixedNote: (cfg) => `Fixed conditions: AUTO resumes on grid return, overload voltage threshold ${num(cfg.overloadGridV, 0)} V.`,
+      invokeSave: (values, requestId) => {
+        window.AndroidHub.setInverterLoadLogic(values.pvThresholdW, values.shutdownDelaySec, values.overloadPowerW, requestId);
+      },
+      saveSuccessMessage: "load logic updated",
+    },
+    boiler1: {
+      moduleKey: "loadController",
+      title: "boiler1 AUTO logic",
+      getModule: (status) => status?.loadController || null,
+      getConfig: (status) => status?.loadController?.boilerLogic || null,
+      getMode: (status) => safeText(status?.loadController?.boiler1Mode),
+      getState: (status) => boolText(!!status?.loadController?.boiler1On),
+      fields: [
+        { key: "pvThresholdW", label: "PV threshold", unit: "W", step: "1", min: "0", max: "20000" },
+        { key: "shutdownDelaySec", label: "Shutdown delay", unit: "sec", step: "1", min: "0", max: "86400" },
+        { key: "batteryShutoffW", label: "Battery shutoff", unit: "W", step: "1", min: "-10000", max: "0" },
+        { key: "batteryResumeW", label: "Battery resume", unit: "W", step: "1", min: "-1000", max: "10000" },
+        { key: "peerActiveW", label: "Garage boiler priority", unit: "W", step: "1", min: "0", max: "20000" },
+      ],
+      getFacts: (status, cfg) => [
+        formatLogicAutoWindowFact(
+          !!status?.loadController?.boiler1AutoWindowEnabled,
+          status?.loadController?.boiler1AutoWindowStart,
+          status?.loadController?.boiler1AutoWindowEnd,
+          status?.loadController?.boiler1AutoWindowActive !== false,
+        ),
+        `Battery release: GRID > ${num(cfg.batteryReleaseGridV, 0)} V or SOC > ${num(cfg.batteryReleaseSocPct, 0)} %`,
+      ],
+      getSteps: (_status, cfg) => [
+        { tone: "warn", when: "outside AUTO window", action: "boiler OFF" },
+        { tone: "alert", when: `battery_power <= ${num(cfg.batteryShutoffW, 0)} W`, action: "battery protection latch" },
+        { tone: "good", when: `battery_power >= ${num(cfg.batteryResumeW, 0)} W`, action: "battery latch can clear" },
+        { tone: "warn", when: `garage boiler > ${num(cfg.peerActiveW, 0)} W`, action: "boiler OFF" },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} W and GRID < ${num(cfg.gridRestoreV, 0)} V`, delay: `wait ${num(cfg.shutdownDelaySec, 0)} sec`, action: "boiler OFF" },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} W or GRID >= ${num(cfg.gridRestoreV, 0)} V`, action: "boiler ON" },
+      ],
+      fixedNote: (cfg) => `Fixed conditions: battery latch also clears on GRID > ${num(cfg.batteryReleaseGridV, 0)} V or SOC > ${num(cfg.batteryReleaseSocPct, 0)} %.`,
+      invokeSave: (values, requestId) => {
+        window.AndroidHub.setBoiler1Logic(values.pvThresholdW, values.shutdownDelaySec, values.batteryShutoffW, values.batteryResumeW, values.peerActiveW, requestId);
+      },
+      saveSuccessMessage: "boiler1 logic updated",
+    },
+    pump: {
+      moduleKey: "loadController",
+      title: "pump AUTO logic",
+      getModule: (status) => status?.loadController || null,
+      getConfig: (status) => status?.loadController?.pumpLogic || null,
+      getMode: (status) => safeText(status?.loadController?.pumpMode),
+      getState: (status) => boolText(!!status?.loadController?.pumpOn),
+      fields: [
+        { key: "pvThresholdW", label: "PV threshold", unit: "W", step: "1", min: "0", max: "20000" },
+        { key: "shutdownDelaySec", label: "Shutdown delay", unit: "sec", step: "1", min: "0", max: "86400" },
+      ],
+      getFacts: (status, cfg) => [
+        formatLogicAutoWindowFact(
+          !!status?.loadController?.pumpAutoWindowEnabled,
+          status?.loadController?.pumpAutoWindowStart,
+          status?.loadController?.pumpAutoWindowEnd,
+          status?.loadController?.pumpAutoWindowActive !== false,
+        ),
+        `GRID restore threshold ${num(cfg.gridRestoreV, 0)} V`,
+      ],
+      getSteps: (_status, cfg) => [
+        { tone: "warn", when: "outside AUTO window", action: "pump OFF" },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} W and GRID < ${num(cfg.gridRestoreV, 0)} V`, delay: `wait ${num(cfg.shutdownDelaySec, 0)} sec`, action: "pump OFF" },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} W or GRID >= ${num(cfg.gridRestoreV, 0)} V`, action: "pump ON" },
+      ],
+      fixedNote: (cfg) => `Fixed conditions: AUTO restarts on GRID >= ${num(cfg.gridRestoreV, 0)} V.`,
+      invokeSave: (values, requestId) => {
+        window.AndroidHub.setPumpLogic(values.pvThresholdW, values.shutdownDelaySec, requestId);
+      },
+      saveSuccessMessage: "pump logic updated",
+    },
+    boiler2: {
+      moduleKey: "garage",
+      title: "boiler2 AUTO logic",
+      getModule: (status) => status?.garage || null,
+      getConfig: (status) => status?.garage?.boilerLogic || null,
+      getMode: (status) => safeText(status?.garage?.boiler2Mode),
+      getState: (status) => boolText(!!status?.garage?.boiler2On),
+      fields: [
+        { key: "pvThresholdW", label: "PV threshold", unit: "W", step: "1", min: "0", max: "20000" },
+        { key: "shutdownDelaySec", label: "Shutdown delay", unit: "sec", step: "1", min: "0", max: "86400" },
+        { key: "batteryShutoffW", label: "Battery shutoff", unit: "W", step: "1", min: "-10000", max: "0" },
+        { key: "batteryResumeW", label: "Battery resume", unit: "W", step: "1", min: "-1000", max: "10000" },
+        { key: "peerActiveW", label: "House boiler priority", unit: "W", step: "1", min: "0", max: "20000" },
+      ],
+      getFacts: (status, cfg) => [
+        formatLogicAutoWindowFact(
+          !!status?.garage?.boiler2AutoWindowEnabled,
+          status?.garage?.boiler2AutoWindowStart,
+          status?.garage?.boiler2AutoWindowEnd,
+          status?.garage?.boiler2AutoWindowActive !== false,
+        ),
+        `Battery release: GRID > ${num(cfg.batteryReleaseGridV, 0)} V or SOC > ${num(cfg.batteryReleaseSocPct, 0)} %`,
+      ],
+      getSteps: (_status, cfg) => [
+        { tone: "warn", when: "outside AUTO window", action: "boiler OFF" },
+        { tone: "alert", when: `battery_power <= ${num(cfg.batteryShutoffW, 0)} W`, action: "battery protection latch" },
+        { tone: "good", when: `battery_power >= ${num(cfg.batteryResumeW, 0)} W`, action: "battery latch can clear" },
+        { tone: "warn", when: `house boiler > ${num(cfg.peerActiveW, 0)} W`, action: "boiler OFF" },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} W and GRID < ${num(cfg.gridRestoreV, 0)} V`, delay: `wait ${num(cfg.shutdownDelaySec, 0)} sec`, action: "boiler OFF" },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} W or GRID >= ${num(cfg.gridRestoreV, 0)} V`, action: "boiler ON" },
+      ],
+      fixedNote: (cfg) => `Fixed conditions: battery latch also clears on GRID > ${num(cfg.batteryReleaseGridV, 0)} V or SOC > ${num(cfg.batteryReleaseSocPct, 0)} %.`,
+      invokeSave: (values, requestId) => {
+        window.AndroidHub.setBoiler2Logic(values.pvThresholdW, values.shutdownDelaySec, values.batteryShutoffW, values.batteryResumeW, values.peerActiveW, requestId);
+      },
+      saveSuccessMessage: "boiler2 logic updated",
+    },
+  };
+
+  return defs[key] || null;
+}
+
+function buildLogicFieldMarkup(field, value, disabled) {
+  const safeValue = Number.isFinite(Number(value)) ? String(value) : "";
+  return `
+    <label class="logic-field">
+      <span class="logic-field-label">${escapeHtml(field.label)}${field.unit ? `, ${escapeHtml(field.unit)}` : ""}</span>
+      <input
+        class="logic-field-input"
+        type="number"
+        data-logic-field="${escapeHtml(field.key)}"
+        step="${escapeHtml(field.step || "1")}"
+        min="${escapeHtml(field.min || "")}"
+        max="${escapeHtml(field.max || "")}"
+        value="${escapeHtml(safeValue)}"
+        ${disabled ? "disabled" : ""}
+      >
+    </label>
+  `;
+}
+
+function formatDurationCompact(totalSec) {
+  const safeSec = Math.max(0, Math.round(Number(totalSec) || 0));
+  if (safeSec < 60) return `${safeSec}s`;
+  const hours = Math.floor(safeSec / 3600);
+  const minutes = Math.floor((safeSec % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function resizeHiDpiCanvas(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.floor(rect.width * ratio));
+  const height = Math.max(1, Math.floor(rect.height * ratio));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+}
+
+function normalizeAutomationHistoryPayload(payload) {
+  const rawItems = Array.isArray(payload?.items) ? payload.items : [];
+  const items = rawItems
+    .map((item) => ({
+      atMs: Number(item?.atMs) || 0,
+      inverterOnline: !!item?.inverterOnline,
+      loadControllerOnline: !!item?.loadControllerOnline,
+      garageOnline: !!item?.garageOnline,
+      pvW: maybeFiniteNumber(item?.pvW, null),
+      gridW: maybeFiniteNumber(item?.gridW, null),
+      loadW: maybeFiniteNumber(item?.loadW, null),
+      batterySoc: maybeFiniteNumber(item?.batterySoc, null),
+      batteryPower: maybeFiniteNumber(item?.batteryPower, null),
+      inverterLineVoltage: maybeFiniteNumber(item?.inverterLineVoltage, null),
+      loadLineVoltage: maybeFiniteNumber(item?.loadLineVoltage, null),
+      garageLineVoltage: maybeFiniteNumber(item?.garageLineVoltage, null),
+      gridRelayOn: typeof item?.gridRelayOn === "boolean" ? item.gridRelayOn : null,
+      gridMode: safeText(item?.gridMode, ""),
+      loadRelayOn: typeof item?.loadRelayOn === "boolean" ? item.loadRelayOn : null,
+      loadMode: safeText(item?.loadMode, ""),
+      boiler1On: typeof item?.boiler1On === "boolean" ? item.boiler1On : null,
+      boiler1Mode: safeText(item?.boiler1Mode, ""),
+      boiler1PowerW: maybeFiniteNumber(item?.boiler1PowerW, null),
+      boiler1AutoWindowActive: typeof item?.boiler1AutoWindowActive === "boolean" ? item.boiler1AutoWindowActive : null,
+      pumpOn: typeof item?.pumpOn === "boolean" ? item.pumpOn : null,
+      pumpMode: safeText(item?.pumpMode, ""),
+      pumpPowerW: maybeFiniteNumber(item?.pumpPowerW, null),
+      pumpAutoWindowActive: typeof item?.pumpAutoWindowActive === "boolean" ? item.pumpAutoWindowActive : null,
+      boiler2On: typeof item?.boiler2On === "boolean" ? item.boiler2On : null,
+      boiler2Mode: safeText(item?.boiler2Mode, ""),
+      boiler2PowerW: maybeFiniteNumber(item?.boiler2PowerW, null),
+      boiler2AutoWindowActive: typeof item?.boiler2AutoWindowActive === "boolean" ? item.boiler2AutoWindowActive : null,
+      garageLightOn: typeof item?.garageLightOn === "boolean" ? item.garageLightOn : null,
+      gateState: safeText(item?.gateState, ""),
+    }))
+    .filter((item) => item.atMs > 0)
+    .sort((a, b) => a.atMs - b.atMs);
+
+  return {
+    hours: Math.max(1, Number(payload?.hours) || AUTOMATION_HISTORY_DEFAULT_HOURS),
+    items,
+  };
+}
+
+function applyAutomationHistory(payload) {
+  const mapped = normalizeAutomationHistoryPayload(payload);
+  state.automationHistory.items = mapped.items;
+  state.automationHistory.hours = mapped.hours;
+  state.automationHistory.loadedAtMs = Date.now();
+}
+
+function appendAutomationHistorySampleFromStatus(status) {
+  if (!status || typeof status !== "object") return;
+  const hadHydratedHistory = Number(state.automationHistory.loadedAtMs || 0) > 0;
+  const inverter = status.inverter && typeof status.inverter === "object" ? status.inverter : null;
+  const loadController = status.loadController && typeof status.loadController === "object" ? status.loadController : null;
+  const garage = status.garage && typeof status.garage === "object" ? status.garage : null;
+  const atMs = Number(status.updatedAtMs || inverter?.updatedAtMs || loadController?.updatedAtMs || garage?.updatedAtMs) || Date.now();
+  const sample = {
+    atMs,
+    inverterOnline: !!inverter,
+    loadControllerOnline: !!loadController,
+    garageOnline: !!garage,
+    pvW: maybeFiniteNumber(inverter?.pvW ?? loadController?.pvW ?? garage?.pvW, null),
+    gridW: maybeFiniteNumber(inverter?.gridW ?? loadController?.gridW ?? garage?.gridW, null),
+    loadW: maybeFiniteNumber(inverter?.loadW ?? loadController?.loadW ?? garage?.loadW, null),
+    batterySoc: maybeFiniteNumber(inverter?.batterySoc ?? loadController?.batterySoc ?? garage?.batterySoc, null),
+    batteryPower: maybeFiniteNumber(inverter?.batteryPower ?? loadController?.batteryPower ?? garage?.batteryPower, null),
+    inverterLineVoltage: maybeFiniteNumber(inverter?.lineVoltage, null),
+    loadLineVoltage: maybeFiniteNumber(loadController?.lineVoltage, null),
+    garageLineVoltage: maybeFiniteNumber(garage?.lineVoltage, null),
+    gridRelayOn: typeof inverter?.gridRelayOn === "boolean" ? inverter.gridRelayOn : null,
+    gridMode: safeText(inverter?.mode, ""),
+    loadRelayOn: typeof inverter?.loadRelayOn === "boolean" ? inverter.loadRelayOn : null,
+    loadMode: safeText(inverter?.loadMode, ""),
+    boiler1On: typeof loadController?.boiler1On === "boolean" ? loadController.boiler1On : null,
+    boiler1Mode: safeText(loadController?.boiler1Mode, ""),
+    boiler1PowerW: maybeFiniteNumber(loadController?.boilerPower, null),
+    boiler1AutoWindowActive: typeof loadController?.boiler1AutoWindowActive === "boolean" ? loadController.boiler1AutoWindowActive : null,
+    pumpOn: typeof loadController?.pumpOn === "boolean" ? loadController.pumpOn : null,
+    pumpMode: safeText(loadController?.pumpMode, ""),
+    pumpPowerW: maybeFiniteNumber(loadController?.pumpPower, null),
+    pumpAutoWindowActive: typeof loadController?.pumpAutoWindowActive === "boolean" ? loadController.pumpAutoWindowActive : null,
+    boiler2On: typeof garage?.boiler2On === "boolean" ? garage.boiler2On : null,
+    boiler2Mode: safeText(garage?.boiler2Mode, ""),
+    boiler2PowerW: maybeFiniteNumber(garage?.boilerPower, null),
+    boiler2AutoWindowActive: typeof garage?.boiler2AutoWindowActive === "boolean" ? garage.boiler2AutoWindowActive : null,
+    garageLightOn: typeof garage?.garageLightOn === "boolean" ? garage.garageLightOn : null,
+    gateState: safeText(garage?.gateState, ""),
+  };
+
+  const items = Array.isArray(state.automationHistory.items) ? state.automationHistory.items.slice() : [];
+  const last = items[items.length - 1];
+  if (!last || sample.atMs > last.atMs) {
+    items.push(sample);
+  } else {
+    return;
+  }
+  const fromMs = sample.atMs - AUTOMATION_HISTORY_DEFAULT_HOURS * 60 * 60 * 1000;
+  state.automationHistory.items = items.filter((item) => Number(item?.atMs) >= fromMs);
+  state.automationHistory.hours = Math.max(Number(state.automationHistory.hours || 0), AUTOMATION_HISTORY_DEFAULT_HOURS);
+  if (hadHydratedHistory) {
+    state.automationHistory.loadedAtMs = Date.now();
+  }
+}
+
+async function ensureAutomationHistory(hours = AUTOMATION_HISTORY_DEFAULT_HOURS, options = {}) {
+  const { force = false, silent = false } = options;
+  const safeHours = Math.max(1, Math.min(6, Math.round(Number(hours) || AUTOMATION_HISTORY_DEFAULT_HOURS)));
+  const cachedHours = Number(state.automationHistory.hours || 0);
+  const freshEnough = Date.now() - Number(state.automationHistory.loadedAtMs || 0) < AUTOMATION_HISTORY_REFRESH_MS;
+  if (!force && freshEnough && cachedHours >= safeHours && state.automationHistory.items.length) {
+    return state.automationHistory.items;
+  }
+  if (!hasBridge() || !state.capabilities?.automationHistory) {
+    return state.automationHistory.items;
+  }
+
+  try {
+    const payload = await bridgeRequest("automation-history", (requestId) => {
+      window.AndroidHub.fetchAutomationHistory(safeHours, requestId);
+    });
+    applyAutomationHistory(payload);
+    state.alerts.active = collectActiveAlerts();
+    renderSystemAlerts();
+    if (isModalOpen("logicModal")) {
+      renderLogicModal({ force: true });
+    }
+    return state.automationHistory.items;
+  } catch (error) {
+    if (!silent) {
+      showToast(`automation history failed: ${error.message}`);
+    }
+    return state.automationHistory.items;
+  }
+}
+
+function automationHistoryItems(hours = state.logic.historyHours || LOGIC_HISTORY_DEFAULT_HOURS) {
+  const safeHours = Math.max(1, Math.min(6, Math.round(Number(hours) || LOGIC_HISTORY_DEFAULT_HOURS)));
+  const items = Array.isArray(state.automationHistory.items) ? state.automationHistory.items : [];
+  if (!items.length) return [];
+  const latestAtMs = items[items.length - 1].atMs || Date.now();
+  const fromMs = latestAtMs - safeHours * 60 * 60 * 1000;
+  return items.filter((item) => item.atMs >= fromMs);
+}
+
+function logicStateValue(logicKey, sample) {
+  switch (logicKey) {
+    case "grid": return typeof sample?.gridRelayOn === "boolean" ? sample.gridRelayOn : null;
+    case "load": return typeof sample?.loadRelayOn === "boolean" ? sample.loadRelayOn : null;
+    case "boiler1": return typeof sample?.boiler1On === "boolean" ? sample.boiler1On : null;
+    case "pump": return typeof sample?.pumpOn === "boolean" ? sample.pumpOn : null;
+    case "boiler2": return typeof sample?.boiler2On === "boolean" ? sample.boiler2On : null;
+    default: return null;
+  }
+}
+
+function logicModeValue(logicKey, sample) {
+  switch (logicKey) {
+    case "grid": return safeText(sample?.gridMode, "");
+    case "load": return safeText(sample?.loadMode, "");
+    case "boiler1": return safeText(sample?.boiler1Mode, "");
+    case "pump": return safeText(sample?.pumpMode, "");
+    case "boiler2": return safeText(sample?.boiler2Mode, "");
+    default: return "";
+  }
+}
+
+function measureConditionDurationSec(samples, index, predicate) {
+  if (!Array.isArray(samples) || !samples[index] || typeof predicate !== "function") return 0;
+  if (!predicate(samples[index])) return 0;
+  let startAtMs = samples[index].atMs;
+  for (let cursor = index; cursor > 0; cursor -= 1) {
+    const prev = samples[cursor - 1];
+    if (!predicate(prev)) break;
+    startAtMs = prev.atMs;
+  }
+  return Math.max(0, Math.round((samples[index].atMs - startAtMs) / 1000));
+}
+
+function logicTransitionReason(logicKey, samples, index, cfg, nextState) {
+  const sample = samples[index] || {};
+  const pvW = Number(sample.pvW);
+  const loadW = Number(sample.loadW);
+  const batterySoc = Number(sample.batterySoc);
+  const batteryPower = Number(sample.batteryPower);
+  const invGridV = Number(sample.inverterLineVoltage);
+  const loadGridV = Number(sample.loadLineVoltage);
+  const garageGridV = Number(sample.garageLineVoltage);
+  const peerGarageW = Number(sample.boiler2PowerW);
+  const peerHouseW = Number(sample.boiler1PowerW);
+
+  switch (logicKey) {
+    case "grid":
+      if (nextState) {
+        if (Number.isFinite(loadW) && loadW >= Number(cfg.forceGridOnW)) {
+          return `LOAD ${num(loadW, 0)}W >= ${num(cfg.forceGridOnW, 0)}W`;
+        }
+        if (Number.isFinite(batterySoc) && batterySoc <= Number(cfg.batteryLowSocPct)) {
+          return `battery ${num(batterySoc, 0)}% <= ${num(cfg.batteryLowSocPct, 0)}%`;
+        }
+        return `PV ${num(pvW, 0)}W < ${num(cfg.pvThresholdW, 0)}W for ${formatDurationCompact(
+          measureConditionDurationSec(samples, index, (row) => Number(row?.pvW) < Number(cfg.pvThresholdW)),
+        )}`;
+      }
+      return `PV ${num(pvW, 0)}W >= ${num(cfg.pvThresholdW, 0)}W and battery ${num(batterySoc, 0)}% >= ${num(cfg.offMinSocPct, 0)}% for ${formatDurationCompact(
+        measureConditionDurationSec(
+          samples,
+          index,
+          (row) => Number(row?.pvW) >= Number(cfg.pvThresholdW) && Number(row?.batterySoc) >= Number(cfg.offMinSocPct),
+        ),
+      )}`;
+    case "load":
+      if (!nextState) {
+        if (Number.isFinite(loadW) && loadW >= Number(cfg.overloadPowerW)) {
+          return `LOAD ${num(loadW, 0)}W >= ${num(cfg.overloadPowerW, 0)}W`;
+        }
+        return `PV ${num(pvW, 0)}W < ${num(cfg.pvThresholdW, 0)}W and GRID ${num(invGridV, 0)}V < ${num(cfg.gridRestoreV, 0)}V for ${formatDurationCompact(
+          measureConditionDurationSec(
+            samples,
+            index,
+            (row) => Number(row?.pvW) < Number(cfg.pvThresholdW) && Number(row?.inverterLineVoltage) < Number(cfg.gridRestoreV),
+          ),
+        )}`;
+      }
+      if (Number.isFinite(invGridV) && invGridV >= Number(cfg.gridRestoreV)) {
+        return `GRID ${num(invGridV, 0)}V >= ${num(cfg.gridRestoreV, 0)}V`;
+      }
+      return `PV ${num(pvW, 0)}W >= ${num(cfg.pvThresholdW, 0)}W`;
+    case "boiler1":
+      if (!nextState) {
+        if (sample.boiler1AutoWindowActive === false) return "outside AUTO window";
+        if (Number.isFinite(batteryPower) && batteryPower <= Number(cfg.batteryShutoffW)) {
+          return `battery ${num(batteryPower, 0)}W <= ${num(cfg.batteryShutoffW, 0)}W`;
+        }
+        if (Number.isFinite(peerGarageW) && peerGarageW >= Number(cfg.peerActiveW)) {
+          return `garage boiler ${num(peerGarageW, 0)}W >= ${num(cfg.peerActiveW, 0)}W`;
+        }
+        return `PV ${num(pvW, 0)}W < ${num(cfg.pvThresholdW, 0)}W and GRID ${num(loadGridV, 0)}V < ${num(cfg.gridRestoreV, 0)}V for ${formatDurationCompact(
+          measureConditionDurationSec(
+            samples,
+            index,
+            (row) => Number(row?.pvW) < Number(cfg.pvThresholdW) && Number(row?.loadLineVoltage) < Number(cfg.gridRestoreV),
+          ),
+        )}`;
+      }
+      if (Number.isFinite(loadGridV) && loadGridV >= Number(cfg.gridRestoreV)) {
+        return `GRID ${num(loadGridV, 0)}V >= ${num(cfg.gridRestoreV, 0)}V`;
+      }
+      if (Number.isFinite(batteryPower) && batteryPower >= Number(cfg.batteryResumeW)) {
+        return `battery ${num(batteryPower, 0)}W >= ${num(cfg.batteryResumeW, 0)}W`;
+      }
+      return `PV ${num(pvW, 0)}W >= ${num(cfg.pvThresholdW, 0)}W`;
+    case "pump":
+      if (!nextState) {
+        if (sample.pumpAutoWindowActive === false) return "outside AUTO window";
+        return `PV ${num(pvW, 0)}W < ${num(cfg.pvThresholdW, 0)}W and GRID ${num(loadGridV, 0)}V < ${num(cfg.gridRestoreV, 0)}V for ${formatDurationCompact(
+          measureConditionDurationSec(
+            samples,
+            index,
+            (row) => Number(row?.pvW) < Number(cfg.pvThresholdW) && Number(row?.loadLineVoltage) < Number(cfg.gridRestoreV),
+          ),
+        )}`;
+      }
+      if (Number.isFinite(loadGridV) && loadGridV >= Number(cfg.gridRestoreV)) {
+        return `GRID ${num(loadGridV, 0)}V >= ${num(cfg.gridRestoreV, 0)}V`;
+      }
+      return `PV ${num(pvW, 0)}W >= ${num(cfg.pvThresholdW, 0)}W`;
+    case "boiler2":
+      if (!nextState) {
+        if (sample.boiler2AutoWindowActive === false) return "outside AUTO window";
+        if (Number.isFinite(batteryPower) && batteryPower <= Number(cfg.batteryShutoffW)) {
+          return `battery ${num(batteryPower, 0)}W <= ${num(cfg.batteryShutoffW, 0)}W`;
+        }
+        if (Number.isFinite(peerHouseW) && peerHouseW >= Number(cfg.peerActiveW)) {
+          return `house boiler ${num(peerHouseW, 0)}W >= ${num(cfg.peerActiveW, 0)}W`;
+        }
+        return `PV ${num(pvW, 0)}W < ${num(cfg.pvThresholdW, 0)}W and GRID ${num(garageGridV, 0)}V < ${num(cfg.gridRestoreV, 0)}V for ${formatDurationCompact(
+          measureConditionDurationSec(
+            samples,
+            index,
+            (row) => Number(row?.pvW) < Number(cfg.pvThresholdW) && Number(row?.garageLineVoltage) < Number(cfg.gridRestoreV),
+          ),
+        )}`;
+      }
+      if (Number.isFinite(garageGridV) && garageGridV >= Number(cfg.gridRestoreV)) {
+        return `GRID ${num(garageGridV, 0)}V >= ${num(cfg.gridRestoreV, 0)}V`;
+      }
+      if (Number.isFinite(batteryPower) && batteryPower >= Number(cfg.batteryResumeW)) {
+        return `battery ${num(batteryPower, 0)}W >= ${num(cfg.batteryResumeW, 0)}W`;
+      }
+      return `PV ${num(pvW, 0)}W >= ${num(cfg.pvThresholdW, 0)}W`;
+    default:
+      return "transition detected";
+  }
+}
+
+function deriveLogicTransitions(logicKey, samples, cfg) {
+  const out = [];
+  for (let index = 1; index < samples.length; index += 1) {
+    const prev = samples[index - 1];
+    const curr = samples[index];
+    const prevState = logicStateValue(logicKey, prev);
+    const currState = logicStateValue(logicKey, curr);
+    const prevMode = logicModeValue(logicKey, prev);
+    const currMode = logicModeValue(logicKey, curr);
+
+    if (typeof prevState === "boolean" && typeof currState === "boolean" && prevState !== currState) {
+      const stateLabel = currState ? "ON" : "OFF";
+      out.push({
+        atMs: curr.atMs,
+        title: `relay -> ${stateLabel}`,
+        body: logicTransitionReason(logicKey, samples, index, cfg, currState),
+        severity: currState ? "info" : "warn",
+        kind: "transition",
+        module: logicCapability(logicKey).moduleKey || "hub",
+      });
+      continue;
+    }
+
+    if (prevMode && currMode && prevMode !== currMode) {
+      out.push({
+        atMs: curr.atMs,
+        title: `mode ${prevMode} -> ${currMode}`,
+        body: "mode changed without relay transition",
+        severity: "info",
+        kind: "mode",
+        module: logicCapability(logicKey).moduleKey || "hub",
+      });
+    }
+  }
+  return out.slice(-14).reverse();
+}
+
+function buildLogicChartModel(logicKey, samples, cfg) {
+  switch (logicKey) {
+    case "grid":
+      return {
+        series: [
+          { key: "pvW", label: "PV", color: "#ffb347", values: samples.map((row) => row.pvW) },
+          { key: "loadW", label: "LOAD", color: "#ff4d6d", values: samples.map((row) => row.loadW) },
+        ],
+        thresholds: [
+          { label: "PV thr", value: cfg.pvThresholdW, color: "rgba(255,179,71,0.55)" },
+          { label: "Force GRID", value: cfg.forceGridOnW, color: "rgba(255,77,109,0.55)" },
+        ],
+      };
+    case "load":
+      return {
+        series: [
+          { key: "pvW", label: "PV", color: "#ffb347", values: samples.map((row) => row.pvW) },
+          { key: "loadW", label: "LOAD", color: "#ff4d6d", values: samples.map((row) => row.loadW) },
+        ],
+        thresholds: [
+          { label: "PV thr", value: cfg.pvThresholdW, color: "rgba(255,179,71,0.55)" },
+          { label: "Overload", value: cfg.overloadPowerW, color: "rgba(255,77,109,0.55)" },
+        ],
+      };
+    case "boiler1":
+      return {
+        series: [
+          { key: "pvW", label: "PV", color: "#ffb347", values: samples.map((row) => row.pvW) },
+          { key: "batteryPower", label: "BAT", color: "#33ff99", values: samples.map((row) => row.batteryPower) },
+          { key: "peer", label: "B2", color: "#ff4d6d", values: samples.map((row) => row.boiler2PowerW) },
+        ],
+        thresholds: [
+          { label: "PV thr", value: cfg.pvThresholdW, color: "rgba(255,179,71,0.55)" },
+          { label: "BAT stop", value: cfg.batteryShutoffW, color: "rgba(51,255,153,0.55)" },
+          { label: "BAT resume", value: cfg.batteryResumeW, color: "rgba(51,255,153,0.35)" },
+          { label: "Peer", value: cfg.peerActiveW, color: "rgba(255,77,109,0.55)" },
+        ],
+      };
+    case "pump":
+      return {
+        series: [
+          { key: "pvW", label: "PV", color: "#ffb347", values: samples.map((row) => row.pvW) },
+          { key: "pumpPowerW", label: "PUMP", color: "#4f7cff", values: samples.map((row) => row.pumpPowerW) },
+        ],
+        thresholds: [
+          { label: "PV thr", value: cfg.pvThresholdW, color: "rgba(255,179,71,0.55)" },
+        ],
+      };
+    case "boiler2":
+      return {
+        series: [
+          { key: "pvW", label: "PV", color: "#ffb347", values: samples.map((row) => row.pvW) },
+          { key: "batteryPower", label: "BAT", color: "#33ff99", values: samples.map((row) => row.batteryPower) },
+          { key: "peer", label: "B1", color: "#ff4d6d", values: samples.map((row) => row.boiler1PowerW) },
+        ],
+        thresholds: [
+          { label: "PV thr", value: cfg.pvThresholdW, color: "rgba(255,179,71,0.55)" },
+          { label: "BAT stop", value: cfg.batteryShutoffW, color: "rgba(51,255,153,0.55)" },
+          { label: "BAT resume", value: cfg.batteryResumeW, color: "rgba(51,255,153,0.35)" },
+          { label: "Peer", value: cfg.peerActiveW, color: "rgba(255,77,109,0.55)" },
+        ],
+      };
+    default:
+      return { series: [], thresholds: [] };
+  }
+}
+
+function drawLogicHistoryChart(logicKey, cfg, samples) {
+  const canvas = document.getElementById("logicHistoryCanvas");
+  if (!canvas) return;
+  resizeHiDpiCanvas(canvas);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const width = canvas.width;
+  const height = canvas.height;
+  ctx.clearRect(0, 0, width, height);
+
+  if (!samples.length) {
+    ctx.fillStyle = "rgba(230,241,255,0.72)";
+    ctx.font = `${12 * (window.devicePixelRatio || 1)}px "Playpen Sans", sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("history is empty", width / 2, height / 2);
+    return;
+  }
+
+  const model = buildLogicChartModel(logicKey, samples, cfg);
+  const padding = { left: 52, right: 16, top: 18, bottom: 36 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const bandHeight = Math.max(14 * (window.devicePixelRatio || 1), plotHeight * 0.14);
+  const lineHeight = plotHeight - bandHeight - 12;
+  const minTs = samples[0].atMs;
+  const maxTs = samples[samples.length - 1].atMs || (minTs + 1);
+  const rangeTs = Math.max(1, maxTs - minTs);
+  const xFor = (atMs) => padding.left + ((atMs - minTs) / rangeTs) * plotWidth;
+
+  const values = [];
+  model.series.forEach((serie) => {
+    serie.values.forEach((value) => {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) values.push(parsed);
+    });
+  });
+  model.thresholds.forEach((line) => {
+    const parsed = Number(line?.value);
+    if (Number.isFinite(parsed)) values.push(parsed);
+  });
+
+  let minValue = values.length ? Math.min(...values) : 0;
+  let maxValue = values.length ? Math.max(...values) : 1;
+  if (minValue === maxValue) {
+    minValue -= 1;
+    maxValue += 1;
+  }
+  const span = maxValue - minValue;
+  minValue -= span * 0.12;
+  maxValue += span * 0.12;
+  const yFor = (value) => padding.top + ((maxValue - value) / Math.max(1, maxValue - minValue)) * lineHeight;
+
+  ctx.fillStyle = "rgba(255,255,255,0.04)";
+  ctx.fillRect(padding.left, padding.top, plotWidth, lineHeight);
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padding.left, padding.top, plotWidth, lineHeight);
+
+  ctx.font = `${11 * (window.devicePixelRatio || 1)}px "Playpen Sans", sans-serif`;
+  ctx.fillStyle = "rgba(230,241,255,0.5)";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (let step = 0; step <= 4; step += 1) {
+    const y = padding.top + (lineHeight / 4) * step;
+    const value = maxValue - ((maxValue - minValue) / 4) * step;
+    ctx.strokeStyle = "rgba(79,124,255,0.15)";
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(padding.left + plotWidth, y);
+    ctx.stroke();
+    ctx.fillText(`${Math.round(value)}`, padding.left - 8, y);
+  }
+
+  model.thresholds.forEach((line, index) => {
+    const value = Number(line?.value);
+    if (!Number.isFinite(value)) return;
+    const y = yFor(value);
+    ctx.save();
+    ctx.setLineDash([6, 5]);
+    ctx.strokeStyle = line.color || "rgba(255,255,255,0.35)";
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(padding.left + plotWidth, y);
+    ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = line.color || "rgba(255,255,255,0.6)";
+    ctx.textAlign = "left";
+    ctx.textBaseline = index % 2 === 0 ? "bottom" : "top";
+    ctx.fillText(`${line.label}: ${Math.round(value)}`, padding.left + 4, y + (index % 2 === 0 ? -2 : 2));
+  });
+
+  model.series.forEach((serie) => {
+    ctx.strokeStyle = serie.color;
+    ctx.lineWidth = 2.2 * (window.devicePixelRatio || 1);
+    ctx.beginPath();
+    let moved = false;
+    samples.forEach((sample, index) => {
+      const value = Number(serie.values[index]);
+      if (!Number.isFinite(value)) return;
+      const x = xFor(sample.atMs);
+      const y = yFor(value);
+      if (!moved) {
+        ctx.moveTo(x, y);
+        moved = true;
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.stroke();
+  });
+
+  const bandTop = padding.top + lineHeight + 12;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(padding.left, bandTop, plotWidth, bandHeight);
+  let segmentStart = null;
+  samples.forEach((sample, index) => {
+    const on = logicStateValue(logicKey, sample);
+    if (on === true && segmentStart === null) {
+      segmentStart = sample.atMs;
+    }
+    const nextSample = samples[index + 1];
+    if (segmentStart !== null && (on !== true || !nextSample)) {
+      const xStart = xFor(segmentStart);
+      const xEnd = xFor(nextSample ? nextSample.atMs : sample.atMs);
+      ctx.fillStyle = "rgba(51,255,153,0.62)";
+      ctx.fillRect(xStart, bandTop, Math.max(2, xEnd - xStart), bandHeight);
+      segmentStart = null;
+    }
+  });
+  ctx.fillStyle = "rgba(230,241,255,0.55)";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText("STATE", padding.left - 8, bandTop + bandHeight / 2);
+
+  const tickCount = Math.min(6, Math.max(2, Math.floor(plotWidth / (90 * (window.devicePixelRatio || 1)))));
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (let tick = 0; tick <= tickCount; tick += 1) {
+    const ratio = tick / tickCount;
+    const atMs = minTs + rangeTs * ratio;
+    const x = padding.left + plotWidth * ratio;
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath();
+    ctx.moveTo(x, padding.top);
+    ctx.lineTo(x, bandTop + bandHeight);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(230,241,255,0.48)";
+    ctx.fillText(formatClockFromMs(atMs), x, bandTop + bandHeight + 6);
+  }
+}
+
+function renderEventList(root, entries, options = {}) {
+  const { emptyText = "no events" } = options;
+  if (!root) return;
+  if (!Array.isArray(entries) || !entries.length) {
+    root.innerHTML = `<div class="event-item-empty">${escapeHtml(emptyText)}</div>`;
+    return;
+  }
+
+  root.innerHTML = entries.map((entry) => {
+    const severity = safeText(entry?.severity, "info").toLowerCase();
+    const module = safeText(entry?.module, "");
+    const kind = safeText(entry?.kind, "");
+    const metaParts = [module, kind].filter(Boolean);
+    return `
+      <div class="event-item severity-${escapeHtml(severity)}">
+        <div class="event-item-head">
+          <div class="event-item-title">${escapeHtml(safeText(entry?.title, "event"))}</div>
+          <div class="event-item-time">${escapeHtml(safeText(entry?.atText, formatDateTimeShort(entry?.atMs)))}</div>
+        </div>
+        <div class="event-item-body">${escapeHtml(safeText(entry?.body, ""))}</div>
+        ${metaParts.length ? `<div class="event-item-meta">${escapeHtml(metaParts.join(" | "))}</div>` : ""}
+      </div>
+    `;
+  }).join("");
+}
+
+function formatDateTimeShort(atMs) {
+  const safeMs = Number(atMs);
+  if (!Number.isFinite(safeMs) || safeMs <= 0) return "--";
+  const date = new Date(safeMs);
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mon = String(date.getMonth() + 1).padStart(2, "0");
+  return `${dd}.${mon} ${hh}:${mm}`;
+}
+
+function collectActiveAlerts() {
+  const status = state.status || {};
+  const caps = state.capabilities || buildHubCapabilities(status);
+  const alerts = [];
+  const hasSignalHistory = Object.values(state.moduleSignalAtMs || {}).some((value) => Number(value) > 0);
+  const pushAlert = (key, title, body, severity = "alert", logicKey = "") => {
+    alerts.push({ key, title, body, severity, logicKey });
+  };
+
+  if (hasSignalHistory) {
+    if (state.config.inverterEnabled && !moduleHasFreshSignal("inverter", true, status?.inverter)) {
+      pushAlert("offline-inverter", "inverter offline", "no fresh status from inverter", "alert");
+    }
+    if (state.config.loadControllerEnabled && !moduleHasFreshSignal("loadController", true, status?.loadController)) {
+      pushAlert("offline-load", "load controller offline", "no fresh status from load controller", "alert");
+    }
+    if (state.config.garageEnabled && !moduleHasFreshSignal("garage", true, status?.garage)) {
+      pushAlert("offline-garage", "garage offline", "no fresh status from garage controller", "alert");
+    }
+  }
+
+  const loadCfg = status?.inverter?.loadLogic;
+  if (status?.inverter && loadCfg && Number(status.inverter.loadW) > Number(loadCfg.overloadPowerW || 0)) {
+    pushAlert(
+      "load-overload",
+      "load overload",
+      `LOAD ${num(status.inverter.loadW, 0)}W > ${num(loadCfg.overloadPowerW, 0)}W`,
+      "alert",
+      "load",
+    );
+  }
+
+  const recentHistory = automationHistoryItems(AUTOMATION_HISTORY_DEFAULT_HOURS);
+  if (recentHistory.length) {
+    LOGIC_KEYS.forEach((logicKey) => {
+      if (!caps.logicKeys.includes(logicKey)) return;
+      let transitions = 0;
+      for (let index = 1; index < recentHistory.length; index += 1) {
+        const prev = logicStateValue(logicKey, recentHistory[index - 1]);
+        const curr = logicStateValue(logicKey, recentHistory[index]);
+        if (typeof prev === "boolean" && typeof curr === "boolean" && prev !== curr) {
+          if (recentHistory[recentHistory.length - 1].atMs - recentHistory[index].atMs <= LOGIC_UNSTABLE_WINDOW_MS) {
+            transitions += 1;
+          }
+        }
+      }
+      if (transitions >= LOGIC_UNSTABLE_TRANSITIONS) {
+        pushAlert(
+          `unstable-${logicKey}`,
+          `${logicKey} unstable`,
+          `${transitions} switches in the last 30 min`,
+          "warn",
+          logicKey,
+        );
+      }
+    });
+  }
+
+  return alerts.slice(0, 8);
+}
+
+function renderSystemAlerts() {
+  const strip = document.getElementById("alertsStrip");
+  const list = document.getElementById("alertsList");
+  if (!strip || !list) return;
+  const alerts = state.alerts.active = collectActiveAlerts();
+  if (!alerts.length) {
+    strip.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  strip.hidden = false;
+  list.innerHTML = alerts.map((alert) => `
+    <div class="alert-pill is-${escapeHtml(safeText(alert.severity, "alert"))}">
+      <strong>${escapeHtml(safeText(alert.title, "alert"))}</strong>
+      <span>${escapeHtml(safeText(alert.body, ""))}</span>
+    </div>
+  `).join("");
+}
+
+function applyCapabilityDrivenUi(status) {
+  LOGIC_KEYS.forEach((logicKey) => {
+    const def = getLogicModalDefinition(logicKey);
+    const moduleState = def ? def.getModule(status || {}) : null;
+    const configEnabled = def?.moduleKey === "inverter"
+      ? !!state.config.inverterEnabled
+      : def?.moduleKey === "loadController"
+        ? !!state.config.loadControllerEnabled
+        : def?.moduleKey === "garage"
+          ? !!state.config.garageEnabled
+          : false;
+    const available = configEnabled && isLogicAvailable(logicKey, status);
+    document.querySelectorAll(`[data-open-logic="${logicKey}"]`).forEach((btn) => {
+      btn.hidden = !available;
+      btn.disabled = !available || !moduleState;
+    });
+  });
+}
+
+function renderLogicModal({ force = false } = {}) {
+  if (!isModalOpen("logicModal") && !force) return;
+  const preserveForm = state.logic.formDirty && !force;
+
+  const def = getLogicModalDefinition(state.logic.currentKey);
+  const status = state.status || {};
+  const moduleState = def ? def.getModule(status) : null;
+  const config = def ? def.getConfig(status) : null;
+  const disabled = !def || !moduleState || !config;
+
+  setText("logicModalTitle", def ? def.title : "mode logic");
+  setText("logicModalMode", disabled ? "mode: unavailable" : `mode: ${def.getMode(status)}`);
+  setText("logicModalState", disabled ? "state: unavailable" : `state: ${def.getState(status)}`);
+
+  const factsEl = document.getElementById("logicModalFacts");
+  const alertsEl = document.getElementById("logicModalAlerts");
+  const flowEl = document.getElementById("logicModalFlow");
+  const formEl = document.getElementById("logicModalForm");
+  const fixedNoteEl = document.getElementById("logicModalFixedNote");
+  const saveBtn = document.getElementById("logicModalSave");
+  const historyTitleEl = document.getElementById("logicHistoryTitle");
+  const historyMetaEl = document.getElementById("logicHistoryMeta");
+  const journalEl = document.getElementById("logicJournalList");
+
+  document.querySelectorAll("[data-logic-hours]").forEach((btn) => {
+    btn.classList.toggle("active", Number(btn.getAttribute("data-logic-hours")) === Number(state.logic.historyHours));
+  });
+
+  if (!def || disabled) {
+    if (factsEl) factsEl.innerHTML = '<div class="logic-fact-chip">logic config unavailable</div>';
+    if (alertsEl) alertsEl.innerHTML = "";
+    if (flowEl) flowEl.innerHTML = "";
+    if (formEl) formEl.innerHTML = "";
+    if (fixedNoteEl) fixedNoteEl.textContent = "Update device firmware and refresh status to edit this logic.";
+    if (historyTitleEl) historyTitleEl.textContent = "logic history";
+    if (historyMetaEl) historyMetaEl.textContent = "history unavailable";
+    drawLogicHistoryChart(state.logic.currentKey, config || {}, []);
+    renderEventList(journalEl, [], { emptyText: "logic journal unavailable" });
+    if (saveBtn) saveBtn.disabled = true;
+    return;
+  }
+
+  const facts = def.getFacts(status, config);
+  const steps = def.getSteps(status, config);
+
+  if (factsEl) {
+    factsEl.innerHTML = facts.map((text) => `<div class="logic-fact-chip">${escapeHtml(text)}</div>`).join("");
+  }
+
+  if (alertsEl) {
+    const logicAlerts = (state.alerts.active || []).filter((alert) => {
+      if (alert.logicKey && alert.logicKey === state.logic.currentKey) return true;
+      if (safeText(def.moduleKey, "") === "inverter") return alert.key === "offline-inverter";
+      if (safeText(def.moduleKey, "") === "loadController") return alert.key === "offline-load";
+      if (safeText(def.moduleKey, "") === "garage") return alert.key === "offline-garage";
+      return false;
+    });
+    alertsEl.innerHTML = logicAlerts
+      .slice(0, 4)
+      .map((alert) => `<div class="logic-alert-chip">${escapeHtml(`${alert.title}: ${alert.body}`)}</div>`)
+      .join("");
+  }
+
+  if (flowEl) {
+    flowEl.innerHTML = steps
+      .map(
+        (step, index) => `
+          <div class="logic-step ${escapeHtml(step.tone || "warn")}">
+            <div class="logic-step-index">${String(index + 1).padStart(2, "0")}</div>
+            <div class="logic-step-body">
+              <div class="logic-step-when">${escapeHtml(step.when)}</div>
+              ${step.delay ? `<div class="logic-step-delay">${escapeHtml(step.delay)}</div>` : ""}
+              <div class="logic-step-action">${escapeHtml(step.action)}</div>
+            </div>
+          </div>
+        `,
+      )
+      .join("");
+  }
+
+  const historySamples = automationHistoryItems(state.logic.historyHours);
+  const transitions = deriveLogicTransitions(state.logic.currentKey, historySamples, config);
+  if (historyTitleEl) {
+    historyTitleEl.textContent = `${def.title} history`;
+  }
+  if (historyMetaEl) {
+    historyMetaEl.textContent = historySamples.length
+      ? `window: ${state.logic.historyHours}h | samples: ${historySamples.length} | transitions: ${transitions.length}`
+      : `window: ${state.logic.historyHours}h | history will appear after the first sync`;
+  }
+  drawLogicHistoryChart(state.logic.currentKey, config, historySamples);
+  renderEventList(journalEl, transitions, { emptyText: "no transitions in selected window" });
+
+  if (formEl && !preserveForm) {
+    formEl.innerHTML = def.fields.map((field) => buildLogicFieldMarkup(field, config[field.key], false)).join("");
+    formEl.querySelectorAll("[data-logic-field]").forEach((input) => {
+      input.addEventListener("input", () => {
+        state.logic.formDirty = true;
+      });
+    });
+  }
+
+  if (fixedNoteEl) {
+    fixedNoteEl.textContent = def.fixedNote(config);
+  }
+  if (saveBtn) saveBtn.disabled = false;
+}
+
+function readLogicModalValues(def) {
+  const values = {};
+  for (const field of def.fields) {
+    const input = document.querySelector(`#logicModalForm [data-logic-field="${field.key}"]`);
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error(`missing field ${field.key}`);
+    }
+    const parsed = Number(input.value);
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`${field.label} is invalid`);
+    }
+    values[field.key] = field.step === "1" ? Math.round(parsed) : parsed;
+  }
+  return values;
+}
+
+function openLogicModal(logicKey, returnModalId = "") {
+  if (!getLogicModalDefinition(logicKey) || !isLogicAvailable(logicKey)) return;
+  state.logic.currentKey = logicKey;
+  state.logic.returnModalId = returnModalId || "";
+  state.logic.formDirty = false;
+  if (returnModalId && isModalOpen(returnModalId)) {
+    closeModal(returnModalId);
+  }
+  openModal("logicModal");
+  renderLogicModal({ force: true });
+  void ensureAutomationHistory(Math.max(state.logic.historyHours, AUTOMATION_HISTORY_DEFAULT_HOURS), { silent: true });
+}
+
+async function saveLogicModalConfig() {
+  const def = getLogicModalDefinition(state.logic.currentKey);
+  if (!def) return;
+
+  let values;
+  try {
+    values = readLogicModalValues(def);
+  } catch (error) {
+    showToast(error.message || "invalid logic values");
+    return;
+  }
+
+  try {
+    await bridgeRequest("cmd", (requestId) => {
+      def.invokeSave(values, requestId);
+    });
+    state.logic.formDirty = false;
+    showToast(def.saveSuccessMessage);
+    await requestStatus();
+    renderLogicModal({ force: true });
+  } catch (error) {
+    showToast(`${def.title} failed: ${error.message}`);
+  }
+}
+
+function resetLogicModalForm() {
+  state.logic.formDirty = false;
+  renderLogicModal({ force: true });
 }
 
 function markSchemeSwipeHandled() {
@@ -1609,12 +2755,51 @@ function bindCardEvents() {
     });
   });
 
+  document.querySelectorAll("[data-open-logic]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const logicKey = btn.getAttribute("data-open-logic");
+      if (!logicKey) return;
+      openLogicModal(logicKey, btn.getAttribute("data-logic-parent") || "");
+    });
+  });
+
+  document.querySelectorAll("[data-logic-hours]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const hours = Math.max(1, Math.min(6, Number(btn.getAttribute("data-logic-hours")) || LOGIC_HISTORY_DEFAULT_HOURS));
+      state.logic.historyHours = hours;
+      renderLogicModal({ force: true });
+      await ensureAutomationHistory(Math.max(hours, AUTOMATION_HISTORY_DEFAULT_HOURS), { silent: true });
+    });
+  });
+
   document.querySelectorAll("[data-close-modal]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const modalId = btn.getAttribute("data-close-modal");
       if (modalId) closeModal(modalId);
     });
   });
+
+  const logicSaveBtn = document.getElementById("logicModalSave");
+  if (logicSaveBtn) {
+    logicSaveBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      saveLogicModalConfig();
+    });
+  }
+
+  const logicResetBtn = document.getElementById("logicModalReset");
+  if (logicResetBtn) {
+    logicResetBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      resetLogicModalForm();
+    });
+  }
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
@@ -2262,6 +3447,9 @@ function bindSettings() {
       notifyPumpMode: readChecked("cfgNotifyPump", true),
       notifyBoiler2Mode: readChecked("cfgNotifyBoiler2", true),
       notifyGateState: readChecked("cfgNotifyGate", true),
+      notifyModuleOffline: readChecked("cfgNotifyModuleOffline", true),
+      notifyPowerOverload: readChecked("cfgNotifyPowerOverload", true),
+      notifyLogicUnstable: readChecked("cfgNotifyLogicUnstable", true),
     };
 
     const ok = !!window.AndroidHub.saveConfig(JSON.stringify(nextConfig));
@@ -2312,6 +3500,9 @@ function syncConfigToForm() {
   setCheck("cfgNotifyPump", cfg.notifyPumpMode);
   setCheck("cfgNotifyBoiler2", cfg.notifyBoiler2Mode);
   setCheck("cfgNotifyGate", cfg.notifyGateState);
+  setCheck("cfgNotifyModuleOffline", cfg.notifyModuleOffline);
+  setCheck("cfgNotifyPowerOverload", cfg.notifyPowerOverload);
+  setCheck("cfgNotifyLogicUnstable", cfg.notifyLogicUnstable);
 }
 
 function loadConfigFromBridge() {
@@ -4054,6 +5245,7 @@ function renderPowerScheme({
 
 function renderAll() {
   const status = state.status || {};
+  state.capabilities = buildHubCapabilities(status);
   const inverter = state.config.inverterEnabled ? status.inverter || {} : {};
   const loadController = state.config.loadControllerEnabled ? status.loadController || {} : {};
   const garage = state.config.garageEnabled ? status.garage || {} : {};
@@ -4270,6 +5462,8 @@ function renderAll() {
   updateButtonStates("[data-pump-mode]", safeText(loadController.pumpMode));
   updateButtonStates("[data-boiler2-mode]", safeText(garage.boiler2Mode));
 
+  applyCapabilityDrivenUi(status);
+
   applyLockedActiveButtons("btnLoad", state.locks.inverterLoadOn ? "ON" : "NONE");
   applyLockedActiveButtons("btnBoiler1", state.locks.boiler1);
   applyLockedActiveButtons("btnPump", state.locks.pump);
@@ -4279,6 +5473,9 @@ function renderAll() {
   setText("moduleInvUpdated", moduleUpdatedText(!invOff, inverter));
   setText("moduleLoadUpdated", moduleUpdatedText(!loadOff, loadController));
   setText("moduleGarageUpdated", moduleUpdatedText(!garageOff, garage));
+  state.alerts.active = collectActiveAlerts();
+  renderSystemAlerts();
+  renderLogicModal();
 }
 
 function debounce(fn, waitMs) {
@@ -4303,6 +5500,9 @@ function bindResizeRedraw() {
     if (isModalOpen("timelineModal")) {
       renderLoadTimeline();
     }
+    if (isModalOpen("logicModal")) {
+      renderLogicModal();
+    }
     if (isModalOpen("schemeModal")) {
       fitSchemeStageToViewport();
     }
@@ -4324,6 +5524,7 @@ function initUi() {
   syncConfigToForm();
   applyModuleCardStates();
   applyLiveCardStates(null);
+  renderSystemAlerts();
   setText("pollText", `${clampPoll(state.config.pollIntervalSec)}s`);
   setText("moduleInvUpdated", "--:--:--");
   setText("moduleLoadUpdated", "--:--:--");
