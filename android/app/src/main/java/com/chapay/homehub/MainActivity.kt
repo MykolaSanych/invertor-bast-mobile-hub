@@ -20,16 +20,23 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import com.chapay.homehub.data.AppConfig
 import com.chapay.homehub.data.AppConfigStorage
+import com.chapay.homehub.data.BoilerLogicConfig
 import com.chapay.homehub.data.GarageStatus
+import com.chapay.homehub.data.InverterGridLogicConfig
+import com.chapay.homehub.data.InverterLoadLogicConfig
 import com.chapay.homehub.data.InverterStatus
 import com.chapay.homehub.data.LoadControllerStatus
+import com.chapay.homehub.data.PumpLogicConfig
 import com.chapay.homehub.data.StatusRepository
 import com.chapay.homehub.data.UnifiedStatus
 import com.chapay.homehub.push.EventJournalStore
 import com.chapay.homehub.push.MonitorController
+import com.chapay.homehub.push.RollingStatusHistoryStore
+import com.chapay.homehub.push.StatusChangeProcessor
 import com.chapay.homehub.push.ensureNotificationChannel
 import com.chapay.homehub.widget.StatusWidgetProvider
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
@@ -131,6 +138,9 @@ class MainActivity : ComponentActivity() {
                     notifyPumpMode = parsed.optBoolean("notifyPumpMode", current.notifyPumpMode),
                     notifyBoiler2Mode = parsed.optBoolean("notifyBoiler2Mode", current.notifyBoiler2Mode),
                     notifyGateState = parsed.optBoolean("notifyGateState", current.notifyGateState),
+                    notifyModuleOffline = parsed.optBoolean("notifyModuleOffline", current.notifyModuleOffline),
+                    notifyPowerOverload = parsed.optBoolean("notifyPowerOverload", current.notifyPowerOverload),
+                    notifyLogicUnstable = parsed.optBoolean("notifyLogicUnstable", current.notifyLogicUnstable),
                 )
                 AppConfigStorage.save(this@MainActivity, cfg)
                 MonitorController.applyConfig(this@MainActivity, cfg, runImmediateWorker = true)
@@ -149,7 +159,15 @@ class MainActivity : ComponentActivity() {
                         sendStatus("partial-$requestId-$partialSeq-$moduleKey", status)
                     }
                 }
-                    .onSuccess { status -> sendStatus(requestId, status) }
+                    .onSuccess { status ->
+                        StatusChangeProcessor.process(
+                            context = this@MainActivity,
+                            status = status,
+                            config = cfg,
+                            emitNotifications = false,
+                        )
+                        sendStatus(requestId, status)
+                    }
                     .onFailure { err -> sendStatusError(requestId, err.message ?: "Status request failed") }
             }
         }
@@ -159,7 +177,15 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch {
                 val cfg = AppConfigStorage.load(this@MainActivity)
                 runCatching { repository.requestMulticastRefresh(cfg) }
-                    .onSuccess { status -> sendStatus(requestId, status) }
+                    .onSuccess { status ->
+                        StatusChangeProcessor.process(
+                            context = this@MainActivity,
+                            status = status,
+                            config = cfg,
+                            emitNotifications = false,
+                        )
+                        sendStatus(requestId, status)
+                    }
                     .onFailure { err -> sendStatusError(requestId, err.message ?: "Refresh failed") }
             }
         }
@@ -270,6 +296,15 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun fetchAutomationHistory(hours: Int, requestId: String) {
+            lifecycleScope.launch {
+                runCatching { RollingStatusHistoryStore.toJson(this@MainActivity, hours) }
+                    .onSuccess { payload -> sendDataResult(requestId, payload.toString()) }
+                    .onFailure { err -> sendDataError(requestId, err.message ?: "Automation history load failed") }
+            }
+        }
+
+        @JavascriptInterface
         fun clearEventJournal(requestId: String) {
             lifecycleScope.launch {
                 runCatching {
@@ -297,6 +332,42 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun setInverterGridLogic(
+            pvThresholdW: Double,
+            offDelaySec: Int,
+            onDelaySec: Int,
+            forceGridOnW: Double,
+            requestId: String,
+        ) {
+            runModeCommand(requestId) { cfg ->
+                repository.setInverterGridLogic(
+                    config = cfg,
+                    pvThresholdW = pvThresholdW,
+                    offDelaySec = offDelaySec,
+                    onDelaySec = onDelaySec,
+                    forceGridOnW = forceGridOnW,
+                )
+            }
+        }
+
+        @JavascriptInterface
+        fun setInverterLoadLogic(
+            pvThresholdW: Double,
+            shutdownDelaySec: Int,
+            overloadPowerW: Double,
+            requestId: String,
+        ) {
+            runModeCommand(requestId) { cfg ->
+                repository.setInverterLoadLogic(
+                    config = cfg,
+                    pvThresholdW = pvThresholdW,
+                    shutdownDelaySec = shutdownDelaySec,
+                    overloadPowerW = overloadPowerW,
+                )
+            }
+        }
+
+        @JavascriptInterface
         fun setBoiler1Mode(mode: String, requestId: String) {
             runModeCommand(requestId) { cfg -> repository.setBoiler1Mode(cfg, mode.uppercase()) }
         }
@@ -304,6 +375,27 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun setBoiler1Lock(mode: String, requestId: String) {
             runModeCommand(requestId) { cfg -> repository.setBoiler1Lock(cfg, mode.uppercase()) }
+        }
+
+        @JavascriptInterface
+        fun setBoiler1Logic(
+            pvThresholdW: Double,
+            shutdownDelaySec: Int,
+            batteryShutoffW: Double,
+            batteryResumeW: Double,
+            peerActiveW: Double,
+            requestId: String,
+        ) {
+            runModeCommand(requestId) { cfg ->
+                repository.setBoiler1Logic(
+                    config = cfg,
+                    pvThresholdW = pvThresholdW,
+                    shutdownDelaySec = shutdownDelaySec,
+                    batteryShutoffW = batteryShutoffW,
+                    batteryResumeW = batteryResumeW,
+                    peerActiveW = peerActiveW,
+                )
+            }
         }
 
         @JavascriptInterface
@@ -322,6 +414,21 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun setPumpLogic(
+            pvThresholdW: Double,
+            shutdownDelaySec: Int,
+            requestId: String,
+        ) {
+            runModeCommand(requestId) { cfg ->
+                repository.setPumpLogic(
+                    config = cfg,
+                    pvThresholdW = pvThresholdW,
+                    shutdownDelaySec = shutdownDelaySec,
+                )
+            }
+        }
+
+        @JavascriptInterface
         fun setPumpAutoWindow(enabled: Boolean, start: String, end: String, requestId: String) {
             runModeCommand(requestId) { cfg -> repository.setPumpAutoWindow(cfg, enabled, start, end) }
         }
@@ -334,6 +441,27 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun setBoiler2Lock(mode: String, requestId: String) {
             runModeCommand(requestId) { cfg -> repository.setBoiler2Lock(cfg, mode.uppercase()) }
+        }
+
+        @JavascriptInterface
+        fun setBoiler2Logic(
+            pvThresholdW: Double,
+            shutdownDelaySec: Int,
+            batteryShutoffW: Double,
+            batteryResumeW: Double,
+            peerActiveW: Double,
+            requestId: String,
+        ) {
+            runModeCommand(requestId) { cfg ->
+                repository.setBoiler2Logic(
+                    config = cfg,
+                    pvThresholdW = pvThresholdW,
+                    shutdownDelaySec = shutdownDelaySec,
+                    batteryShutoffW = batteryShutoffW,
+                    batteryResumeW = batteryResumeW,
+                    peerActiveW = peerActiveW,
+                )
+            }
         }
 
         @JavascriptInterface
@@ -424,7 +552,15 @@ class MainActivity : ComponentActivity() {
                 }
                 sendActionResult(requestId, true, null)
                 runCatching { repository.fetchUnified(cfg) }
-                    .onSuccess { status -> sendStatus("refresh-$requestId", status) }
+                    .onSuccess { status ->
+                        StatusChangeProcessor.process(
+                            context = this@MainActivity,
+                            status = status,
+                            config = cfg,
+                            emitNotifications = false,
+                        )
+                        sendStatus("refresh-$requestId", status)
+                    }
                     .onFailure { err ->
                         Log.w("HomeHub", "Refresh after command failed: ${err.message}")
                     }
@@ -499,17 +635,59 @@ private fun configToJson(cfg: AppConfig): JSONObject = JSONObject().apply {
     put("notifyPumpMode", cfg.notifyPumpMode)
     put("notifyBoiler2Mode", cfg.notifyBoiler2Mode)
     put("notifyGateState", cfg.notifyGateState)
+    put("notifyModuleOffline", cfg.notifyModuleOffline)
+    put("notifyPowerOverload", cfg.notifyPowerOverload)
+    put("notifyLogicUnstable", cfg.notifyLogicUnstable)
 }
 
 private fun UnifiedStatus.toJson(): JSONObject = JSONObject().apply {
+    put("schemaVersion", 2)
     put("updatedAtMs", updatedAtMs)
     put("fromMulticast", fromMulticast)
+    put("capabilities", buildHubCapabilitiesJson(this@toJson))
     put("inverter", inverter?.toJson() ?: JSONObject.NULL)
     put("loadController", loadController?.toJson() ?: JSONObject.NULL)
     put("garage", garage?.toJson() ?: JSONObject.NULL)
 }
 
+private fun InverterGridLogicConfig.toJson(): JSONObject = JSONObject().apply {
+    put("pvThresholdW", pvThresholdW)
+    put("offDelaySec", offDelaySec)
+    put("onDelaySec", onDelaySec)
+    put("forceGridOnW", forceGridOnW)
+    put("batteryLowSocPct", batteryLowSocPct)
+    put("offMinSocPct", offMinSocPct)
+}
+
+private fun InverterLoadLogicConfig.toJson(): JSONObject = JSONObject().apply {
+    put("pvThresholdW", pvThresholdW)
+    put("shutdownDelaySec", shutdownDelaySec)
+    put("overloadPowerW", overloadPowerW)
+    put("gridRestoreV", gridRestoreV)
+    put("overloadGridV", overloadGridV)
+}
+
+private fun BoilerLogicConfig.toJson(): JSONObject = JSONObject().apply {
+    put("pvThresholdW", pvThresholdW)
+    put("shutdownDelaySec", shutdownDelaySec)
+    put("batteryShutoffW", batteryShutoffW)
+    put("batteryResumeW", batteryResumeW)
+    put("peerActiveW", peerActiveW)
+    put("gridRestoreV", gridRestoreV)
+    put("batteryReleaseGridV", batteryReleaseGridV)
+    put("batteryReleaseSocPct", batteryReleaseSocPct)
+}
+
+private fun PumpLogicConfig.toJson(): JSONObject = JSONObject().apply {
+    put("pvThresholdW", pvThresholdW)
+    put("shutdownDelaySec", shutdownDelaySec)
+    put("gridRestoreV", gridRestoreV)
+}
+
 private fun InverterStatus.toJson(): JSONObject = JSONObject().apply {
+    put("moduleKey", "inverter")
+    put("available", true)
+    put("capabilities", buildInverterCapabilitiesJson(this@toJson))
     put("pvW", pvW)
     put("gridW", gridW)
     put("loadW", loadW)
@@ -531,6 +709,8 @@ private fun InverterStatus.toJson(): JSONObject = JSONObject().apply {
     put("modeReason", modeReason)
     put("loadMode", loadMode)
     put("loadModeReason", loadModeReason)
+    put("gridLogic", gridLogic?.toJson() ?: JSONObject.NULL)
+    put("loadLogic", loadLogic?.toJson() ?: JSONObject.NULL)
     put("gridRelayOn", gridRelayOn)
     put("gridPresent", gridPresent)
     put("gridRelayReason", gridRelayReason)
@@ -552,6 +732,9 @@ private fun InverterStatus.toJson(): JSONObject = JSONObject().apply {
 }
 
 private fun LoadControllerStatus.toJson(): JSONObject = JSONObject().apply {
+    put("moduleKey", "loadController")
+    put("available", true)
+    put("capabilities", buildLoadControllerCapabilitiesJson(this@toJson))
     put("boiler1Mode", boiler1Mode)
     put("boiler1ModeReason", boiler1ModeReason)
     put("boiler1On", boiler1On)
@@ -562,6 +745,8 @@ private fun LoadControllerStatus.toJson(): JSONObject = JSONObject().apply {
     put("pumpStateReason", pumpStateReason)
     put("boilerLock", boilerLock)
     put("pumpLock", pumpLock)
+    put("boilerLogic", boilerLogic?.toJson() ?: JSONObject.NULL)
+    put("pumpLogic", pumpLogic?.toJson() ?: JSONObject.NULL)
     put("boiler1AutoWindowEnabled", boiler1AutoWindowEnabled)
     put("boiler1AutoWindowStart", boiler1AutoWindowStart)
     put("boiler1AutoWindowEnd", boiler1AutoWindowEnd)
@@ -594,11 +779,15 @@ private fun LoadControllerStatus.toJson(): JSONObject = JSONObject().apply {
 }
 
 private fun GarageStatus.toJson(): JSONObject = JSONObject().apply {
+    put("moduleKey", "garage")
+    put("available", true)
+    put("capabilities", buildGarageCapabilitiesJson(this@toJson))
     put("boiler2Mode", boiler2Mode)
     put("boiler2ModeReason", boiler2ModeReason)
     put("boiler2On", boiler2On)
     put("boiler2StateReason", boiler2StateReason)
     put("boilerLock", boilerLock)
+    put("boilerLogic", boilerLogic?.toJson() ?: JSONObject.NULL)
     put("boiler2AutoWindowEnabled", boiler2AutoWindowEnabled)
     put("boiler2AutoWindowStart", boiler2AutoWindowStart)
     put("boiler2AutoWindowEnd", boiler2AutoWindowEnd)
@@ -628,4 +817,66 @@ private fun GarageStatus.toJson(): JSONObject = JSONObject().apply {
     put("bmeTemp", bmeTemp)
     put("bmeHum", bmeHum)
     put("bmePress", bmePress)
+}
+
+private fun buildHubCapabilitiesJson(status: UnifiedStatus): JSONObject = JSONObject().apply {
+    put("historyHours", 6)
+    put("eventJournal", true)
+    put("automationHistory", true)
+    put(
+        "logicKeys",
+        JSONArray(
+            buildList {
+                if (status.inverter?.gridLogic != null) add("grid")
+                if (status.inverter?.loadLogic != null) add("load")
+                if (status.loadController?.boilerLogic != null) add("boiler1")
+                if (status.loadController?.pumpLogic != null) add("pump")
+                if (status.garage?.boilerLogic != null) add("boiler2")
+            },
+        ),
+    )
+    put(
+        "modules",
+        JSONObject().apply {
+            put("inverter", buildInverterCapabilitiesJson(status.inverter))
+            put("loadController", buildLoadControllerCapabilitiesJson(status.loadController))
+            put("garage", buildGarageCapabilitiesJson(status.garage))
+        },
+    )
+}
+
+private fun buildInverterCapabilitiesJson(status: InverterStatus?): JSONObject = JSONObject().apply {
+    put("available", status != null)
+    put("logicKeys", JSONArray(buildList {
+        if (status?.gridLogic != null) add("grid")
+        if (status?.loadLogic != null) add("load")
+    }))
+    put("history", status != null)
+    put("events", true)
+    put("climate", status?.bmeAvailable == true || status?.bmeExtAvailable == true)
+}
+
+private fun buildLoadControllerCapabilitiesJson(status: LoadControllerStatus?): JSONObject = JSONObject().apply {
+    put("available", status != null)
+    put("logicKeys", JSONArray(buildList {
+        if (status?.boilerLogic != null) add("boiler1")
+        if (status?.pumpLogic != null) add("pump")
+    }))
+    put("history", status != null)
+    put("events", true)
+    put("autoWindow", status != null)
+    put("climate", status?.bmeAvailable == true)
+}
+
+private fun buildGarageCapabilitiesJson(status: GarageStatus?): JSONObject = JSONObject().apply {
+    put("available", status != null)
+    put("logicKeys", JSONArray(buildList {
+        if (status?.boilerLogic != null) add("boiler2")
+    }))
+    put("history", status != null)
+    put("events", true)
+    put("autoWindow", status != null)
+    put("gate", status != null)
+    put("garageLight", status != null)
+    put("climate", status?.bmeAvailable == true)
 }

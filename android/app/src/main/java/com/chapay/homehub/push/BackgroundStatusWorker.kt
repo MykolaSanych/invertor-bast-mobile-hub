@@ -19,16 +19,12 @@ class BackgroundStatusWorker(
 
             val config = AppConfigStorage.load(applicationContext)
             val status = repository.fetchUnified(config)
-
-            val current = StatusSnapshot.fromUnified(status)
-            val previous = StatusSnapshotStore.load(applicationContext)
-            if (previous != null) {
-                LocalEventEngine.detect(applicationContext, previous, current, config).forEach { event ->
-                    showPushNotification(applicationContext, event.title, event.body)
-                }
-            }
-
-            StatusSnapshotStore.save(applicationContext, current)
+            StatusChangeProcessor.process(
+                context = applicationContext,
+                status = status,
+                config = config,
+                emitNotifications = true,
+            )
             StatusWidgetProvider.updateAllWidgets(applicationContext, status)
             Result.success()
         }.getOrElse { error ->

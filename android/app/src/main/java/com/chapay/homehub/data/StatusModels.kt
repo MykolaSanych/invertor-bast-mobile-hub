@@ -1,5 +1,39 @@
 package com.chapay.homehub.data
 
+data class InverterGridLogicConfig(
+    val pvThresholdW: Double,
+    val offDelaySec: Int,
+    val onDelaySec: Int,
+    val forceGridOnW: Double,
+    val batteryLowSocPct: Double,
+    val offMinSocPct: Double,
+)
+
+data class InverterLoadLogicConfig(
+    val pvThresholdW: Double,
+    val shutdownDelaySec: Int,
+    val overloadPowerW: Double,
+    val gridRestoreV: Double,
+    val overloadGridV: Double,
+)
+
+data class BoilerLogicConfig(
+    val pvThresholdW: Double,
+    val shutdownDelaySec: Int,
+    val batteryShutoffW: Double,
+    val batteryResumeW: Double,
+    val peerActiveW: Double,
+    val gridRestoreV: Double,
+    val batteryReleaseGridV: Double,
+    val batteryReleaseSocPct: Double,
+)
+
+data class PumpLogicConfig(
+    val pvThresholdW: Double,
+    val shutdownDelaySec: Int,
+    val gridRestoreV: Double,
+)
+
 data class InverterStatus(
     val pvW: Double,
     val gridW: Double,
@@ -22,6 +56,8 @@ data class InverterStatus(
     val modeReason: String,
     val loadMode: String,
     val loadModeReason: String,
+    val gridLogic: InverterGridLogicConfig?,
+    val loadLogic: InverterLoadLogicConfig?,
     val gridRelayOn: Boolean,
     val gridPresent: Boolean,
     val gridRelayReason: String,
@@ -53,6 +89,8 @@ data class LoadControllerStatus(
     val pumpStateReason: String,
     val boilerLock: String,
     val pumpLock: String,
+    val boilerLogic: BoilerLogicConfig?,
+    val pumpLogic: PumpLogicConfig?,
     val boiler1AutoWindowEnabled: Boolean,
     val boiler1AutoWindowStart: String,
     val boiler1AutoWindowEnd: String,
@@ -90,6 +128,7 @@ data class GarageStatus(
     val boiler2On: Boolean,
     val boiler2StateReason: String,
     val boilerLock: String,
+    val boilerLogic: BoilerLogicConfig?,
     val boiler2AutoWindowEnabled: Boolean,
     val boiler2AutoWindowStart: String,
     val boiler2AutoWindowEnd: String,

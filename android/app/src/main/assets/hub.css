@@ -131,6 +131,56 @@ body {
   font-size: 0.86rem;
 }
 
+.alert-strip {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 77, 109, 0.2);
+  background:
+    linear-gradient(135deg, rgba(44, 11, 18, 0.92), rgba(18, 10, 24, 0.92)),
+    radial-gradient(circle at top right, rgba(255, 179, 71, 0.18), transparent 40%);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.18);
+}
+
+.alert-strip[hidden] {
+  display: none;
+}
+
+.alert-strip-title {
+  margin-bottom: 8px;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 214, 204, 0.72);
+}
+
+.alert-strip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.alert-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.alert-pill strong {
+  color: #ffd7cb;
+}
+
+.alert-pill.is-info strong {
+  color: #d7f7ff;
+}
+
 .status-block {
   display: inline-flex;
   align-items: center;
@@ -1448,6 +1498,28 @@ body {
   justify-content: center;
 }
 
+.modal-tools-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.logic-launch-btn {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 179, 71, 0.35);
+  background: rgba(255, 179, 71, 0.12);
+  color: var(--text);
+  padding: 7px 12px;
+  font-weight: 700;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.logic-launch-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .auto-window-toolbar {
   display: flex;
   align-items: center;
@@ -1570,6 +1642,261 @@ body {
   color: var(--muted);
 }
 
+.logic-modal-box {
+  width: min(760px, 96vw);
+}
+
+.logic-meta-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.logic-meta-pill {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.logic-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.logic-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.logic-fact-chip {
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(79, 124, 255, 0.2);
+  background: rgba(79, 124, 255, 0.08);
+  font-size: 0.76rem;
+  color: var(--text);
+}
+
+.logic-alert-chip {
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 77, 109, 0.24);
+  background: rgba(255, 77, 109, 0.1);
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.logic-history-shell {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 179, 71, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(6, 10, 22, 0.08)),
+    radial-gradient(circle at top right, rgba(255, 179, 71, 0.12), transparent 45%);
+}
+
+.logic-history-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.logic-history-title,
+.logic-journal-title {
+  font-size: 0.82rem;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+}
+
+.logic-history-range {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.logic-history-range .action-btn.active {
+  border-color: rgba(255, 179, 71, 0.45);
+  box-shadow: 0 0 12px rgba(255, 179, 71, 0.18);
+}
+
+.logic-history-meta {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.logic-history-canvas-wrap {
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(6, 10, 22, 0.85);
+}
+
+.logic-history-canvas-wrap canvas {
+  width: 100%;
+  min-width: 560px;
+  display: block;
+}
+
+.logic-flow {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.logic-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.logic-step::after {
+  content: "";
+  position: absolute;
+  left: 33px;
+  bottom: -12px;
+  width: 2px;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.logic-step:last-child::after {
+  display: none;
+}
+
+.logic-step.good {
+  border-color: rgba(51, 255, 153, 0.18);
+}
+
+.logic-step.warn {
+  border-color: rgba(255, 179, 71, 0.18);
+}
+
+.logic-step.alert {
+  border-color: rgba(255, 77, 109, 0.2);
+}
+
+.logic-step-index {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(6, 10, 22, 0.85);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+}
+
+.logic-step-body {
+  display: grid;
+  gap: 6px;
+}
+
+.logic-step-when {
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.logic-step-delay {
+  display: inline-flex;
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(0, 230, 255, 0.08);
+  border: 1px solid rgba(0, 230, 255, 0.18);
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.logic-step-action {
+  font-size: 0.8rem;
+  color: var(--neon-cyan);
+}
+
+.logic-editor-block {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(79, 124, 255, 0.2);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.logic-editor-title {
+  font-size: 0.82rem;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+}
+
+.logic-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.logic-field {
+  display: grid;
+  gap: 5px;
+}
+
+.logic-field-label {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.logic-field-input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(79, 124, 255, 0.3);
+  background: rgba(6, 10, 22, 0.85);
+  color: var(--text);
+  padding: 10px 12px;
+  font-family: inherit;
+}
+
+.logic-fixed-note {
+  min-height: 18px;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.logic-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.logic-journal {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.logic-journal-list {
+  max-height: 30vh;
+}
+
 .settings-form {
   display: grid;
   gap: 10px;
@@ -1649,6 +1976,12 @@ body {
   font-size: 0.8rem;
 }
 
+.action-btn.tiny {
+  padding: 5px 9px;
+  font-size: 0.72rem;
+  border-radius: 999px;
+}
+
 .action-btn.icon-only {
   width: 34px;
   height: 34px;
@@ -1711,6 +2044,16 @@ body {
   text-align: left;
 }
 
+.event-item.severity-alert {
+  border-color: rgba(255, 77, 109, 0.34);
+  background: rgba(44, 11, 18, 0.82);
+}
+
+.event-item.severity-warn {
+  border-color: rgba(255, 179, 71, 0.34);
+  background: rgba(36, 21, 7, 0.82);
+}
+
 .event-item-head {
   display: flex;
   justify-content: space-between;
@@ -1735,6 +2078,14 @@ body {
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.35;
+}
+
+.event-item-meta {
+  margin-top: 5px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(230, 241, 255, 0.5);
 }
 
 .event-item-empty {
@@ -1879,6 +2230,10 @@ body {
 @media (max-width: 620px) {
   .chart-modal-box {
     width: 95vw;
+  }
+
+  .logic-form-grid {
+    grid-template-columns: 1fr;
   }
 
   .graph-canvas {

@@ -8,6 +8,9 @@ data class EventJournalEntry(
     val atMs: Long,
     val title: String,
     val body: String,
+    val severity: String = "info",
+    val kind: String = "event",
+    val module: String = "hub",
 )
 
 object EventJournalStore {
@@ -16,7 +19,15 @@ object EventJournalStore {
     private const val MAX_ENTRIES = 300
     private val lock = Any()
 
-    fun append(context: Context, title: String, body: String, atMs: Long = System.currentTimeMillis()) {
+    fun append(
+        context: Context,
+        title: String,
+        body: String,
+        atMs: Long = System.currentTimeMillis(),
+        severity: String = "info",
+        kind: String = "event",
+        module: String = "hub",
+    ) {
         synchronized(lock) {
             val entries = loadEntriesUnsafe(context)
             entries.add(
@@ -24,6 +35,9 @@ object EventJournalStore {
                     atMs = atMs,
                     title = title.trim(),
                     body = body.trim(),
+                    severity = severity.trim().ifEmpty { "info" },
+                    kind = kind.trim().ifEmpty { "event" },
+                    module = module.trim().ifEmpty { "hub" },
                 ),
             )
             while (entries.size > MAX_ENTRIES) {
@@ -56,6 +70,9 @@ object EventJournalStore {
                         put("atMs", entry.atMs)
                         put("title", entry.title)
                         put("body", entry.body)
+                        put("severity", entry.severity)
+                        put("kind", entry.kind)
+                        put("module", entry.module)
                     },
                 )
             }
@@ -78,8 +95,11 @@ object EventJournalStore {
             val atMs = obj.optLong("atMs", 0L)
             val title = obj.optString("title", "").trim()
             val body = obj.optString("body", "").trim()
+            val severity = obj.optString("severity", "info").trim().ifEmpty { "info" }
+            val kind = obj.optString("kind", "event").trim().ifEmpty { "event" }
+            val module = obj.optString("module", "hub").trim().ifEmpty { "hub" }
             if (atMs <= 0L || title.isEmpty()) continue
-            out.add(EventJournalEntry(atMs, title, body))
+            out.add(EventJournalEntry(atMs, title, body, severity, kind, module))
         }
         return out
     }
@@ -92,6 +112,9 @@ object EventJournalStore {
                     put("atMs", entry.atMs)
                     put("title", entry.title)
                     put("body", entry.body)
+                    put("severity", entry.severity)
+                    put("kind", entry.kind)
+                    put("module", entry.module)
                 },
             )
         }
