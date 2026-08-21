@@ -1,10 +1,10 @@
 const DEFAULT_CONFIG = {
   inverterBaseUrl: "http://192.168.1.2",
-  inverterPassword: "REDACTED-ROTATED-PASSWORD",
+  inverterPassword: "keP8OsYo_MbyuWMkbSuiDe8N",
   loadControllerBaseUrl: "http://192.168.1.3",
-  loadControllerPassword: "REDACTED-ROTATED-PASSWORD",
+  loadControllerPassword: "keP8OsYo_MbyuWMkbSuiDe8N",
   garageBaseUrl: "http://192.168.1.4",
-  garagePassword: "REDACTED-ROTATED-PASSWORD",
+  garagePassword: "keP8OsYo_MbyuWMkbSuiDe8N",
   pollIntervalSec: 5,
   inverterEnabled: true,
   loadControllerEnabled: true,

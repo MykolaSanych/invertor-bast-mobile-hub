@@ -2,7 +2,7 @@ package com.chapay.homehub.data
 
 import android.content.Context
 
-private const val DEFAULT_WEB_PASSWORD = "REDACTED-ROTATED-PASSWORD"
+private const val DEFAULT_WEB_PASSWORD = "keP8OsYo_MbyuWMkbSuiDe8N"
 private const val LEGACY_WEB_PASSWORD = "admin"
 
 data class AppConfig(

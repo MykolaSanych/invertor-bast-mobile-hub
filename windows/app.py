@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_WEB_PASSWORD = "REDACTED-ROTATED-PASSWORD"
+DEFAULT_WEB_PASSWORD = "keP8OsYo_MbyuWMkbSuiDe8N"
 LEGACY_WEB_PASSWORD = "admin"
 TIME_SYNC_BROWSER_PATH = "/api/time/syncbrowser"
 PV_ACTIVE_THRESHOLD_W = 80.0
