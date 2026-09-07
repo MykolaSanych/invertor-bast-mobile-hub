@@ -1,32 +1,32 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">my Home</string>
-    <string name="notif_channel_name">Home Events</string>
-    <string name="notif_channel_desc">Події будинку: PV/GRID/режими/ворота</string>
-    <string name="monitor_channel_name">Background Monitor</string>
+    <string name="app_name">Мій дім</string>
+    <string name="notif_channel_name">Події будинку</string>
+    <string name="notif_channel_desc">Події будинку: PV/мережа/режими/ворота</string>
+    <string name="monitor_channel_name">Фоновий моніторинг</string>
     <string name="monitor_channel_desc">Локальний фоновий моніторинг модулів</string>
-    <string name="monitor_notification_title">my Home monitor</string>
-    <string name="widget_status_name">my Home status</string>
+    <string name="monitor_notification_title">Моніторинг мого дому</string>
+    <string name="widget_status_name">Статус мого дому</string>
     <string name="widget_status_description">Статус будинку: температура та енергетичні показники</string>
-    <string name="widget_status_title">my Home</string>
+    <string name="widget_status_title">Мій дім</string>
     <string name="widget_status_waiting">Оновлення...</string>
     <string name="widget_status_updated_at">Оновлено: %1$s</string>
-    <string name="widget_metric_outside_temp">OUT</string>
+    <string name="widget_metric_outside_temp">ЗОВН</string>
     <string name="widget_metric_pv_power">PV</string>
-    <string name="widget_metric_grid_power">GRID</string>
-    <string name="widget_metric_load_power">LOAD</string>
-    <string name="widget_metric_battery_power">BAT</string>
-    <string name="widget_metric_battery_soc">BAT</string>
-    <string name="widget_gate_name">my Home gate</string>
-    <string name="widget_gate_description">Gate control button and state indicator</string>
-    <string name="widget_gate_state_open">open</string>
-    <string name="widget_gate_state_closed">closed</string>
-    <string name="widget_gate_state_moving">moving</string>
-    <string name="widget_gate_state_stopped">stopped</string>
-    <string name="widget_gate_state_unknown">unknown</string>
-    <string name="widget_gate_state_disabled">disabled</string>
-    <string name="widget_gate_action_open">open</string>
-    <string name="widget_gate_action_close">close</string>
-    <string name="widget_gate_action_stop">stop</string>
-    <string name="widget_gate_action_disabled">disabled</string>
+    <string name="widget_metric_grid_power">МЕР</string>
+    <string name="widget_metric_load_power">НАВ</string>
+    <string name="widget_metric_battery_power">АКБ</string>
+    <string name="widget_metric_battery_soc">АКБ</string>
+    <string name="widget_gate_name">Ворота мого дому</string>
+    <string name="widget_gate_description">Кнопка керування воротами та індикатор стану</string>
+    <string name="widget_gate_state_open">відчинено</string>
+    <string name="widget_gate_state_closed">зачинено</string>
+    <string name="widget_gate_state_moving">рухаються</string>
+    <string name="widget_gate_state_stopped">зупинено</string>
+    <string name="widget_gate_state_unknown">невідомо</string>
+    <string name="widget_gate_state_disabled">вимкнено</string>
+    <string name="widget_gate_action_open">відчинити</string>
+    <string name="widget_gate_action_close">зачинити</string>
+    <string name="widget_gate_action_stop">стоп</string>
+    <string name="widget_gate_action_disabled">вимкнено</string>
 </resources>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>my Home</title>
+  <title>Мій дім</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Playpen+Sans:wght@300;500;700&display=swap" rel="stylesheet">
@@ -13,56 +13,56 @@
   <div class="container">
     <header class="compact-header">
       <div class="header-row">
-        <div class="header-title clickable-title" id="appHeaderTitle">my home</div>
+        <div class="header-title clickable-title" id="appHeaderTitle">мій дім</div>
         <div class="header-actions">
-          <button class="action-btn small icon-only" id="eventsOpenBtn" type="button" aria-label="open event journal" title="event journal">
-            <span class="event-icon" aria-hidden="true">EV</span>
+          <button class="action-btn small icon-only" id="eventsOpenBtn" type="button" aria-label="відкрити журнал подій" title="журнал подій">
+            <span class="event-icon" aria-hidden="true">Ж</span>
           </button>
-          <button class="action-btn small icon-only" id="logsOpenBtn" type="button" aria-label="open logs" title="saved logs">
+          <button class="action-btn small icon-only" id="logsOpenBtn" type="button" aria-label="відкрити логи" title="збережені логи">
             <span class="floppy-icon" aria-hidden="true"></span>
           </button>
-          <button class="action-btn small" id="schemeOpenBtn" type="button" aria-label="open power scheme">scheme</button>
-          <button class="action-btn small" id="settingsOpenBtn" type="button">settings</button>
+          <button class="action-btn small" id="schemeOpenBtn" type="button" aria-label="відкрити схему живлення">схема</button>
+          <button class="action-btn small" id="settingsOpenBtn" type="button">налаштування</button>
         </div>
       </div>
-      <div class="compact-subtitle">solar system | made for Chapay's house | made by Chapay</div>
+      <div class="compact-subtitle">сонячна система | дім Chapay</div>
     </header>
 
     <section class="compact-header compact-status-shell">
       <div class="compact-status-header">
         <span class="status-block">
-          <span class="status-label">time</span>
+          <span class="status-label">час</span>
           <span class="status-value" id="realTime">--:--:--</span>
         </span>
         <span class="status-divider">|</span>
         <span class="status-block">
-          <span class="detail-label">in:</span>
-          <span class="detail-value"><span id="lineVoltage">0</span> V</span>
+          <span class="detail-label">вхід:</span>
+          <span class="detail-value"><span id="lineVoltage">0</span> В</span>
         </span>
         <span class="status-divider">|</span>
         <span class="status-block">
-          <span class="detail-label">pv:</span>
-          <span class="detail-value"><span id="pvPowerTop">0</span> W</span>
+          <span class="detail-label">PV:</span>
+          <span class="detail-value"><span id="pvPowerTop">0</span> Вт</span>
         </span>
         <span class="status-divider">|</span>
         <span class="status-block">
-          <span class="detail-label">grid:</span>
-          <span class="detail-value"><span id="gridPowerTop">0</span> W</span>
+          <span class="detail-label">мережа:</span>
+          <span class="detail-value"><span id="gridPowerTop">0</span> Вт</span>
         </span>
         <span class="status-divider">|</span>
         <span class="status-block">
-          <span class="detail-label">load:</span>
-          <span class="detail-value"><span id="loadPowerTop">0</span> W</span>
+          <span class="detail-label">наван.:</span>
+          <span class="detail-value"><span id="loadPowerTop">0</span> Вт</span>
         </span>
         <span class="status-divider">|</span>
         <span class="status-block">
-          <span class="detail-label">bat:</span>
+          <span class="detail-label">АКБ:</span>
           <span class="detail-value"><span id="batterySocTop">0</span>%</span>
         </span>
         <span class="status-divider">|</span>
         <span class="status-block">
-          <span class="detail-label">bat pwr:</span>
-          <span class="detail-value"><span id="batteryPowerTop">0</span> W</span>
+          <span class="detail-label">потуж. АКБ:</span>
+          <span class="detail-value"><span id="batteryPowerTop">0</span> Вт</span>
         </span>
         <span class="status-divider">|</span>
         <span class="status-block">
@@ -74,141 +74,149 @@
     </section>
 
     <section class="alert-strip" id="alertsStrip" hidden>
-      <div class="alert-strip-title">system alerts</div>
+      <div class="alert-strip-title">сповіщення системи</div>
       <div class="alert-strip-list" id="alertsList"></div>
     </section>
 
     <section class="climate-wide-card clickable" id="climateWideCard">
       <div class="climate-wide-header">
-        <div class="climate-wide-title">climate sensors</div>
-        <div class="climate-wide-sub" id="climateUpdated">updated: --:--:--</div>
+        <div class="climate-wide-title">датчики клімату</div>
+        <div class="climate-wide-sub" id="climateUpdated">оновлено: --:--:--</div>
       </div>
       <div class="climate-zone-list" id="climateZoneList">
         <div class="climate-zone-row">
-          <span class="climate-zone-name">zone</span>
-          <span class="climate-zone-values">-- C / -- % / -- hPa</span>
+          <span class="climate-zone-name">зона</span>
+          <span class="climate-zone-values">-- °C / -- % / -- гПа</span>
         </div>
       </div>
-      <div class="climate-wide-foot">tap to open climate chart</div>
+      <div class="climate-wide-foot">натисніть, щоб відкрити графік клімату</div>
     </section>
 
     <section class="cards-grid">
       <article class="data-card pv clickable" id="cardPv">
+        <button class="card-event-log-btn" type="button" data-card-events-btn="cardPv" aria-label="події сонячної панелі" title="події сонячної панелі">ж</button>
         <div class="card-icon">PV</div>
-        <div class="card-title">solar</div>
-        <div class="card-value pv-value"><span id="pvValue">0</span><span class="status-unit">W</span></div>
+        <div class="card-title">сонце</div>
+        <div class="card-value pv-value"><span id="pvValue">0</span><span class="status-unit">Вт</span></div>
         <div class="card-details">
-          <div class="detail-row"><span class="detail-label">voltage:</span><span class="detail-value"><span id="pvVoltage">0</span> V</span></div>
-          <div class="detail-row"><span class="detail-label">daily gen:</span><span class="detail-value"><span id="dailyPV">0</span> Wh</span></div>
-          <div class="detail-row"><span class="detail-label">last data:</span><span class="detail-value"><span id="lastUpdatePV">--:--:--</span></span></div>
+          <div class="detail-row"><span class="detail-label">напруга:</span><span class="detail-value"><span id="pvVoltage">0</span> В</span></div>
+          <div class="detail-row"><span class="detail-label">за добу:</span><span class="detail-value"><span id="dailyPV">0</span> Вт·год</span></div>
+          <div class="detail-row"><span class="detail-label">останні дані:</span><span class="detail-value"><span id="lastUpdatePV">--:--:--</span></span></div>
         </div>
       </article>
 
       <article class="data-card grid clickable" id="cardGrid">
-        <div class="card-icon">GR <span class="grid-presence-badge is-absent" id="gridPresenceBadge">gr</span></div>
-        <div class="card-title">grid</div>
-        <div class="card-value grid-value"><span id="gridValue">0</span><span class="status-unit">W</span></div>
+        <button class="card-event-log-btn" type="button" data-card-events-btn="cardGrid" aria-label="події мережі" title="події мережі">ж</button>
+        <div class="card-icon">МЕР <span class="grid-presence-badge is-absent" id="gridPresenceBadge">мер</span></div>
+        <div class="card-title">мережа</div>
+        <div class="card-value grid-value"><span id="gridValue">0</span><span class="status-unit">Вт</span></div>
         <div class="card-indicators">
-          <span class="mini-indicator" id="gridModeIndicator">mode: ---</span>
-          <span class="mini-indicator" id="gridStateIndicator">state: ---</span>
+          <span class="mini-indicator" id="gridModeIndicator">режим: ---</span>
+          <span class="mini-indicator" id="gridStateIndicator">стан: ---</span>
         </div>
         <div class="card-details">
-          <div class="detail-row"><span class="detail-label">voltage:</span><span class="detail-value"><span id="gridVoltage">0</span> V</span></div>
-          <div class="detail-row"><span class="detail-label">frequency:</span><span class="detail-value"><span id="gridFrequency">0</span> Hz</span></div>
-          <div class="detail-row"><span class="detail-label">daily use:</span><span class="detail-value"><span id="dailyGrid">0</span> Wh</span></div>
+          <div class="detail-row"><span class="detail-label">напруга:</span><span class="detail-value"><span id="gridVoltage">0</span> В</span></div>
+          <div class="detail-row"><span class="detail-label">частота:</span><span class="detail-value"><span id="gridFrequency">0</span> Гц</span></div>
+          <div class="detail-row"><span class="detail-label">за добу:</span><span class="detail-value"><span id="dailyGrid">0</span> Вт·год</span></div>
         </div>
       </article>
 
       <article class="data-card battery clickable" id="cardBattery">
-        <div class="card-icon">BAT</div>
-        <div class="card-title">battery</div>
+        <button class="card-event-log-btn" type="button" data-card-events-btn="cardBattery" aria-label="події акумулятора" title="події акумулятора">ж</button>
+        <div class="card-icon">АКБ</div>
+        <div class="card-title">акумулятор</div>
         <div class="card-value battery-value"><span id="batteryValueMain">0</span><span class="status-unit">%</span></div>
         <div class="card-details">
-          <div class="detail-row"><span class="detail-label">voltage:</span><span class="detail-value"><span id="batteryVoltage">0</span> V</span></div>
-          <div class="detail-row"><span class="detail-label">power:</span><span class="detail-value"><span id="batteryPower">0</span> W</span></div>
-          <div class="detail-row"><span class="detail-label">temperature:</span><span class="detail-value"><span id="inverterTemp">0</span> C</span></div>
+          <div class="detail-row"><span class="detail-label">напруга:</span><span class="detail-value"><span id="batteryVoltage">0</span> В</span></div>
+          <div class="detail-row"><span class="detail-label">потужність:</span><span class="detail-value"><span id="batteryPower">0</span> Вт</span></div>
+          <div class="detail-row"><span class="detail-label">температура:</span><span class="detail-value"><span id="inverterTemp">0</span> °C</span></div>
         </div>
       </article>
 
       <article class="data-card load clickable" id="cardLoad">
-        <div class="card-icon">LD</div>
-        <div class="card-title">load</div>
-        <div class="card-value load-value"><span id="loadValue">0</span><span class="status-unit">W</span></div>
+        <button class="card-event-log-btn" type="button" data-card-events-btn="cardLoad" aria-label="події навантаження" title="події навантаження">ж</button>
+        <div class="card-icon">НАВ</div>
+        <div class="card-title">навантаження</div>
+        <div class="card-value load-value"><span id="loadValue">0</span><span class="status-unit">Вт</span></div>
         <div class="card-indicators">
-          <span class="mini-indicator" id="loadModeIndicator">mode: ---</span>
-          <span class="mini-indicator" id="loadStateIndicator">state: ---</span>
+          <span class="mini-indicator" id="loadModeIndicator">режим: ---</span>
+          <span class="mini-indicator" id="loadStateIndicator">стан: ---</span>
         </div>
         <div class="card-details">
-          <div class="detail-row"><span class="detail-label">voltage:</span><span class="detail-value"><span id="outputVoltage">0</span> V</span></div>
-          <div class="detail-row"><span class="detail-label">frequency:</span><span class="detail-value"><span id="outputFrequency">0</span> Hz</span></div>
-          <div class="detail-row"><span class="detail-label">daily use:</span><span class="detail-value"><span id="dailyHome">0</span> Wh</span></div>
+          <div class="detail-row"><span class="detail-label">напруга:</span><span class="detail-value"><span id="outputVoltage">0</span> В</span></div>
+          <div class="detail-row"><span class="detail-label">частота:</span><span class="detail-value"><span id="outputFrequency">0</span> Гц</span></div>
+          <div class="detail-row"><span class="detail-label">за добу:</span><span class="detail-value"><span id="dailyHome">0</span> Вт·год</span></div>
         </div>
       </article>
 
       <article class="data-card boiler clickable" id="cardBoiler1">
-        <div class="card-icon">B1</div>
-        <div class="card-title">boiler1</div>
-        <div class="card-value boiler-value"><span id="boiler1Power">0</span><span class="status-unit">W</span></div>
+        <button class="card-event-log-btn" type="button" data-card-events-btn="cardBoiler1" aria-label="події бойлера 1" title="події бойлера 1">ж</button>
+        <div class="card-icon">Б1</div>
+        <div class="card-title">бойлер 1</div>
+        <div class="card-value boiler-value"><span id="boiler1Power">0</span><span class="status-unit">Вт</span></div>
         <div class="card-details">
-          <div class="detail-row"><span class="detail-label">mode:</span><span class="detail-value" id="boiler1Mode">---</span></div>
-          <div class="detail-row"><span class="detail-label">current:</span><span class="detail-value"><span id="boiler1Current">0</span> A</span></div>
-          <div class="detail-row"><span class="detail-label">daily use:</span><span class="detail-value"><span id="boiler1Daily">0</span> Wh</span></div>
-          <div class="detail-row"><span class="detail-label">state:</span><span class="detail-value" id="boiler1State">---</span></div>
+          <div class="detail-row"><span class="detail-label">режим:</span><span class="detail-value" id="boiler1Mode">---</span></div>
+          <div class="detail-row"><span class="detail-label">струм:</span><span class="detail-value"><span id="boiler1Current">0</span> А</span></div>
+          <div class="detail-row"><span class="detail-label">за добу:</span><span class="detail-value"><span id="boiler1Daily">0</span> Вт·год</span></div>
+          <div class="detail-row"><span class="detail-label">стан:</span><span class="detail-value" id="boiler1State">---</span></div>
         </div>
       </article>
 
       <article class="data-card pump clickable" id="cardPump">
-        <div class="card-icon">P1</div>
-        <div class="card-title">pump</div>
-        <div class="card-value pump-value"><span id="pumpPower">0</span><span class="status-unit">W</span></div>
+        <button class="card-event-log-btn" type="button" data-card-events-btn="cardPump" aria-label="події насоса" title="події насоса">ж</button>
+        <div class="card-icon">НС</div>
+        <div class="card-title">насос</div>
+        <div class="card-value pump-value"><span id="pumpPower">0</span><span class="status-unit">Вт</span></div>
         <div class="card-details">
-          <div class="detail-row"><span class="detail-label">mode:</span><span class="detail-value" id="pumpMode">---</span></div>
-          <div class="detail-row"><span class="detail-label">current:</span><span class="detail-value"><span id="pumpCurrent">0</span> A</span></div>
-          <div class="detail-row"><span class="detail-label">daily use:</span><span class="detail-value"><span id="pumpDaily">0</span> Wh</span></div>
-          <div class="detail-row"><span class="detail-label">state:</span><span class="detail-value" id="pumpState">---</span></div>
+          <div class="detail-row"><span class="detail-label">режим:</span><span class="detail-value" id="pumpMode">---</span></div>
+          <div class="detail-row"><span class="detail-label">струм:</span><span class="detail-value"><span id="pumpCurrent">0</span> А</span></div>
+          <div class="detail-row"><span class="detail-label">за добу:</span><span class="detail-value"><span id="pumpDaily">0</span> Вт·год</span></div>
+          <div class="detail-row"><span class="detail-label">стан:</span><span class="detail-value" id="pumpState">---</span></div>
         </div>
       </article>
 
       <article class="data-card boiler clickable" id="cardBoiler2">
-        <div class="card-icon">B2</div>
-        <div class="card-title">boiler2</div>
-        <div class="card-value boiler-value"><span id="boiler2Power">0</span><span class="status-unit">W</span></div>
+        <button class="card-event-log-btn" type="button" data-card-events-btn="cardBoiler2" aria-label="події бойлера 2" title="події бойлера 2">ж</button>
+        <div class="card-icon">Б2</div>
+        <div class="card-title">бойлер 2</div>
+        <div class="card-value boiler-value"><span id="boiler2Power">0</span><span class="status-unit">Вт</span></div>
         <div class="card-details">
-          <div class="detail-row"><span class="detail-label">mode:</span><span class="detail-value" id="boiler2Mode">---</span></div>
-          <div class="detail-row"><span class="detail-label">current:</span><span class="detail-value"><span id="boiler2Current">0</span> A</span></div>
-          <div class="detail-row"><span class="detail-label">daily use:</span><span class="detail-value"><span id="boiler2Daily">0</span> Wh</span></div>
-          <div class="detail-row"><span class="detail-label">state:</span><span class="detail-value" id="boiler2State">---</span></div>
+          <div class="detail-row"><span class="detail-label">режим:</span><span class="detail-value" id="boiler2Mode">---</span></div>
+          <div class="detail-row"><span class="detail-label">струм:</span><span class="detail-value"><span id="boiler2Current">0</span> А</span></div>
+          <div class="detail-row"><span class="detail-label">за добу:</span><span class="detail-value"><span id="boiler2Daily">0</span> Вт·год</span></div>
+          <div class="detail-row"><span class="detail-label">стан:</span><span class="detail-value" id="boiler2State">---</span></div>
         </div>
       </article>
 
       <article class="data-card door clickable" id="cardGate">
-        <div class="card-icon">DR</div>
-        <div class="card-title">garage</div>
+        <button class="card-event-log-btn" type="button" data-card-events-btn="cardGate" aria-label="події гаража" title="події гаража">ж</button>
+        <div class="card-icon">ГАР</div>
+        <div class="card-title">гараж</div>
         <div class="door-action">
-          <button class="door-action-btn is-stop" id="gateActionBtn" type="button" aria-label="gate action">stop</button>
-          <button class="door-action-btn garage-light-btn" id="garageLightActionBtn" type="button" aria-label="garage light action">
-            light
+          <button class="door-action-btn is-stop" id="gateActionBtn" type="button" aria-label="дія з воротами" data-gate-action>стоп</button>
+          <button class="door-action-btn garage-light-btn" id="garageLightActionBtn" type="button" aria-label="перемкнути світло гаража" data-garage-light-action>
+            світло
           </button>
         </div>
         <div class="card-details">
-          <div class="detail-row"><span class="detail-label">state:</span><span class="detail-value" id="gateState">---</span></div>
-          <div class="detail-row"><span class="detail-label">reason:</span><span class="detail-value" id="gateReason">---</span></div>
-          <div class="detail-row"><span class="detail-label">light:</span><span class="detail-value" id="garageLightState">---</span></div>
+          <div class="detail-row"><span class="detail-label">стан:</span><span class="detail-value" id="gateState">---</span></div>
+          <div class="detail-row"><span class="detail-label">причина:</span><span class="detail-value" id="gateReason">---</span></div>
+          <div class="detail-row"><span class="detail-label">світло:</span><span class="detail-value" id="garageLightState">---</span></div>
         </div>
       </article>
     </section>
 
     <footer class="compact-footer">
       <div class="compact-footer-info">
-        <div class="compact-footer-item"><span>last update:</span><span id="lastUpdateText">--:--:--</span></div>
-        <div class="compact-footer-item"><span>poll:</span><span id="pollText">5s</span></div>
+        <div class="compact-footer-item"><span>оновлено:</span><span id="lastUpdateText">--:--:--</span></div>
+        <div class="compact-footer-item"><span>опитування:</span><span id="pollText">5с</span></div>
       </div>
       <div class="compact-footer-modules">
-        <div class="compact-footer-item"><span>inv:</span><span id="moduleInvUpdated">--:--:--</span></div>
-        <div class="compact-footer-item"><span>load:</span><span id="moduleLoadUpdated">--:--:--</span></div>
-        <div class="compact-footer-item"><span>garage:</span><span id="moduleGarageUpdated">--:--:--</span></div>
+        <div class="compact-footer-item"><span>інв:</span><span id="moduleInvUpdated">--:--:--</span></div>
+        <div class="compact-footer-item"><span>наван:</span><span id="moduleLoadUpdated">--:--:--</span></div>
+        <div class="compact-footer-item"><span>гараж:</span><span id="moduleGarageUpdated">--:--:--</span></div>
       </div>
-      <div>solar system | made for Chapay's house | made by Chapay</div>
+      <div>сонячна система | дім Chapay</div>
     </footer>
   </div>
 
@@ -216,19 +224,20 @@
     <div class="chart-overlay" data-close-modal="energyModal"></div>
     <div class="chart-box chart-modal-box">
       <div class="chart-header">
-        <div class="chart-title" id="energyChartTitle">energy graph</div>
-        <button class="close-graph-btn" type="button" data-close-modal="energyModal">x</button>
+        <div class="chart-title" id="energyChartTitle">графік енергії</div>
+        <button class="close-graph-btn" type="button" data-close-modal="energyModal">×</button>
       </div>
       <div class="chart-toolbar">
         <div class="period-radio-group">
-          <label class="period-radio"><input type="radio" name="energyPeriod" value="daily" checked>day</label>
-          <label class="period-radio"><input type="radio" name="energyPeriod" value="monthly">month</label>
-          <label class="period-radio"><input type="radio" name="energyPeriod" value="yearly">year</label>
+          <label class="period-radio"><input type="radio" name="energyPeriod" value="daily" checked>день</label>
+          <label class="period-radio"><input type="radio" name="energyPeriod" value="monthly">місяць</label>
+          <label class="period-radio"><input type="radio" name="energyPeriod" value="yearly">рік</label>
         </div>
         <input id="energyDateInput" class="period-input" type="date">
         <input id="energyMonthInput" class="period-input" type="month">
-        <button class="action-btn small" id="energyLoadBtn" type="button">load</button>
+        <button class="action-btn small" id="energyLoadBtn" type="button">завантажити</button>
       </div>
+      <div class="chart-sync-meta" id="energySyncMeta">синхр.: --</div>
       <canvas id="energyCanvas" class="graph-canvas"></canvas>
       <div class="chart-legend" id="energyLegend"></div>
     </div>
@@ -238,23 +247,24 @@
     <div class="chart-overlay" data-close-modal="climateModal"></div>
     <div class="chart-box chart-modal-box">
       <div class="chart-header">
-        <div class="chart-title" id="climateChartTitle">climate graph</div>
-        <button class="close-graph-btn" type="button" data-close-modal="climateModal">x</button>
+        <div class="chart-title" id="climateChartTitle">графік клімату</div>
+        <button class="close-graph-btn" type="button" data-close-modal="climateModal">×</button>
       </div>
       <div class="chart-toolbar">
         <div class="period-radio-group">
-          <label class="period-radio"><input type="radio" name="climatePeriod" value="daily" checked>day</label>
-          <label class="period-radio"><input type="radio" name="climatePeriod" value="monthly">month</label>
-          <label class="period-radio"><input type="radio" name="climatePeriod" value="yearly">year</label>
+          <label class="period-radio"><input type="radio" name="climatePeriod" value="daily" checked>день</label>
+          <label class="period-radio"><input type="radio" name="climatePeriod" value="monthly">місяць</label>
+          <label class="period-radio"><input type="radio" name="climatePeriod" value="yearly">рік</label>
         </div>
         <input id="climateDateInput" class="period-input" type="date">
         <input id="climateMonthInput" class="period-input" type="month">
-        <button class="action-btn small" id="climateLoadBtn" type="button">load</button>
+        <button class="action-btn small" id="climateLoadBtn" type="button">завантажити</button>
       </div>
+      <div class="chart-sync-meta" id="climateSyncMeta">синхр.: --</div>
       <div class="metric-toggle">
-        <button class="metric-btn active" data-climate-metric="temp" type="button">temp</button>
-        <button class="metric-btn" data-climate-metric="hum" type="button">hum</button>
-        <button class="metric-btn" data-climate-metric="press" type="button">press</button>
+        <button class="metric-btn active" data-climate-metric="temp" type="button">темп.</button>
+        <button class="metric-btn" data-climate-metric="hum" type="button">волог.</button>
+        <button class="metric-btn" data-climate-metric="press" type="button">тиск</button>
       </div>
       <canvas id="climateCanvas" class="graph-canvas"></canvas>
       <div class="chart-legend" id="climateLegend"></div>
@@ -265,25 +275,32 @@
     <div class="chart-overlay" data-close-modal="timelineModal"></div>
     <div class="chart-box chart-modal-box">
       <div class="chart-header">
-        <div class="chart-title" id="timelineChartTitle">load controller timeline</div>
-        <button class="close-graph-btn" type="button" data-close-modal="timelineModal">x</button>
+        <div class="chart-title" id="timelineChartTitle">хронологія load controller</div>
+        <button class="close-graph-btn" type="button" data-close-modal="timelineModal">×</button>
       </div>
       <div class="chart-toolbar">
-        <button class="action-btn small" id="timelineReloadBtn" type="button">reload</button>
+        <div class="timeline-day-nav">
+          <button class="action-btn icon-only" id="timelineDayPrevBtn" type="button" aria-label="попередня доба">‹</button>
+          <span class="timeline-day-label" id="timelineDayLabel">сьогодні</span>
+          <button class="action-btn icon-only" id="timelineDayNextBtn" type="button" aria-label="наступна доба">›</button>
+        </div>
+        <button class="action-btn small" id="timelineDayTodayBtn" type="button">сьогодні</button>
+        <button class="action-btn small" id="timelineReloadBtn" type="button">оновити</button>
       </div>
       <div class="timeline-panel-compact">
         <div class="timeline-header">
-          <div class="timeline-title">on/off timeline</div>
+          <div class="timeline-title">хронологія вкл/викл</div>
           <div class="timeline-meta" id="timelineMeta">--</div>
         </div>
         <div class="timeline-canvas-wrap">
           <canvas id="loadTimelineCanvas"></canvas>
         </div>
         <div class="timeline-legend">
-          <span class="legend-chip boiler">boiler</span>
-          <span class="legend-chip pump">pump</span>
-          <span class="legend-chip grid">grid</span>
-          <span class="legend-chip pv">pv</span>
+          <span class="legend-chip boiler">бойлер</span>
+          <span class="legend-chip garage-boiler">бойлер гаража</span>
+          <span class="legend-chip pump">насос</span>
+          <span class="legend-chip grid">мережа</span>
+          <span class="legend-chip pv">сонце</span>
         </div>
       </div>
     </div>
@@ -293,15 +310,15 @@
     <div class="chart-overlay" data-close-modal="eventModal"></div>
     <div class="chart-box">
       <div class="chart-header">
-        <div class="chart-title" id="eventChartTitle">event journal</div>
-        <button class="close-graph-btn" type="button" data-close-modal="eventModal">x</button>
+        <div class="chart-title" id="eventChartTitle">журнал подій</div>
+        <button class="close-graph-btn" type="button" data-close-modal="eventModal">×</button>
       </div>
       <div class="chart-toolbar">
-        <button class="action-btn small" id="eventsReloadBtn" type="button">reload</button>
-        <button class="action-btn small secondary" id="eventsClearBtn" type="button">clear</button>
+        <button class="action-btn small" id="eventsReloadBtn" type="button">оновити</button>
+        <button class="action-btn small secondary" id="eventsClearBtn" type="button">очистити</button>
       </div>
       <div class="event-list" id="eventList">
-        <div class="event-item-empty">no events</div>
+        <div class="event-item-empty">подій немає</div>
       </div>
     </div>
   </div>
@@ -310,23 +327,23 @@
     <div class="chart-overlay" data-close-modal="gridModal"></div>
     <div class="chart-box">
       <div class="chart-header">
-        <div class="chart-title">grid control</div>
-        <button class="close-graph-btn" type="button" data-close-modal="gridModal">x</button>
+        <div class="chart-title">керування мережею</div>
+        <button class="close-graph-btn" type="button" data-close-modal="gridModal">×</button>
       </div>
       <div class="control-group">
         <div class="control-group-header">
-          <div class="control-group-title">grid mode</div>
+          <div class="control-group-title">режим мережі</div>
           <div class="control-group-status" id="gridModalState">---</div>
         </div>
         <div class="mode-buttons-compact">
-          <button class="mode-btn-compact" id="btnGridAUTO" data-grid-mode="AUTO">AUTO</button>
-          <button class="mode-btn-compact" id="btnGridOFF" data-grid-mode="OFF">OFF</button>
-          <button class="mode-btn-compact" id="btnGridON" data-grid-mode="ON">ON</button>
+          <button class="mode-btn-compact" id="btnGridAUTO" data-grid-mode="AUTO">АВТО</button>
+          <button class="mode-btn-compact" id="btnGridOFF" data-grid-mode="OFF">ВИКЛ</button>
+          <button class="mode-btn-compact" id="btnGridON" data-grid-mode="ON">УВІМК</button>
         </div>
         <div class="modal-tools-row">
-          <button class="logic-launch-btn" type="button" data-open-logic="grid" data-logic-parent="gridModal">AUTO logic</button>
+          <button class="logic-launch-btn" type="button" data-open-logic="grid" data-logic-parent="gridModal">логіка АВТО</button>
         </div>
-        <div class="reason-line">reason: <span id="gridModalReason">---</span></div>
+        <div class="reason-line">причина: <span id="gridModalReason">---</span></div>
       </div>
     </div>
   </div>
@@ -335,23 +352,23 @@
     <div class="chart-overlay" data-close-modal="loadModal"></div>
     <div class="chart-box">
       <div class="chart-header">
-        <div class="chart-title">load control</div>
-        <button class="close-graph-btn" type="button" data-close-modal="loadModal">x</button>
+        <div class="chart-title">керування навантаженням</div>
+        <button class="close-graph-btn" type="button" data-close-modal="loadModal">×</button>
       </div>
       <div class="control-group">
         <div class="control-group-header">
-          <div class="control-group-title">load mode</div>
+          <div class="control-group-title">режим навантаження</div>
           <div class="control-group-status" id="loadModalState">---</div>
         </div>
         <div class="mode-buttons-compact">
-          <button class="mode-btn-compact" id="btnLoadAUTO" data-load-mode="AUTO">AUTO</button>
-          <button class="mode-btn-compact" id="btnLoadOFF" data-load-mode="OFF">OFF</button>
-          <button class="mode-btn-compact" id="btnLoadON" data-load-mode="ON">ON</button>
+          <button class="mode-btn-compact" id="btnLoadAUTO" data-load-mode="AUTO">АВТО</button>
+          <button class="mode-btn-compact" id="btnLoadOFF" data-load-mode="OFF">ВИКЛ</button>
+          <button class="mode-btn-compact" id="btnLoadON" data-load-mode="ON">УВІМК</button>
         </div>
         <div class="modal-tools-row">
-          <button class="logic-launch-btn" type="button" data-open-logic="load" data-logic-parent="loadModal">AUTO logic</button>
+          <button class="logic-launch-btn" type="button" data-open-logic="load" data-logic-parent="loadModal">логіка АВТО</button>
         </div>
-        <div class="reason-line">reason: <span id="loadModalReason">---</span></div>
+        <div class="reason-line">причина: <span id="loadModalReason">---</span></div>
       </div>
     </div>
   </div>
@@ -360,36 +377,36 @@
     <div class="chart-overlay" data-close-modal="boiler1Modal"></div>
     <div class="chart-box">
       <div class="chart-header">
-        <div class="chart-title">boiler1 control</div>
-        <button class="close-graph-btn" type="button" data-close-modal="boiler1Modal">x</button>
+        <div class="chart-title">керування бойлером 1</div>
+        <button class="close-graph-btn" type="button" data-close-modal="boiler1Modal">×</button>
       </div>
       <div class="control-group">
         <div class="control-group-header">
-          <div class="control-group-title">boiler1 mode</div>
+          <div class="control-group-title">режим бойлера 1</div>
           <div class="control-group-status" id="boiler1ModalState">---</div>
         </div>
         <div class="mode-buttons-compact">
-          <button class="mode-btn-compact" id="btnBoiler1AUTO" data-boiler1-mode="AUTO">AUTO</button>
-          <button class="mode-btn-compact" id="btnBoiler1OFF" data-boiler1-mode="OFF">OFF</button>
-          <button class="mode-btn-compact" id="btnBoiler1ON" data-boiler1-mode="ON">ON</button>
+          <button class="mode-btn-compact" id="btnBoiler1AUTO" data-boiler1-mode="AUTO">АВТО</button>
+          <button class="mode-btn-compact" id="btnBoiler1OFF" data-boiler1-mode="OFF">ВИКЛ</button>
+          <button class="mode-btn-compact" id="btnBoiler1ON" data-boiler1-mode="ON">УВІМК</button>
         </div>
         <div class="auto-window-toolbar">
-          <button class="logic-launch-btn" type="button" data-open-logic="boiler1" data-logic-parent="boiler1Modal">AUTO logic</button>
-          <button class="auto-window-btn" id="boiler1AutoWindowClockBtn" type="button">AUTO timer</button>
-          <div class="auto-window-status" id="boiler1AutoWindowStatus">AUTO: always active</div>
+          <button class="logic-launch-btn" type="button" data-open-logic="boiler1" data-logic-parent="boiler1Modal">логіка АВТО</button>
+          <button class="auto-window-btn" id="boiler1AutoWindowClockBtn" type="button">таймер АВТО</button>
+          <div class="auto-window-status" id="boiler1AutoWindowStatus">АВТО: активний завжди</div>
         </div>
         <div class="auto-window-editor" id="boiler1AutoWindowEditor">
-          <label class="auto-window-check"><input id="boiler1AutoWindowEnabled" type="checkbox"> active window enabled</label>
+          <label class="auto-window-check"><input id="boiler1AutoWindowEnabled" type="checkbox"> активне вікно увімкнено</label>
           <div class="auto-window-row">
-            <label>from<input id="boiler1AutoWindowStart" type="time" value="00:00" step="60"></label>
-            <label>to<input id="boiler1AutoWindowEnd" type="time" value="00:00" step="60"></label>
+            <label>з<input id="boiler1AutoWindowStart" type="time" value="00:00" step="60"></label>
+            <label>до<input id="boiler1AutoWindowEnd" type="time" value="00:00" step="60"></label>
           </div>
           <div class="auto-window-actions">
-            <button class="auto-window-action save" id="boiler1AutoWindowSave" type="button">save</button>
-            <button class="auto-window-action" id="boiler1AutoWindowCancel" type="button">cancel</button>
+            <button class="auto-window-action save" id="boiler1AutoWindowSave" type="button">зберегти</button>
+            <button class="auto-window-action" id="boiler1AutoWindowCancel" type="button">скасувати</button>
           </div>
         </div>
-        <div class="reason-line">reason: <span id="boiler1ModalReason">---</span></div>
+        <div class="reason-line">причина: <span id="boiler1ModalReason">---</span></div>
       </div>
     </div>
   </div>
@@ -398,36 +415,36 @@
     <div class="chart-overlay" data-close-modal="pumpModal"></div>
     <div class="chart-box">
       <div class="chart-header">
-        <div class="chart-title">pump control</div>
-        <button class="close-graph-btn" type="button" data-close-modal="pumpModal">x</button>
+        <div class="chart-title">керування насосом</div>
+        <button class="close-graph-btn" type="button" data-close-modal="pumpModal">×</button>
       </div>
       <div class="control-group">
         <div class="control-group-header">
-          <div class="control-group-title">pump mode</div>
+          <div class="control-group-title">режим насоса</div>
           <div class="control-group-status" id="pumpModalState">---</div>
         </div>
         <div class="mode-buttons-compact">
-          <button class="mode-btn-compact" id="btnPumpAUTO" data-pump-mode="AUTO">AUTO</button>
-          <button class="mode-btn-compact" id="btnPumpOFF" data-pump-mode="OFF">OFF</button>
-          <button class="mode-btn-compact" id="btnPumpON" data-pump-mode="ON">ON</button>
+          <button class="mode-btn-compact" id="btnPumpAUTO" data-pump-mode="AUTO">АВТО</button>
+          <button class="mode-btn-compact" id="btnPumpOFF" data-pump-mode="OFF">ВИКЛ</button>
+          <button class="mode-btn-compact" id="btnPumpON" data-pump-mode="ON">УВІМК</button>
         </div>
         <div class="auto-window-toolbar">
-          <button class="logic-launch-btn" type="button" data-open-logic="pump" data-logic-parent="pumpModal">AUTO logic</button>
-          <button class="auto-window-btn" id="pumpAutoWindowClockBtn" type="button">AUTO timer</button>
-          <div class="auto-window-status" id="pumpAutoWindowStatus">AUTO: always active</div>
+          <button class="logic-launch-btn" type="button" data-open-logic="pump" data-logic-parent="pumpModal">логіка АВТО</button>
+          <button class="auto-window-btn" id="pumpAutoWindowClockBtn" type="button">таймер АВТО</button>
+          <div class="auto-window-status" id="pumpAutoWindowStatus">АВТО: активний завжди</div>
         </div>
         <div class="auto-window-editor" id="pumpAutoWindowEditor">
-          <label class="auto-window-check"><input id="pumpAutoWindowEnabled" type="checkbox"> active window enabled</label>
+          <label class="auto-window-check"><input id="pumpAutoWindowEnabled" type="checkbox"> активне вікно увімкнено</label>
           <div class="auto-window-row">
-            <label>from<input id="pumpAutoWindowStart" type="time" value="00:00" step="60"></label>
-            <label>to<input id="pumpAutoWindowEnd" type="time" value="00:00" step="60"></label>
+            <label>з<input id="pumpAutoWindowStart" type="time" value="00:00" step="60"></label>
+            <label>до<input id="pumpAutoWindowEnd" type="time" value="00:00" step="60"></label>
           </div>
           <div class="auto-window-actions">
-            <button class="auto-window-action save" id="pumpAutoWindowSave" type="button">save</button>
-            <button class="auto-window-action" id="pumpAutoWindowCancel" type="button">cancel</button>
+            <button class="auto-window-action save" id="pumpAutoWindowSave" type="button">зберегти</button>
+            <button class="auto-window-action" id="pumpAutoWindowCancel" type="button">скасувати</button>
           </div>
         </div>
-        <div class="reason-line">reason: <span id="pumpModalReason">---</span></div>
+        <div class="reason-line">причина: <span id="pumpModalReason">---</span></div>
       </div>
     </div>
   </div>
@@ -436,36 +453,36 @@
     <div class="chart-overlay" data-close-modal="boiler2Modal"></div>
     <div class="chart-box">
       <div class="chart-header">
-        <div class="chart-title">boiler2 control</div>
-        <button class="close-graph-btn" type="button" data-close-modal="boiler2Modal">x</button>
+        <div class="chart-title">керування бойлером 2</div>
+        <button class="close-graph-btn" type="button" data-close-modal="boiler2Modal">×</button>
       </div>
       <div class="control-group">
         <div class="control-group-header">
-          <div class="control-group-title">boiler2 mode</div>
+          <div class="control-group-title">режим бойлера 2</div>
           <div class="control-group-status" id="boiler2ModalState">---</div>
         </div>
         <div class="mode-buttons-compact">
-          <button class="mode-btn-compact" id="btnBoiler2AUTO" data-boiler2-mode="AUTO">AUTO</button>
-          <button class="mode-btn-compact" id="btnBoiler2OFF" data-boiler2-mode="OFF">OFF</button>
-          <button class="mode-btn-compact" id="btnBoiler2ON" data-boiler2-mode="ON">ON</button>
+          <button class="mode-btn-compact" id="btnBoiler2AUTO" data-boiler2-mode="AUTO">АВТО</button>
+          <button class="mode-btn-compact" id="btnBoiler2OFF" data-boiler2-mode="OFF">ВИКЛ</button>
+          <button class="mode-btn-compact" id="btnBoiler2ON" data-boiler2-mode="ON">УВІМК</button>
         </div>
         <div class="auto-window-toolbar">
-          <button class="logic-launch-btn" type="button" data-open-logic="boiler2" data-logic-parent="boiler2Modal">AUTO logic</button>
-          <button class="auto-window-btn" id="boiler2AutoWindowClockBtn" type="button">AUTO timer</button>
-          <div class="auto-window-status" id="boiler2AutoWindowStatus">AUTO: always active</div>
+          <button class="logic-launch-btn" type="button" data-open-logic="boiler2" data-logic-parent="boiler2Modal">логіка АВТО</button>
+          <button class="auto-window-btn" id="boiler2AutoWindowClockBtn" type="button">таймер АВТО</button>
+          <div class="auto-window-status" id="boiler2AutoWindowStatus">АВТО: активний завжди</div>
         </div>
         <div class="auto-window-editor" id="boiler2AutoWindowEditor">
-          <label class="auto-window-check"><input id="boiler2AutoWindowEnabled" type="checkbox"> active window enabled</label>
+          <label class="auto-window-check"><input id="boiler2AutoWindowEnabled" type="checkbox"> активне вікно увімкнено</label>
           <div class="auto-window-row">
-            <label>from<input id="boiler2AutoWindowStart" type="time" value="00:00" step="60"></label>
-            <label>to<input id="boiler2AutoWindowEnd" type="time" value="00:00" step="60"></label>
+            <label>з<input id="boiler2AutoWindowStart" type="time" value="00:00" step="60"></label>
+            <label>до<input id="boiler2AutoWindowEnd" type="time" value="00:00" step="60"></label>
           </div>
           <div class="auto-window-actions">
-            <button class="auto-window-action save" id="boiler2AutoWindowSave" type="button">save</button>
-            <button class="auto-window-action" id="boiler2AutoWindowCancel" type="button">cancel</button>
+            <button class="auto-window-action save" id="boiler2AutoWindowSave" type="button">зберегти</button>
+            <button class="auto-window-action" id="boiler2AutoWindowCancel" type="button">скасувати</button>
           </div>
         </div>
-        <div class="reason-line">reason: <span id="boiler2ModalReason">---</span></div>
+        <div class="reason-line">причина: <span id="boiler2ModalReason">---</span></div>
       </div>
     </div>
   </div>
@@ -474,16 +491,16 @@
     <div class="chart-overlay" data-close-modal="gateModal"></div>
     <div class="chart-box">
       <div class="chart-header">
-        <div class="chart-title">gate</div>
-        <button class="close-graph-btn" type="button" data-close-modal="gateModal">x</button>
+        <div class="chart-title">ворота</div>
+        <button class="close-graph-btn" type="button" data-close-modal="gateModal">×</button>
       </div>
       <div class="control-group">
         <div class="control-group-header">
-          <div class="control-group-title">current state</div>
+          <div class="control-group-title">поточний стан</div>
           <div class="control-group-status" id="gateModalState">---</div>
         </div>
-        <div class="reason-line">reason: <span id="gateModalReason">---</span></div>
-        <button class="action-btn" id="gateToggleBtn" type="button">toggle gate</button>
+        <div class="reason-line">причина: <span id="gateModalReason">---</span></div>
+        <button class="action-btn" id="gateToggleBtn" type="button">перемкнути ворота</button>
       </div>
     </div>
   </div>
@@ -492,43 +509,43 @@
     <div class="chart-overlay" data-close-modal="logicModal"></div>
     <div class="chart-box logic-modal-box">
       <div class="chart-header">
-        <div class="chart-title" id="logicModalTitle">mode logic</div>
-        <button class="close-graph-btn" type="button" data-close-modal="logicModal">x</button>
+        <div class="chart-title" id="logicModalTitle">логіка режиму</div>
+        <button class="close-graph-btn" type="button" data-close-modal="logicModal">×</button>
       </div>
       <div class="logic-meta-row">
-        <div class="logic-meta-pill" id="logicModalMode">mode: ---</div>
-        <div class="logic-meta-pill" id="logicModalState">state: ---</div>
+        <div class="logic-meta-pill" id="logicModalMode">режим: ---</div>
+        <div class="logic-meta-pill" id="logicModalState">стан: ---</div>
       </div>
       <div class="logic-facts" id="logicModalFacts"></div>
       <div class="logic-alerts" id="logicModalAlerts"></div>
       <div class="logic-history-shell">
         <div class="logic-history-toolbar">
-          <div class="logic-history-title" id="logicHistoryTitle">logic history</div>
+          <div class="logic-history-title" id="logicHistoryTitle">історія логіки</div>
           <div class="logic-history-range">
-            <button class="action-btn tiny secondary" type="button" data-logic-hours="1">1h</button>
-            <button class="action-btn tiny secondary" type="button" data-logic-hours="3">3h</button>
-            <button class="action-btn tiny secondary" type="button" data-logic-hours="6">6h</button>
+            <button class="action-btn tiny secondary" type="button" data-logic-hours="1">1г</button>
+            <button class="action-btn tiny secondary" type="button" data-logic-hours="3">3г</button>
+            <button class="action-btn tiny secondary" type="button" data-logic-hours="6">6г</button>
           </div>
         </div>
-        <div class="logic-history-meta" id="logicHistoryMeta">history: loading...</div>
+        <div class="logic-history-meta" id="logicHistoryMeta">історія: завантаження...</div>
         <div class="logic-history-canvas-wrap">
           <canvas id="logicHistoryCanvas" width="720" height="260"></canvas>
         </div>
       </div>
       <div class="logic-flow" id="logicModalFlow"></div>
       <div class="logic-journal">
-        <div class="logic-journal-title">transition journal</div>
+        <div class="logic-journal-title">журнал переходів</div>
         <div class="event-list logic-journal-list" id="logicJournalList">
-          <div class="event-item-empty">no transitions yet</div>
+          <div class="event-item-empty">переходів ще немає</div>
         </div>
       </div>
       <div class="logic-editor-block">
-        <div class="logic-editor-title">thresholds and delays</div>
+        <div class="logic-editor-title">пороги та затримки</div>
         <div class="logic-form-grid" id="logicModalForm"></div>
         <div class="logic-fixed-note" id="logicModalFixedNote"></div>
         <div class="logic-actions">
-          <button class="action-btn small" id="logicModalSave" type="button">save</button>
-          <button class="action-btn small secondary" id="logicModalReset" type="button">reload</button>
+          <button class="action-btn small" id="logicModalSave" type="button">зберегти</button>
+          <button class="action-btn small secondary" id="logicModalReset" type="button">перезавантажити</button>
         </div>
       </div>
     </div>
@@ -539,10 +556,10 @@
     <div class="chart-box chart-modal-box scheme-modal-box">
       <div class="scheme-stage" id="schemeStage">
         <div class="scheme-overlay-top">
-          <div class="scheme-overlay-title">power scheme</div>
-          <div class="scheme-overlay-hint">swipe right to open | swipe left to close</div>
+          <div class="scheme-overlay-title">схема живлення</div>
+          <div class="scheme-overlay-hint">свайп вправо — відкрити | вліво — закрити</div>
         </div>
-        <button class="close-graph-btn scheme-close-btn" type="button" data-close-modal="schemeModal">x</button>
+        <button class="close-graph-btn scheme-close-btn" type="button" data-close-modal="schemeModal">×</button>
         <div class="scheme-link h scheme-chain-blue link-grid" id="schemeLinkGrid"><span class="flow"></span></div>
         <div class="scheme-link v scheme-chain-yellow link-pv" id="schemeLinkPv"><span class="flow"></span></div>
         <div class="scheme-link v scheme-chain-green link-battery" id="schemeLinkBattery"><span class="flow"></span></div>
@@ -554,117 +571,133 @@
         <div class="scheme-link h scheme-chain-red link-boiler2" id="schemeLinkBoiler2"><span class="flow"></span></div>
 
         <div class="scheme-node grid-pole" id="schemeNodeGrid">
-          <svg class="scheme-node-icon scheme-icon-grid" viewBox="0 0 32 32" aria-hidden="true">
-            <path d="M16 4v22"></path>
-            <path d="M8 10h16"></path>
-            <path d="M10 15h12"></path>
-            <path d="M12 4l4 6 4-6"></path>
-            <path d="M13 26h6"></path>
-          </svg>
-          <div class="scheme-node-title">grid</div>
-          <div class="scheme-node-sub" id="schemeGridState">--</div>
+          <div class="scheme-node-icon-badge">
+            <svg class="scheme-node-icon scheme-icon-grid" viewBox="0 0 32 32" aria-hidden="true">
+              <path d="M16 4v22"></path>
+              <path d="M8 10h16"></path>
+              <path d="M10 15h12"></path>
+              <path d="M12 4l4 6 4-6"></path>
+              <path d="M13 26h6"></path>
+            </svg>
+          </div>
+          <div class="scheme-node-title">мережа</div>
+          <div class="scheme-node-sub scheme-node-state" id="schemeGridState">--</div>
         </div>
         <div class="scheme-node pv-array">
-          <svg class="scheme-node-icon scheme-icon-pv" viewBox="0 0 32 32" aria-hidden="true">
-            <circle cx="7" cy="7" r="3"></circle>
-            <rect x="10" y="13" width="14" height="9" rx="1.5"></rect>
-            <path d="M14.5 13v9"></path>
-            <path d="M19.5 13v9"></path>
-            <path d="M10 17.5h14"></path>
-            <path d="M16 22v4"></path>
-            <path d="M12.5 26h7"></path>
-          </svg>
-          <div class="scheme-node-title">pv</div>
-          <div class="scheme-node-sub">panels</div>
+          <div class="scheme-node-icon-badge">
+            <svg class="scheme-node-icon scheme-icon-pv" viewBox="0 0 32 32" aria-hidden="true">
+              <circle cx="7" cy="7" r="3"></circle>
+              <rect x="10" y="13" width="14" height="9" rx="1.5"></rect>
+              <path d="M14.5 13v9"></path>
+              <path d="M19.5 13v9"></path>
+              <path d="M10 17.5h14"></path>
+              <path d="M16 22v4"></path>
+              <path d="M12.5 26h7"></path>
+            </svg>
+          </div>
+          <div class="scheme-node-title">сонце</div>
+          <div class="scheme-node-sub">панелі</div>
         </div>
         <div class="scheme-node battery-pack">
-          <svg class="scheme-node-icon scheme-icon-battery" viewBox="0 0 32 32" aria-hidden="true">
-            <rect class="battery-body" x="4" y="10" width="22" height="12" rx="2"></rect>
-            <rect class="battery-tip" x="26" y="13" width="2" height="6" rx="1"></rect>
-            <path class="battery-bolt" d="M15 12.5l-2 4h2.2l-1.2 3 4-5h-2.3l1.3-2z"></path>
-          </svg>
-          <div class="scheme-node-title">battery</div>
-          <div class="scheme-node-sub">soc: <span id="schemeBatterySoc">--%</span></div>
+          <div class="scheme-node-icon-badge">
+            <svg class="scheme-node-icon scheme-icon-battery" viewBox="0 0 32 32" aria-hidden="true">
+              <rect class="battery-body" x="4" y="10" width="22" height="12" rx="2"></rect>
+              <rect class="battery-tip" x="26" y="13" width="2" height="6" rx="1"></rect>
+              <path class="battery-bolt" d="M15 12.5l-2 4h2.2l-1.2 3 4-5h-2.3l1.3-2z"></path>
+            </svg>
+          </div>
+          <div class="scheme-node-title">акумулятор</div>
+          <div class="scheme-node-sub">заряд: <span id="schemeBatterySoc">--%</span></div>
         </div>
         <div class="scheme-node inverter-core">
-          <svg class="scheme-node-icon scheme-icon-inverter" viewBox="0 0 32 32" aria-hidden="true">
-            <rect x="5" y="8" width="22" height="16" rx="3"></rect>
-            <path d="M8 16h4l2.1-4 3.8 8 2.1-4H24"></path>
-          </svg>
-          <div class="scheme-node-title">inverter</div>
-          <div class="scheme-node-sub">in: <span id="schemeInvInput">-- V</span></div>
-          <div class="scheme-node-sub">out: <span id="schemeInvOutput">-- V</span></div>
+          <div class="scheme-node-icon-badge">
+            <svg class="scheme-node-icon scheme-icon-inverter" viewBox="0 0 32 32" aria-hidden="true">
+              <rect x="5" y="8" width="22" height="16" rx="3"></rect>
+              <path d="M8 16h4l2.1-4 3.8 8 2.1-4H24"></path>
+            </svg>
+          </div>
+          <div class="scheme-node-title">інвертор</div>
+          <div class="scheme-node-sub">вхід: <span id="schemeInvInput">-- В</span></div>
+          <div class="scheme-node-sub">вихід: <span id="schemeInvOutput">-- В</span></div>
         </div>
         <div class="scheme-node house-load">
-          <svg class="scheme-node-icon scheme-icon-house" viewBox="0 0 32 32" aria-hidden="true">
-            <path d="M6 14.5 16 7l10 7.5"></path>
-            <path d="M9 13.5V25h14V13.5"></path>
-            <rect x="14" y="18" width="4" height="7" rx="1"></rect>
-          </svg>
-          <div class="scheme-node-title">house</div>
-          <div class="scheme-node-sub">load: <span id="schemeHouseLoad">-- W</span></div>
+          <div class="scheme-node-icon-badge">
+            <svg class="scheme-node-icon scheme-icon-house" viewBox="0 0 32 32" aria-hidden="true">
+              <path d="M6 14.5 16 7l10 7.5"></path>
+              <path d="M9 13.5V25h14V13.5"></path>
+              <rect x="14" y="18" width="4" height="7" rx="1"></rect>
+            </svg>
+          </div>
+          <div class="scheme-node-title">будинок</div>
+          <div class="scheme-node-sub">наван.: <span id="schemeHouseLoad">-- Вт</span></div>
         </div>
-        <div class="scheme-node device-boiler1">
-          <svg class="scheme-node-icon scheme-icon-boiler" viewBox="0 0 32 32" aria-hidden="true">
-            <rect x="9" y="6" width="14" height="20" rx="5"></rect>
-            <path d="M13.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
-            <path d="M18.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
-          </svg>
-          <div class="scheme-node-title">boiler1</div>
-          <div class="scheme-node-sub" id="schemeBoiler1State">--</div>
+        <div class="scheme-node device-boiler1" id="schemeNodeBoiler1">
+          <div class="scheme-node-icon-badge">
+            <svg class="scheme-node-icon scheme-icon-boiler" viewBox="0 0 32 32" aria-hidden="true">
+              <rect x="9" y="6" width="14" height="20" rx="5"></rect>
+              <path d="M13.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
+              <path d="M18.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
+            </svg>
+          </div>
+          <div class="scheme-node-title">бойлер 1</div>
+          <div class="scheme-node-sub scheme-node-state" id="schemeBoiler1State">--</div>
         </div>
-        <div class="scheme-node device-pump">
-          <svg class="scheme-node-icon scheme-icon-pump" viewBox="0 0 32 32" aria-hidden="true">
-            <circle cx="16" cy="16" r="6"></circle>
-            <path d="M16 10v4"></path>
-            <path d="M21.2 13 17.7 15"></path>
-            <path d="M20.8 19 17 17"></path>
-            <path d="M11.2 19 15 17"></path>
-            <path d="M10.8 13 14.2 15"></path>
-            <path d="M5 16h5"></path>
-            <path d="M22 16h5"></path>
-          </svg>
-          <div class="scheme-node-title">pump</div>
-          <div class="scheme-node-sub" id="schemePumpState">--</div>
+        <div class="scheme-node device-pump" id="schemeNodePump">
+          <div class="scheme-node-icon-badge">
+            <svg class="scheme-node-icon scheme-icon-pump" viewBox="0 0 32 32" aria-hidden="true">
+              <circle cx="16" cy="16" r="6"></circle>
+              <path d="M16 10v4"></path>
+              <path d="M21.2 13 17.7 15"></path>
+              <path d="M20.8 19 17 17"></path>
+              <path d="M11.2 19 15 17"></path>
+              <path d="M10.8 13 14.2 15"></path>
+              <path d="M5 16h5"></path>
+              <path d="M22 16h5"></path>
+            </svg>
+          </div>
+          <div class="scheme-node-title">насос</div>
+          <div class="scheme-node-sub scheme-node-state" id="schemePumpState">--</div>
         </div>
-        <div class="scheme-node device-boiler2">
-          <svg class="scheme-node-icon scheme-icon-boiler" viewBox="0 0 32 32" aria-hidden="true">
-            <rect x="9" y="6" width="14" height="20" rx="5"></rect>
-            <path d="M13.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
-            <path d="M18.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
-          </svg>
-          <div class="scheme-node-title">boiler2</div>
-          <div class="scheme-node-sub" id="schemeBoiler2State">--</div>
+        <div class="scheme-node device-boiler2" id="schemeNodeBoiler2">
+          <div class="scheme-node-icon-badge">
+            <svg class="scheme-node-icon scheme-icon-boiler" viewBox="0 0 32 32" aria-hidden="true">
+              <rect x="9" y="6" width="14" height="20" rx="5"></rect>
+              <path d="M13.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
+              <path d="M18.5 11.5c0 1.1-1 1.7-1 2.8 0 1 .8 1.7 1.7 1.7"></path>
+            </svg>
+          </div>
+          <div class="scheme-node-title">бойлер 2</div>
+          <div class="scheme-node-sub scheme-node-state" id="schemeBoiler2State">--</div>
         </div>
 
         <button class="scheme-switch switch-grid is-unknown" id="schemeSwitchGrid" type="button" data-scheme-open-modal="gridModal">
-          <span class="scheme-switch-name">grid sw</span>
+          <span class="scheme-switch-name">мережа</span>
           <span class="scheme-switch-state">--</span>
         </button>
         <button class="scheme-switch switch-load is-unknown" id="schemeSwitchLoad" type="button" data-scheme-open-modal="loadModal">
-          <span class="scheme-switch-name">load sw</span>
+          <span class="scheme-switch-name">наван.</span>
           <span class="scheme-switch-state">--</span>
         </button>
         <button class="scheme-switch switch-boiler1 is-unknown" id="schemeSwitchBoiler1" type="button" data-scheme-open-modal="boiler1Modal">
-          <span class="scheme-switch-name">b1 sw</span>
+          <span class="scheme-switch-name">бойлер 1</span>
           <span class="scheme-switch-state">--</span>
         </button>
         <button class="scheme-switch switch-pump is-unknown" id="schemeSwitchPump" type="button" data-scheme-open-modal="pumpModal">
-          <span class="scheme-switch-name">p1 sw</span>
+          <span class="scheme-switch-name">насос</span>
           <span class="scheme-switch-state">--</span>
         </button>
         <button class="scheme-switch switch-boiler2 is-unknown" id="schemeSwitchBoiler2" type="button" data-scheme-open-modal="boiler2Modal">
-          <span class="scheme-switch-name">b2 sw</span>
+          <span class="scheme-switch-name">бойлер 2</span>
           <span class="scheme-switch-state">--</span>
         </button>
 
-        <div class="scheme-measure scheme-m-grid" id="schemeGridPower">-- W</div>
-        <div class="scheme-measure scheme-m-pv" id="schemePvPower">-- W</div>
-        <div class="scheme-measure scheme-m-battery" id="schemeBatteryPower">-- W</div>
-        <div class="scheme-measure scheme-m-load" id="schemeLoadPower">-- W</div>
-        <div class="scheme-measure scheme-m-boiler1" id="schemeBoiler1Power">-- W</div>
-        <div class="scheme-measure scheme-m-pump" id="schemePumpPower">-- W</div>
-        <div class="scheme-measure scheme-m-boiler2" id="schemeBoiler2Power">-- W</div>
+        <div class="scheme-measure scheme-m-grid" id="schemeGridPower">-- Вт</div>
+        <div class="scheme-measure scheme-m-pv" id="schemePvPower">-- Вт</div>
+        <div class="scheme-measure scheme-m-battery" id="schemeBatteryPower">-- Вт</div>
+        <div class="scheme-measure scheme-m-load" id="schemeLoadPower">-- Вт</div>
+        <div class="scheme-measure scheme-m-boiler1" id="schemeBoiler1Power">-- Вт</div>
+        <div class="scheme-measure scheme-m-pump" id="schemePumpPower">-- Вт</div>
+        <div class="scheme-measure scheme-m-boiler2" id="schemeBoiler2Power">-- Вт</div>
       </div>
     </div>
   </div>
@@ -673,45 +706,50 @@
     <div class="chart-overlay" data-close-modal="settingsModal"></div>
     <div class="chart-box">
       <div class="chart-header">
-        <div class="chart-title">connection settings</div>
-        <button class="close-graph-btn" type="button" data-close-modal="settingsModal">x</button>
+        <div class="chart-title">налаштування підключення</div>
+        <button class="close-graph-btn" type="button" data-close-modal="settingsModal">×</button>
       </div>
       <div class="settings-form">
-        <div class="settings-group-title">modules</div>
-        <label class="settings-check"><input id="cfgInverterEnabled" type="checkbox"> inverter enabled</label>
-        <label class="settings-check"><input id="cfgLoadEnabled" type="checkbox"> load controller enabled</label>
-        <label class="settings-check"><input id="cfgGarageEnabled" type="checkbox"> garage enabled</label>
+        <div class="settings-group-title">модулі</div>
+        <label class="settings-check"><input id="cfgInverterEnabled" type="checkbox"> інвертор увімкнено</label>
+        <label class="settings-check"><input id="cfgLoadEnabled" type="checkbox"> load controller увімкнено</label>
+        <label class="settings-check"><input id="cfgGarageEnabled" type="checkbox"> гараж увімкнено</label>
 
-        <div class="settings-group-title">connections</div>
-        <label>Inverter URL<input id="cfgInverterUrl" type="text"></label>
-        <label>Inverter Password<input id="cfgInverterPass" type="password"></label>
-        <label>Load Controller URL<input id="cfgLoadUrl" type="text"></label>
-        <label>Load Controller Password<input id="cfgLoadPass" type="password"></label>
-        <label>Garage URL<input id="cfgGarageUrl" type="text"></label>
-        <label>Garage Password<input id="cfgGaragePass" type="password"></label>
-        <label>Poll Interval (2-60 sec)<input id="cfgPollSec" type="number" min="2" max="60"></label>
+        <div class="settings-group-title">з'єднання</div>
+        <label>Адреса інвертора<input id="cfgInverterUrl" type="text"></label>
+        <label>Пароль інвертора<input id="cfgInverterPass" type="password"></label>
+        <label>Адреса load controller<input id="cfgLoadUrl" type="text"></label>
+        <label>Пароль load controller<input id="cfgLoadPass" type="password"></label>
+        <label>Адреса гаража<input id="cfgGarageUrl" type="text"></label>
+        <label>Пароль гаража<input id="cfgGaragePass" type="password"></label>
+        <label>Інтервал опитування (2-60 с)<input id="cfgPollSec" type="number" min="2" max="60"></label>
 
-        <div class="settings-group-title">realtime monitor</div>
-        <label class="settings-check"><input id="cfgRealtimeEnabled" type="checkbox"> realtime foreground monitoring</label>
-        <label>Realtime Interval (3-60 sec)<input id="cfgRealtimeSec" type="number" min="3" max="60"></label>
+        <div class="settings-group-title">моніторинг у реальному часі</div>
+        <label class="settings-check"><input id="cfgRealtimeEnabled" type="checkbox"> моніторинг на передньому плані</label>
+        <label>Інтервал реального часу (3-60 с)<input id="cfgRealtimeSec" type="number" min="3" max="60"></label>
 
-        <div class="settings-group-title">notifications</div>
-        <label class="settings-check"><input id="cfgNotifyPv" type="checkbox"> pv generation appeared/disappeared</label>
-        <label class="settings-check"><input id="cfgNotifyGridRelay" type="checkbox"> grid turned on/off</label>
-        <label class="settings-check"><input id="cfgNotifyGridPresence" type="checkbox"> grid appeared/disappeared</label>
-        <label class="settings-check"><input id="cfgNotifyGridMode" type="checkbox"> grid mode changed</label>
-        <label class="settings-check"><input id="cfgNotifyLoadMode" type="checkbox"> load mode changed</label>
-        <label class="settings-check"><input id="cfgNotifyBoiler1" type="checkbox"> boiler1 mode changed</label>
-        <label class="settings-check"><input id="cfgNotifyPump" type="checkbox"> pump mode changed</label>
-        <label class="settings-check"><input id="cfgNotifyBoiler2" type="checkbox"> boiler2 mode changed</label>
-        <label class="settings-check"><input id="cfgNotifyGate" type="checkbox"> gate state changed</label>
-        <label class="settings-check"><input id="cfgNotifyModuleOffline" type="checkbox"> controller restart / power loss</label>
-        <label class="settings-check"><input id="cfgNotifyPowerOverload" type="checkbox"> overload / power limit exceeded</label>
-        <label class="settings-check"><input id="cfgNotifyLogicUnstable" type="checkbox"> unstable logic / too many switches</label>
+        <div class="settings-group-title">синхронізація графіків</div>
+        <label>Інтервал тихої синхронізації (2-120 хв)<input id="cfgGraphSyncMin" type="number" min="2" max="120"></label>
+        <label>Фонове завантаження за цикл (1-12 днів)<input id="cfgGraphSyncPerCycle" type="number" min="1" max="12"></label>
+        <label>Межа завантаження за запитом (1-365 днів)<input id="cfgGraphSyncRequestLimit" type="number" min="1" max="365"></label>
+
+        <div class="settings-group-title">сповіщення</div>
+        <label class="settings-check"><input id="cfgNotifyPv" type="checkbox"> поява/зникнення генерації PV</label>
+        <label class="settings-check"><input id="cfgNotifyGridRelay" type="checkbox"> мережу увімкнено/вимкнено</label>
+        <label class="settings-check"><input id="cfgNotifyGridPresence" type="checkbox"> поява/зникнення мережі</label>
+        <label class="settings-check"><input id="cfgNotifyGridMode" type="checkbox"> зміна режиму мережі</label>
+        <label class="settings-check"><input id="cfgNotifyLoadMode" type="checkbox"> зміна режиму навантаження</label>
+        <label class="settings-check"><input id="cfgNotifyBoiler1" type="checkbox"> зміна режиму бойлера 1</label>
+        <label class="settings-check"><input id="cfgNotifyPump" type="checkbox"> зміна режиму насоса</label>
+        <label class="settings-check"><input id="cfgNotifyBoiler2" type="checkbox"> зміна режиму бойлера 2</label>
+        <label class="settings-check"><input id="cfgNotifyGate" type="checkbox"> зміна стану воріт</label>
+        <label class="settings-check"><input id="cfgNotifyModuleOffline" type="checkbox"> перезапуск контролера / втрата живлення</label>
+        <label class="settings-check"><input id="cfgNotifyPowerOverload" type="checkbox"> перевантаження / перевищення ліміту</label>
+        <label class="settings-check"><input id="cfgNotifyLogicUnstable" type="checkbox"> нестабільна логіка / часті перемикання</label>
 
         <div class="settings-actions">
-          <button class="action-btn" id="settingsSaveBtn" type="button">save</button>
-          <button class="action-btn secondary" type="button" data-close-modal="settingsModal">cancel</button>
+          <button class="action-btn" id="settingsSaveBtn" type="button">зберегти</button>
+          <button class="action-btn secondary" type="button" data-close-modal="settingsModal">скасувати</button>
         </div>
       </div>
     </div>

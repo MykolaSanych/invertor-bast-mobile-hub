@@ -10,6 +10,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.InetAddress
@@ -174,41 +175,214 @@ class StatusRepository(
         return onlyModules == null || moduleKey in onlyModules
     }
 
-    suspend fun fetchInverterDaily(config: AppConfig, date: String): JSONObject? = withContext(Dispatchers.IO) {
-        if (!config.inverterEnabled) return@withContext null
-        fetchJsonWithAuth(
+    private fun fetchInverterAnalyticsJsonWithFallback(
+        config: AppConfig,
+        path: String,
+        query: Map<String, String> = emptyMap(),
+    ): JSONObject? {
+        if (!config.inverterEnabled) return null
+
+        val inverterPayload = fetchJsonWithAuth(
             baseUrlRaw = config.inverterBaseUrl,
             password = config.inverterPassword,
-            path = "/api/daily",
-            query = mapOf("date" to date),
+            path = path,
+            query = query,
         )
+        if (inverterPayload != null) {
+            return inverterPayload
+        }
+
+        val baseCandidates = linkedSetOf(
+            normalizeBaseUrl(config.loadControllerBaseUrl),
+            "http://192.168.1.3",
+        ).filter { it.isNotBlank() }
+
+        val passCandidates = linkedSetOf(
+            config.loadControllerPassword.trim(),
+            config.inverterPassword.trim(),
+        ).filter { it.isNotBlank() }
+
+        baseCandidates.forEach { baseUrl ->
+            passCandidates.forEach { password ->
+                val payload = fetchJsonWithAuth(
+                    baseUrlRaw = baseUrl,
+                    password = password,
+                    path = path,
+                    query = query,
+                )
+                if (payload != null) {
+                    return payload
+                }
+            }
+        }
+
+        return null
+    }
+
+    private fun fetchInverterAnalyticsTextWithFallback(
+        config: AppConfig,
+        path: String,
+        query: Map<String, String> = emptyMap(),
+    ): String? {
+        if (!config.inverterEnabled) return null
+
+        val inverterPayload = fetchTextWithAuth(
+            baseUrlRaw = config.inverterBaseUrl,
+            password = config.inverterPassword,
+            path = path,
+            query = query,
+        )
+        if (!inverterPayload.isNullOrBlank()) {
+            return inverterPayload
+        }
+
+        val baseCandidates = linkedSetOf(
+            normalizeBaseUrl(config.loadControllerBaseUrl),
+            "http://192.168.1.3",
+        ).filter { it.isNotBlank() }
+
+        val passCandidates = linkedSetOf(
+            config.loadControllerPassword.trim(),
+            config.inverterPassword.trim(),
+        ).filter { it.isNotBlank() }
+
+        baseCandidates.forEach { baseUrl ->
+            passCandidates.forEach { password ->
+                val payload = fetchTextWithAuth(
+                    baseUrlRaw = baseUrl,
+                    password = password,
+                    path = path,
+                    query = query,
+                )
+                if (!payload.isNullOrBlank()) {
+                    return payload
+                }
+            }
+        }
+
+        return null
+    }
+
+    private fun looksLikeDailyAnalyticsPayload(payload: JSONObject?): Boolean {
+        return payload?.optJSONArray("hours") != null
+    }
+
+    private fun todayIsoDate(): String {
+        val calendar = Calendar.getInstance()
+        val year = calendar.get(Calendar.YEAR).toString().padStart(4, '0')
+        val month = (calendar.get(Calendar.MONTH) + 1).toString().padStart(2, '0')
+        val day = calendar.get(Calendar.DAY_OF_MONTH).toString().padStart(2, '0')
+        return "$year-$month-$day"
+    }
+
+    private fun isDailyPayloadForDate(payload: JSONObject?, expectedDateRaw: String): Boolean {
+        if (!looksLikeDailyAnalyticsPayload(payload)) return false
+
+        val expectedDate = expectedDateRaw.trim()
+        if (expectedDate.isEmpty()) return true
+
+        val payloadDate = payload?.optString("date")?.trim().orEmpty()
+        if (payloadDate.isEmpty()) {
+            // Older payloads without date are only acceptable for "today".
+            return expectedDate == todayIsoDate()
+        }
+        return payloadDate == expectedDate
+    }
+
+    private fun looksLikeMonthlyAnalyticsPayload(payload: JSONObject?): Boolean {
+        return payload?.optJSONArray("days") != null
+    }
+
+    private fun looksLikeYearlyAnalyticsPayload(payload: JSONObject?): Boolean {
+        return payload?.optJSONArray("months") != null && payload.optJSONArray("pv") != null
+    }
+
+    suspend fun fetchInverterDaily(config: AppConfig, date: String): JSONObject? = withContext(Dispatchers.IO) {
+        val requestedDate = date.trim()
+        if (requestedDate.isEmpty()) return@withContext null
+
+        val requested = fetchInverterAnalyticsJsonWithFallback(
+            config = config,
+            path = "/api/daily",
+            query = mapOf("date" to requestedDate),
+        )
+        if (isDailyPayloadForDate(requested, requestedDate)) return@withContext requested
+
+        // Do not substitute historical dates with current-day payloads.
+        if (requestedDate != todayIsoDate()) return@withContext null
+
+        val currentByDaily = fetchInverterAnalyticsJsonWithFallback(
+            config = config,
+            path = "/api/daily",
+        )
+        if (isDailyPayloadForDate(currentByDaily, requestedDate)) return@withContext currentByDaily
+
+        val currentByAlias = fetchInverterAnalyticsJsonWithFallback(
+            config = config,
+            path = "/api/daily/current",
+        )
+        if (isDailyPayloadForDate(currentByAlias, requestedDate)) return@withContext currentByAlias
+
+        null
+    }
+
+    suspend fun fetchInverterDates(config: AppConfig): JSONArray? = withContext(Dispatchers.IO) {
+        val raw = fetchInverterAnalyticsTextWithFallback(
+            config = config,
+            path = "/api/dates",
+        ) ?: return@withContext null
+
+        val directArray = runCatching { JSONArray(raw) }.getOrNull()
+        if (directArray != null) return@withContext directArray
+
+        val wrappedObject = runCatching { JSONObject(raw) }.getOrNull()
+        wrappedObject?.optJSONArray("dates")
     }
 
     suspend fun fetchInverterMonthly(config: AppConfig, month: String): JSONObject? = withContext(Dispatchers.IO) {
-        if (!config.inverterEnabled) return@withContext null
-        fetchJsonWithAuth(
-            baseUrlRaw = config.inverterBaseUrl,
-            password = config.inverterPassword,
+        val requested = fetchInverterAnalyticsJsonWithFallback(
+            config = config,
             path = "/api/monthly",
             query = mapOf("month" to month),
         )
+        if (looksLikeMonthlyAnalyticsPayload(requested)) return@withContext requested
+
+        val current = fetchInverterAnalyticsJsonWithFallback(
+            config = config,
+            path = "/api/monthly",
+        )
+        if (looksLikeMonthlyAnalyticsPayload(current)) return@withContext current
+
+        requested ?: current
     }
 
     suspend fun fetchInverterYearly(config: AppConfig): JSONObject? = withContext(Dispatchers.IO) {
-        if (!config.inverterEnabled) return@withContext null
-        fetchJsonWithAuth(
-            baseUrlRaw = config.inverterBaseUrl,
-            password = config.inverterPassword,
+        val year = Calendar.getInstance().get(Calendar.YEAR).coerceIn(2000, 2099)
+
+        val requested = fetchInverterAnalyticsJsonWithFallback(
+            config = config,
+            path = "/api/yearly",
+            query = mapOf("year" to year.toString()),
+        )
+        if (looksLikeYearlyAnalyticsPayload(requested)) return@withContext requested
+
+        val fallback = fetchInverterAnalyticsJsonWithFallback(
+            config = config,
             path = "/api/yearly",
         )
+        if (looksLikeYearlyAnalyticsPayload(fallback)) return@withContext fallback
+
+        requested ?: fallback
     }
 
-    suspend fun fetchLoadControllerHistory(config: AppConfig): JSONObject? = withContext(Dispatchers.IO) {
+    suspend fun fetchLoadControllerHistory(config: AppConfig, date: String = ""): JSONObject? = withContext(Dispatchers.IO) {
         if (!config.loadControllerEnabled) return@withContext null
+        val trimmedDate = date.trim()
         fetchJsonWithAuth(
             baseUrlRaw = config.loadControllerBaseUrl,
             password = config.loadControllerPassword,
             path = "/api/history",
+            query = if (trimmedDate.isEmpty()) emptyMap() else mapOf("date" to trimmedDate),
         )
     }
 
@@ -228,6 +402,45 @@ class StatusRepository(
             password = config.garagePassword,
             path = "/api/history",
         )
+    }
+
+    suspend fun fetchLoadControllerDailyLog(config: AppConfig, date: String): JSONObject? = withContext(Dispatchers.IO) {
+        if (!config.loadControllerEnabled) return@withContext null
+        val requestedDate = date.trim()
+        if (requestedDate.isEmpty()) return@withContext null
+
+        val raw = fetchTextWithAuth(
+            baseUrlRaw = config.loadControllerBaseUrl,
+            password = config.loadControllerPassword,
+            path = "/api/log",
+            query = mapOf("date" to requestedDate),
+        ) ?: return@withContext null
+
+        val items = JSONArray()
+        raw.lineSequence().forEach { line ->
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) return@forEach
+
+            val row = runCatching { JSONObject(trimmed) }.getOrNull() ?: return@forEach
+            val message = row.optStringSafeAny("", "message", "msg")
+            if (message.isEmpty()) return@forEach
+
+            items.put(
+                JSONObject().apply {
+                    put("date", row.optStringSafeAny(requestedDate, "date"))
+                    put("time", row.optStringSafeAny("--:--:--", "timestamp", "time"))
+                    put("module", row.optStringSafeAny("unknown", "module"))
+                    put("level", row.optStringSafeAny("INFO", "level"))
+                    put("message", message)
+                },
+            )
+        }
+
+        JSONObject().apply {
+            put("date", requestedDate)
+            put("items", items)
+            put("count", items.length())
+        }
     }
 
     private fun fetchUnifiedFromMulticastDetailed(
@@ -548,6 +761,8 @@ class StatusRepository(
         offDelaySec: Int,
         onDelaySec: Int,
         forceGridOnW: Double,
+        batteryLowSocPct: Double,
+        offMinSocPct: Double,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!config.inverterEnabled) return@withContext false
         postForm(
@@ -559,6 +774,8 @@ class StatusRepository(
                 "off_delay_sec" to offDelaySec.toString(),
                 "on_delay_sec" to onDelaySec.toString(),
                 "force_grid_on_w" to forceGridOnW.toString(),
+                "battery_low_soc_pct" to batteryLowSocPct.toString(),
+                "off_min_soc_pct" to offMinSocPct.toString(),
             ),
         )
     }
@@ -568,6 +785,8 @@ class StatusRepository(
         pvThresholdW: Double,
         shutdownDelaySec: Int,
         overloadPowerW: Double,
+        gridRestoreV: Double,
+        overloadGridV: Double,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!config.inverterEnabled) return@withContext false
         postForm(
@@ -578,6 +797,8 @@ class StatusRepository(
                 "pv_threshold_w" to pvThresholdW.toString(),
                 "shutdown_delay_sec" to shutdownDelaySec.toString(),
                 "overload_power_w" to overloadPowerW.toString(),
+                "grid_restore_v" to gridRestoreV.toString(),
+                "overload_grid_v" to overloadGridV.toString(),
             ),
         )
     }
@@ -604,6 +825,9 @@ class StatusRepository(
         batteryShutoffW: Double,
         batteryResumeW: Double,
         peerActiveW: Double,
+        gridRestoreV: Double,
+        batteryReleaseGridV: Double,
+        batteryReleaseSocPct: Double,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!config.loadControllerEnabled) return@withContext false
         postForm(
@@ -616,6 +840,9 @@ class StatusRepository(
                 "battery_shutoff_w" to batteryShutoffW.toString(),
                 "battery_resume_w" to batteryResumeW.toString(),
                 "peer_active_w" to peerActiveW.toString(),
+                "grid_restore_v" to gridRestoreV.toString(),
+                "battery_release_grid_v" to batteryReleaseGridV.toString(),
+                "battery_release_soc_pct" to batteryReleaseSocPct.toString(),
             ),
         )
     }
@@ -658,6 +885,7 @@ class StatusRepository(
         config: AppConfig,
         pvThresholdW: Double,
         shutdownDelaySec: Int,
+        gridRestoreV: Double,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!config.loadControllerEnabled) return@withContext false
         postForm(
@@ -667,6 +895,7 @@ class StatusRepository(
             formPairs = listOf(
                 "pv_threshold_w" to pvThresholdW.toString(),
                 "shutdown_delay_sec" to shutdownDelaySec.toString(),
+                "grid_restore_v" to gridRestoreV.toString(),
             ),
         )
     }
@@ -712,6 +941,9 @@ class StatusRepository(
         batteryShutoffW: Double,
         batteryResumeW: Double,
         peerActiveW: Double,
+        gridRestoreV: Double,
+        batteryReleaseGridV: Double,
+        batteryReleaseSocPct: Double,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!config.garageEnabled) return@withContext false
         postForm(
@@ -724,6 +956,9 @@ class StatusRepository(
                 "battery_shutoff_w" to batteryShutoffW.toString(),
                 "battery_resume_w" to batteryResumeW.toString(),
                 "peer_active_w" to peerActiveW.toString(),
+                "grid_restore_v" to gridRestoreV.toString(),
+                "battery_release_grid_v" to batteryReleaseGridV.toString(),
+                "battery_release_soc_pct" to batteryReleaseSocPct.toString(),
             ),
         )
     }
@@ -1059,6 +1294,36 @@ class StatusRepository(
         return null
     }
 
+    private fun fetchTextWithAuth(
+        baseUrlRaw: String,
+        password: String,
+        path: String,
+        query: Map<String, String> = emptyMap(),
+    ): String? {
+        val baseUrl = normalizeBaseUrl(baseUrlRaw)
+        if (baseUrl.isEmpty()) return null
+
+        if (path != TIME_SYNC_BROWSER_PATH && shouldSyncControllerTime(baseUrl)) {
+            runCatching { syncControllerTimeWithAuth(baseUrl, password) }
+        }
+
+        val url = buildUrl(baseUrl, path, query) ?: return null
+
+        val firstAttempt = fetchTextResult(url, client)
+        firstAttempt.text?.let { return it }
+
+        if (!firstAttempt.isUnauthorized || password.isBlank()) return null
+
+        repeat(2) {
+            authenticate(baseUrl, password)
+            val retry = fetchTextResult(url, client)
+            retry.text?.let { return it }
+            if (!retry.isUnauthorized) return null
+        }
+
+        return null
+    }
+
     private fun postMode(baseUrlRaw: String, password: String, path: String, mode: String): Boolean {
         return postForm(
             baseUrlRaw = baseUrlRaw,
@@ -1169,6 +1434,22 @@ class StatusRepository(
         return fetchJsonResult(url, client).json
     }
 
+    private fun fetchTextResult(url: HttpUrl, httpClient: OkHttpClient): TextFetchResult {
+        val req = Request.Builder()
+            .url(url)
+            .get()
+            .build()
+        return runCatching {
+            httpClient.newCall(req).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@use TextFetchResult(httpCode = response.code)
+                }
+                val body = response.body?.string() ?: ""
+                TextFetchResult(text = body, httpCode = response.code)
+            }
+        }.getOrElse { TextFetchResult() }
+    }
+
     private fun fetchJsonResult(url: HttpUrl, httpClient: OkHttpClient): JsonFetchResult {
         val req = Request.Builder()
             .url(url)
@@ -1204,6 +1485,14 @@ class StatusRepository(
 
 private data class JsonFetchResult(
     val json: JSONObject? = null,
+    val httpCode: Int? = null,
+) {
+    val isUnauthorized: Boolean
+        get() = httpCode == 401 || httpCode == 403
+}
+
+private data class TextFetchResult(
+    val text: String? = null,
     val httpCode: Int? = null,
 ) {
     val isUnauthorized: Boolean

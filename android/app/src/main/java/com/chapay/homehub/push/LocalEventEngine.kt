@@ -211,13 +211,13 @@ object LocalEventEngine {
 
         if (config.inverterEnabled) {
             if (previous.gridRelayOn != null && current.gridRelayOn != null && previous.gridRelayOn != current.gridRelayOn) {
-                val title = if (current.gridRelayOn) "GRID relay turned ON" else "GRID relay turned OFF"
+                val title = if (current.gridRelayOn) "Реле мережі УВІМКНЕНО" else "Реле мережі ВИМКНЕНО"
                 val metricContext = buildMetricContext(current, "inverter")
                 events += LocalEvent(
                     title,
                     buildString {
                         append(
-                            "Reason: ${
+                            "Причина: ${
                                 current.gridRelayReason.normalizeGridReason(current.gridRelayOn, current.inverterBatterySoc)
                             }",
                         )
@@ -235,11 +235,11 @@ object LocalEventEngine {
 
         if (config.inverterEnabled) {
             if (previous.gridPresent != null && current.gridPresent != null && previous.gridPresent != current.gridPresent) {
-                val title = if (current.gridPresent) "GRID appeared" else "GRID disappeared"
+                val title = if (current.gridPresent) "Мережа з'явилась" else "Мережа зникла"
                 val voltage = current.gridVoltage?.toInt() ?: 0
                 events += LocalEvent(
                     title,
-                    "Line voltage: ${voltage}V",
+                    "Напруга мережі: ${voltage}В",
                     kind = "grid_presence",
                     module = "inverter",
                     sendNotification = config.notifyGridPresence,
@@ -252,7 +252,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.gridMode,
                 currMode = current.gridMode,
-                title = "GRID mode changed",
+                title = "Режим мережі змінено",
                 reason = current.gridModeReason.normalizeGridReason(current.gridRelayOn, current.inverterBatterySoc),
                 current = current,
                 module = "inverter",
@@ -266,7 +266,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.loadMode,
                 currMode = current.loadMode,
-                title = "LOAD mode changed",
+                title = "Режим навантаження змінено",
                 reason = current.loadModeReason,
                 current = current,
                 module = "inverter",
@@ -279,7 +279,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.boiler1Mode,
                 currMode = current.boiler1Mode,
-                title = "BOILER1 mode changed",
+                title = "Режим бойлера 1 змінено",
                 reason = current.boiler1ModeReason,
                 current = current,
                 module = "load_controller",
@@ -292,7 +292,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.pumpMode,
                 currMode = current.pumpMode,
-                title = "PUMP mode changed",
+                title = "Режим насоса змінено",
                 reason = current.pumpModeReason,
                 current = current,
                 module = "load_controller",
@@ -305,7 +305,7 @@ object LocalEventEngine {
                 events = events,
                 prevMode = previous.boiler2Mode,
                 currMode = current.boiler2Mode,
-                title = "BOILER2 mode changed",
+                title = "Режим бойлера 2 змінено",
                 reason = current.boiler2ModeReason,
                 current = current,
                 module = "garage",
@@ -319,9 +319,9 @@ object LocalEventEngine {
             val currGateState = current.gateState.normalizeGateState()
             if (prevGateState != null && currGateState != null && prevGateState != currGateState) {
                 val source = normalizeGateSource(current.gateSource, current.gateReason)
-                val body = "State: $prevGateState -> $currGateState. Source: $source. Reason: ${current.gateReason.normalizeReason()}"
+                val body = "Стан: $prevGateState -> $currGateState. Джерело: $source. Причина: ${current.gateReason.normalizeReason()}"
                 events += LocalEvent(
-                    "Gate state changed",
+                    "Стан воріт змінено",
                     body,
                     kind = "gate_state",
                     module = "garage",
@@ -388,11 +388,11 @@ object LocalEventEngine {
             ),
         )
 
-        val title = if (currentPvActive) "PV generation started" else "PV generation stopped"
-        val reason = "PV=${current.pvW?.toInt() ?: 0}W, threshold ${PV_ACTIVE_THRESHOLD_W.toInt()}W"
+        val title = if (currentPvActive) "Генерація PV розпочалась" else "Генерація PV припинилась"
+        val reason = "PV=${current.pvW?.toInt() ?: 0}Вт, поріг ${PV_ACTIVE_THRESHOLD_W.toInt()}Вт"
         events += LocalEvent(
             title,
-            "Reason: $reason",
+            "Причина: $reason",
             kind = "pv_generation",
             module = "inverter",
             sendNotification = sendNotification,
@@ -423,7 +423,7 @@ object LocalEventEngine {
         if (prevMode.isNullOrBlank() || currMode.isNullOrBlank()) return
         if (prevMode == currMode) return
         val reasonText = if (reasonAlreadyNormalized) {
-            reason?.trim().takeUnless { it.isNullOrEmpty() } ?: "Manual change"
+            reason?.trim().takeUnless { it.isNullOrEmpty() } ?: "Ручна зміна"
         } else {
             reason.normalizeReason()
         }
@@ -431,7 +431,7 @@ object LocalEventEngine {
         events += LocalEvent(
             title,
             buildString {
-                append("$prevMode -> $currMode. Reason: $reasonText")
+                append("$prevMode -> $currMode. Причина: $reasonText")
                 if (metricContext.isNotEmpty()) {
                     append(". ")
                     append(metricContext)
@@ -456,9 +456,9 @@ object LocalEventEngine {
         if (previousLoad <= threshold && currentLoad > threshold) {
             val metricContext = buildMetricContext(current, "inverter")
             events += LocalEvent(
-                title = "Load overload threshold exceeded",
+                title = "Перевищено поріг перевантаження навантаження",
                 body = buildString {
-                    append("Load ${currentLoad.toInt()}W > ${threshold.toInt()}W")
+                    append("Навантаження ${currentLoad.toInt()}Вт > ${threshold.toInt()}Вт")
                     if (metricContext.isNotEmpty()) {
                         append(". ")
                         append(metricContext)
@@ -485,7 +485,7 @@ object LocalEventEngine {
             events = events,
             enabled = config.inverterEnabled && current.inverterOnline,
             logicKey = "grid",
-            title = "GRID logic unstable",
+            title = "Нестабільна логіка мережі",
             module = "inverter",
             sendNotification = config.notifyLogicUnstable,
             windowMs = windowMs,
@@ -496,7 +496,7 @@ object LocalEventEngine {
             events = events,
             enabled = config.inverterEnabled && current.inverterOnline,
             logicKey = "load",
-            title = "LOAD logic unstable",
+            title = "Нестабільна логіка навантаження",
             module = "inverter",
             sendNotification = config.notifyLogicUnstable,
             windowMs = windowMs,
@@ -507,7 +507,7 @@ object LocalEventEngine {
             events = events,
             enabled = config.loadControllerEnabled && current.loadControllerOnline,
             logicKey = "boiler1",
-            title = "BOILER1 logic unstable",
+            title = "Нестабільна логіка бойлера 1",
             module = "load_controller",
             sendNotification = config.notifyLogicUnstable,
             windowMs = windowMs,
@@ -518,7 +518,7 @@ object LocalEventEngine {
             events = events,
             enabled = config.loadControllerEnabled && current.loadControllerOnline,
             logicKey = "pump",
-            title = "PUMP logic unstable",
+            title = "Нестабільна логіка насоса",
             module = "load_controller",
             sendNotification = config.notifyLogicUnstable,
             windowMs = windowMs,
@@ -529,7 +529,7 @@ object LocalEventEngine {
             events = events,
             enabled = config.garageEnabled && current.garageOnline,
             logicKey = "boiler2",
-            title = "BOILER2 logic unstable",
+            title = "Нестабільна логіка бойлера 2",
             module = "garage",
             sendNotification = config.notifyLogicUnstable,
             windowMs = windowMs,
@@ -566,19 +566,19 @@ object LocalEventEngine {
     private fun buildMetricContext(current: StatusSnapshot, module: String): String {
         return when (module) {
             "inverter" -> listOfNotNull(
-                current.pvW?.let { "PV=${it.toInt()}W" },
-                current.loadW?.let { "LOAD=${it.toInt()}W" },
-                current.inverterBatterySoc?.let { "BAT=${it.toInt()}%" },
-                current.gridVoltage?.let { "GRID=${it.toInt()}V" },
+                current.pvW?.let { "PV=${it.toInt()}Вт" },
+                current.loadW?.let { "НАВ=${it.toInt()}Вт" },
+                current.inverterBatterySoc?.let { "АКБ=${it.toInt()}%" },
+                current.gridVoltage?.let { "МЕР=${it.toInt()}В" },
             ).joinToString(", ")
             "load_controller" -> listOfNotNull(
-                current.boiler1PowerW?.let { "Boiler=${it.toInt()}W" },
-                current.pumpPowerW?.let { "Pump=${it.toInt()}W" },
-                current.pvW?.let { "PV=${it.toInt()}W" },
+                current.boiler1PowerW?.let { "Бойлер=${it.toInt()}Вт" },
+                current.pumpPowerW?.let { "Насос=${it.toInt()}Вт" },
+                current.pvW?.let { "PV=${it.toInt()}Вт" },
             ).joinToString(", ")
             "garage" -> listOfNotNull(
-                current.boiler2PowerW?.let { "Boiler=${it.toInt()}W" },
-                current.pvW?.let { "PV=${it.toInt()}W" },
+                current.boiler2PowerW?.let { "Бойлер=${it.toInt()}Вт" },
+                current.pvW?.let { "PV=${it.toInt()}Вт" },
             ).joinToString(", ")
             else -> ""
         }
@@ -594,7 +594,7 @@ object LocalEventEngine {
             isUnexpectedReboot(previous.inverterUptimeSec, current.inverterUptimeSec, current.inverterRtcTime)
         ) {
             events += buildRebootEvent(
-                moduleName = "Inverter",
+                moduleName = "Інвертор",
                 module = "inverter",
                 previousUptimeSec = previous.inverterUptimeSec,
                 currentUptimeSec = current.inverterUptimeSec,
@@ -616,7 +616,7 @@ object LocalEventEngine {
             isUnexpectedReboot(previous.garageUptimeSec, current.garageUptimeSec, current.garageRtcTime)
         ) {
             events += buildRebootEvent(
-                moduleName = "Garage controller",
+                moduleName = "Контролер гаража",
                 module = "garage",
                 previousUptimeSec = previous.garageUptimeSec,
                 currentUptimeSec = current.garageUptimeSec,
@@ -636,7 +636,7 @@ object LocalEventEngine {
         val curr = currentUptimeSec ?: 0L
         return LocalEvent(
             "$moduleName: power failure suspected",
-            "Unexpected reboot detected (uptime reset: ${prev}s -> ${curr}s)",
+            "Виявлено неочікуваний перезапуск (uptime: ${prev}с -> ${curr}с)",
             severity = "alert",
             kind = "unexpected_reboot",
             module = module,
@@ -736,23 +736,23 @@ object LocalEventEngine {
 
     private fun String?.normalizeReason(): String {
         val value = this?.trim().orEmpty()
-        if (value.isEmpty()) return "Manual change"
+        if (value.isEmpty()) return "Ручна зміна"
 
         val normalized = value.lowercase().replace('_', ' ').replace('-', ' ').trim()
-        if (normalized.isEmpty()) return "Manual change"
+        if (normalized.isEmpty()) return "Ручна зміна"
 
         if (normalized == "manual" || normalized.contains("manual") || normalized.contains("ruch")) {
-            return "Manual change"
+            return "Ручна зміна"
         }
         if (normalized == "manual pulse" || normalized == "pulse" || normalized.contains("impuls")) {
-            return "Manual pulse"
+            return "Ручний імпульс"
         }
 
         val compact = normalized.replace(" ", "")
         val questionCount = compact.count { ch -> ch == '?' }
         val isQuestionNoise = compact.isNotEmpty() && questionCount == compact.length
         if (isQuestionNoise || questionCount >= 3) {
-            return "Manual change"
+            return "Ручна зміна"
         }
 
         if (normalized == "unknown" ||
@@ -765,7 +765,7 @@ object LocalEventEngine {
             normalized.contains("unknown") ||
             normalized.contains("uncnov")
         ) {
-            return "Manual change"
+            return "Ручна зміна"
         }
 
         return value

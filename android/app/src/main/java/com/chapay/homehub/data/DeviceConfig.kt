@@ -18,6 +18,9 @@ data class AppConfig(
     val garageEnabled: Boolean = true,
     val realtimeMonitorEnabled: Boolean = false,
     val realtimePollIntervalSec: Int = 5,
+    val graphSyncIntervalMin: Int = 15,
+    val graphSyncPerCycle: Int = 2,
+    val graphSyncRequestFetchLimit: Int = 80,
     val notifyPvGeneration: Boolean = true,
     val notifyGridRelay: Boolean = true,
     val notifyGridPresence: Boolean = true,
@@ -30,6 +33,7 @@ data class AppConfig(
     val notifyModuleOffline: Boolean = true,
     val notifyPowerOverload: Boolean = true,
     val notifyLogicUnstable: Boolean = true,
+    val interfaceMode: String = "pro",
 )
 
 object AppConfigStorage {
@@ -46,6 +50,9 @@ object AppConfigStorage {
     private const val K_GARAGE_ENABLED = "garage_enabled"
     private const val K_REALTIME_ENABLED = "rt_enabled"
     private const val K_REALTIME_SEC = "rt_sec"
+    private const val K_GRAPH_SYNC_INTERVAL_MIN = "graph_sync_interval_min"
+    private const val K_GRAPH_SYNC_PER_CYCLE = "graph_sync_per_cycle"
+    private const val K_GRAPH_SYNC_REQUEST_FETCH_LIMIT = "graph_sync_request_fetch_limit"
     private const val K_N_PV = "n_pv"
     private const val K_N_GRID_RELAY = "n_grid_relay"
     private const val K_N_GRID_PRESENCE = "n_grid_presence"
@@ -58,6 +65,7 @@ object AppConfigStorage {
     private const val K_N_MODULE_OFFLINE = "n_module_offline"
     private const val K_N_POWER_OVERLOAD = "n_power_overload"
     private const val K_N_LOGIC_UNSTABLE = "n_logic_unstable"
+    private const val K_INTERFACE_MODE = "ui_mode"
 
     private fun normalizePassword(value: String?): String {
         val trimmed = value?.trim()
@@ -66,6 +74,10 @@ object AppConfigStorage {
             trimmed == LEGACY_WEB_PASSWORD -> DEFAULT_WEB_PASSWORD
             else -> trimmed
         }
+    }
+
+    private fun normalizeInterfaceMode(value: String?): String {
+        return "pro"
     }
 
     fun load(context: Context): AppConfig {
@@ -83,6 +95,9 @@ object AppConfigStorage {
             garageEnabled = p.getBoolean(K_GARAGE_ENABLED, true),
             realtimeMonitorEnabled = p.getBoolean(K_REALTIME_ENABLED, false),
             realtimePollIntervalSec = p.getInt(K_REALTIME_SEC, 5).coerceIn(3, 60),
+            graphSyncIntervalMin = p.getInt(K_GRAPH_SYNC_INTERVAL_MIN, 15).coerceIn(2, 120),
+            graphSyncPerCycle = p.getInt(K_GRAPH_SYNC_PER_CYCLE, 2).coerceIn(1, 12),
+            graphSyncRequestFetchLimit = p.getInt(K_GRAPH_SYNC_REQUEST_FETCH_LIMIT, 80).coerceIn(1, 365),
             notifyPvGeneration = p.getBoolean(K_N_PV, true),
             notifyGridRelay = p.getBoolean(K_N_GRID_RELAY, true),
             notifyGridPresence = p.getBoolean(K_N_GRID_PRESENCE, true),
@@ -95,6 +110,7 @@ object AppConfigStorage {
             notifyModuleOffline = p.getBoolean(K_N_MODULE_OFFLINE, true),
             notifyPowerOverload = p.getBoolean(K_N_POWER_OVERLOAD, true),
             notifyLogicUnstable = p.getBoolean(K_N_LOGIC_UNSTABLE, true),
+            interfaceMode = normalizeInterfaceMode(p.getString(K_INTERFACE_MODE, "pro")),
         )
     }
 
@@ -113,6 +129,9 @@ object AppConfigStorage {
             .putBoolean(K_GARAGE_ENABLED, cfg.garageEnabled)
             .putBoolean(K_REALTIME_ENABLED, cfg.realtimeMonitorEnabled)
             .putInt(K_REALTIME_SEC, cfg.realtimePollIntervalSec.coerceIn(3, 60))
+            .putInt(K_GRAPH_SYNC_INTERVAL_MIN, cfg.graphSyncIntervalMin.coerceIn(2, 120))
+            .putInt(K_GRAPH_SYNC_PER_CYCLE, cfg.graphSyncPerCycle.coerceIn(1, 12))
+            .putInt(K_GRAPH_SYNC_REQUEST_FETCH_LIMIT, cfg.graphSyncRequestFetchLimit.coerceIn(1, 365))
             .putBoolean(K_N_PV, cfg.notifyPvGeneration)
             .putBoolean(K_N_GRID_RELAY, cfg.notifyGridRelay)
             .putBoolean(K_N_GRID_PRESENCE, cfg.notifyGridPresence)
@@ -125,6 +144,7 @@ object AppConfigStorage {
             .putBoolean(K_N_MODULE_OFFLINE, cfg.notifyModuleOffline)
             .putBoolean(K_N_POWER_OVERLOAD, cfg.notifyPowerOverload)
             .putBoolean(K_N_LOGIC_UNSTABLE, cfg.notifyLogicUnstable)
+            .putString(K_INTERFACE_MODE, normalizeInterfaceMode(cfg.interfaceMode))
             .apply()
     }
 }

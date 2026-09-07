@@ -129,6 +129,9 @@ class MainActivity : ComponentActivity() {
                     garageEnabled = parsed.optBoolean("garageEnabled", current.garageEnabled),
                     realtimeMonitorEnabled = parsed.optBoolean("realtimeMonitorEnabled", current.realtimeMonitorEnabled),
                     realtimePollIntervalSec = parsed.optInt("realtimePollIntervalSec", current.realtimePollIntervalSec).coerceIn(3, 60),
+                    graphSyncIntervalMin = parsed.optInt("graphSyncIntervalMin", current.graphSyncIntervalMin).coerceIn(2, 120),
+                    graphSyncPerCycle = parsed.optInt("graphSyncPerCycle", current.graphSyncPerCycle).coerceIn(1, 12),
+                    graphSyncRequestFetchLimit = parsed.optInt("graphSyncRequestFetchLimit", current.graphSyncRequestFetchLimit).coerceIn(1, 365),
                     notifyPvGeneration = parsed.optBoolean("notifyPvGeneration", current.notifyPvGeneration),
                     notifyGridRelay = parsed.optBoolean("notifyGridRelay", current.notifyGridRelay),
                     notifyGridPresence = parsed.optBoolean("notifyGridPresence", current.notifyGridPresence),
@@ -141,6 +144,7 @@ class MainActivity : ComponentActivity() {
                     notifyModuleOffline = parsed.optBoolean("notifyModuleOffline", current.notifyModuleOffline),
                     notifyPowerOverload = parsed.optBoolean("notifyPowerOverload", current.notifyPowerOverload),
                     notifyLogicUnstable = parsed.optBoolean("notifyLogicUnstable", current.notifyLogicUnstable),
+                    interfaceMode = "pro",
                 )
                 AppConfigStorage.save(this@MainActivity, cfg)
                 MonitorController.applyConfig(this@MainActivity, cfg, runImmediateWorker = true)
@@ -207,6 +211,22 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun fetchInverterDates(requestId: String) {
+            lifecycleScope.launch {
+                val cfg = AppConfigStorage.load(this@MainActivity)
+                runCatching { repository.fetchInverterDates(cfg) }
+                    .onSuccess { json ->
+                        if (json == null) {
+                            sendDataError(requestId, "No dates")
+                        } else {
+                            sendDataResult(requestId, json.toString())
+                        }
+                    }
+                    .onFailure { err -> sendDataError(requestId, err.message ?: "Dates data failed") }
+            }
+        }
+
+        @JavascriptInterface
         fun fetchInverterMonthly(month: String, requestId: String) {
             lifecycleScope.launch {
                 val cfg = AppConfigStorage.load(this@MainActivity)
@@ -239,10 +259,10 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
-        fun fetchLoadControllerHistory(requestId: String) {
+        fun fetchLoadControllerHistory(requestId: String, date: String) {
             lifecycleScope.launch {
                 val cfg = AppConfigStorage.load(this@MainActivity)
-                runCatching { repository.fetchLoadControllerHistory(cfg) }
+                runCatching { repository.fetchLoadControllerHistory(cfg, date) }
                     .onSuccess { json ->
                         if (json == null) {
                             sendDataError(requestId, "No data")
@@ -296,6 +316,28 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun fetchCardDailyEvents(cardKey: String, date: String, requestId: String) {
+            lifecycleScope.launch {
+                val cfg = AppConfigStorage.load(this@MainActivity)
+                runCatching { repository.fetchLoadControllerDailyLog(cfg, date) }
+                    .onSuccess { payload ->
+                        if (payload == null) {
+                            sendDataError(requestId, "No log data")
+                        } else {
+                            val result = JSONObject().apply {
+                                put("cardKey", cardKey)
+                                put("date", date)
+                                put("items", payload.optJSONArray("items") ?: JSONArray())
+                                put("count", payload.optInt("count"))
+                            }
+                            sendDataResult(requestId, result.toString())
+                        }
+                    }
+                    .onFailure { err -> sendDataError(requestId, err.message ?: "Card events load failed") }
+            }
+        }
+
+        @JavascriptInterface
         fun fetchAutomationHistory(hours: Int, requestId: String) {
             lifecycleScope.launch {
                 runCatching { RollingStatusHistoryStore.toJson(this@MainActivity, hours) }
@@ -337,6 +379,8 @@ class MainActivity : ComponentActivity() {
             offDelaySec: Int,
             onDelaySec: Int,
             forceGridOnW: Double,
+            batteryLowSocPct: Double,
+            offMinSocPct: Double,
             requestId: String,
         ) {
             runModeCommand(requestId) { cfg ->
@@ -346,6 +390,8 @@ class MainActivity : ComponentActivity() {
                     offDelaySec = offDelaySec,
                     onDelaySec = onDelaySec,
                     forceGridOnW = forceGridOnW,
+                    batteryLowSocPct = batteryLowSocPct,
+                    offMinSocPct = offMinSocPct,
                 )
             }
         }
@@ -355,6 +401,8 @@ class MainActivity : ComponentActivity() {
             pvThresholdW: Double,
             shutdownDelaySec: Int,
             overloadPowerW: Double,
+            gridRestoreV: Double,
+            overloadGridV: Double,
             requestId: String,
         ) {
             runModeCommand(requestId) { cfg ->
@@ -363,6 +411,8 @@ class MainActivity : ComponentActivity() {
                     pvThresholdW = pvThresholdW,
                     shutdownDelaySec = shutdownDelaySec,
                     overloadPowerW = overloadPowerW,
+                    gridRestoreV = gridRestoreV,
+                    overloadGridV = overloadGridV,
                 )
             }
         }
@@ -384,6 +434,9 @@ class MainActivity : ComponentActivity() {
             batteryShutoffW: Double,
             batteryResumeW: Double,
             peerActiveW: Double,
+            gridRestoreV: Double,
+            batteryReleaseGridV: Double,
+            batteryReleaseSocPct: Double,
             requestId: String,
         ) {
             runModeCommand(requestId) { cfg ->
@@ -394,6 +447,9 @@ class MainActivity : ComponentActivity() {
                     batteryShutoffW = batteryShutoffW,
                     batteryResumeW = batteryResumeW,
                     peerActiveW = peerActiveW,
+                    gridRestoreV = gridRestoreV,
+                    batteryReleaseGridV = batteryReleaseGridV,
+                    batteryReleaseSocPct = batteryReleaseSocPct,
                 )
             }
         }
@@ -417,6 +473,7 @@ class MainActivity : ComponentActivity() {
         fun setPumpLogic(
             pvThresholdW: Double,
             shutdownDelaySec: Int,
+            gridRestoreV: Double,
             requestId: String,
         ) {
             runModeCommand(requestId) { cfg ->
@@ -424,6 +481,7 @@ class MainActivity : ComponentActivity() {
                     config = cfg,
                     pvThresholdW = pvThresholdW,
                     shutdownDelaySec = shutdownDelaySec,
+                    gridRestoreV = gridRestoreV,
                 )
             }
         }
@@ -450,6 +508,9 @@ class MainActivity : ComponentActivity() {
             batteryShutoffW: Double,
             batteryResumeW: Double,
             peerActiveW: Double,
+            gridRestoreV: Double,
+            batteryReleaseGridV: Double,
+            batteryReleaseSocPct: Double,
             requestId: String,
         ) {
             runModeCommand(requestId) { cfg ->
@@ -460,6 +521,9 @@ class MainActivity : ComponentActivity() {
                     batteryShutoffW = batteryShutoffW,
                     batteryResumeW = batteryResumeW,
                     peerActiveW = peerActiveW,
+                    gridRestoreV = gridRestoreV,
+                    batteryReleaseGridV = batteryReleaseGridV,
+                    batteryReleaseSocPct = batteryReleaseSocPct,
                 )
             }
         }
@@ -626,6 +690,9 @@ private fun configToJson(cfg: AppConfig): JSONObject = JSONObject().apply {
     put("garageEnabled", cfg.garageEnabled)
     put("realtimeMonitorEnabled", cfg.realtimeMonitorEnabled)
     put("realtimePollIntervalSec", cfg.realtimePollIntervalSec)
+    put("graphSyncIntervalMin", cfg.graphSyncIntervalMin)
+    put("graphSyncPerCycle", cfg.graphSyncPerCycle)
+    put("graphSyncRequestFetchLimit", cfg.graphSyncRequestFetchLimit)
     put("notifyPvGeneration", cfg.notifyPvGeneration)
     put("notifyGridRelay", cfg.notifyGridRelay)
     put("notifyGridPresence", cfg.notifyGridPresence)
@@ -638,6 +705,7 @@ private fun configToJson(cfg: AppConfig): JSONObject = JSONObject().apply {
     put("notifyModuleOffline", cfg.notifyModuleOffline)
     put("notifyPowerOverload", cfg.notifyPowerOverload)
     put("notifyLogicUnstable", cfg.notifyLogicUnstable)
+    put("interfaceMode", cfg.interfaceMode)
 }
 
 private fun UnifiedStatus.toJson(): JSONObject = JSONObject().apply {

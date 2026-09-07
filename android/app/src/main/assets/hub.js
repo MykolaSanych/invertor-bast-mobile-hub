@@ -11,6 +11,9 @@ const DEFAULT_CONFIG = {
   garageEnabled: true,
   realtimeMonitorEnabled: false,
   realtimePollIntervalSec: 5,
+  graphSyncIntervalMin: 15,
+  graphSyncPerCycle: 2,
+  graphSyncRequestFetchLimit: 365,
   notifyPvGeneration: true,
   notifyGridRelay: true,
   notifyGridPresence: true,
@@ -23,9 +26,13 @@ const DEFAULT_CONFIG = {
   notifyModuleOffline: true,
   notifyPowerOverload: true,
   notifyLogicUnstable: true,
+  interfaceMode: "pro",
 };
 
 const LOAD_TIMELINE_POWER_ON_THRESHOLD = 50;
+// Насос споживає десятки ват навіть у режимі очікування, тому для нього
+// окремий, вищий поріг "увімкнено" — синхронізований з прошивкою load_controller.
+const LOAD_TIMELINE_PUMP_POWER_ON_THRESHOLD = 150;
 const LOAD_TIMELINE_HISTORY_REFRESH_MS = 60 * 1000;
 const LOAD_TIMELINE_VISIBLE_HOURS = 6;
 const LOAD_TIMELINE_MAX_SAMPLES = 1600;
@@ -47,14 +54,30 @@ const SCHEME_FLOW_COLORS = Object.freeze({
   loadFallback: [255, 77, 109],
 });
 const GRAPH_CACHE_STORAGE_KEY = "hub.graphCache.v1";
-const GRAPH_CACHE_SCHEMA_VERSION = 1;
+const GRAPH_CACHE_SCHEMA_VERSION = 2;
 const GRAPH_CACHE_MAX_ENTRIES_PER_TYPE = 180;
+const ANALYTICS_CACHE_STORAGE_KEY = "hub.analyticsPayloadCache.v1";
+const ANALYTICS_CACHE_SCHEMA_VERSION = 2;
+const ANALYTICS_CACHE_MAX_ENTRIES = 120;
+const MODULE_HISTORY_CACHE_STORAGE_KEY = "hub.moduleHistoryCache.v1";
+const MODULE_HISTORY_CACHE_SCHEMA_VERSION = 1;
+const MODULE_HISTORY_CACHE_MAX_ENTRIES = 48;
+const DAILY_ARCHIVE_CACHE_STORAGE_KEY = "hub.dailyArchiveCache.v1";
+const DAILY_ARCHIVE_CACHE_SCHEMA_VERSION = 2;
+const DAILY_ARCHIVE_CACHE_MAX_ENTRIES = 540;
+const DAILY_ARCHIVE_DATES_STALE_MS = 20 * 60 * 1000;
+const DAILY_ARCHIVE_BACKGROUND_FETCH_LIMIT = 2;
+const DAILY_ARCHIVE_REQUEST_FETCH_LIMIT = 365;
 const GRAPH_SYNC_MIN_GLOBAL_GAP_MS = 3500;
 const GRAPH_SYNC_MIN_PER_KEY_GAP_MS = 25000;
 const GRAPH_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 const GRAPH_SYNC_INTERVAL_JITTER_MS = 45 * 1000;
+const GRAPH_SYNC_EAGER_RETRY_MS = 12 * 1000;
+const GRAPH_SYNC_BUSY_RETRY_MS = 45 * 1000;
 const GRAPH_SYNC_MAX_ITEMS_PER_CYCLE = 2;
 const GRAPH_SYNC_VIEW_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const TIMELINE_CACHE_STORAGE_KEY = "hub.timelineCache.v1";
+const TIMELINE_CACHE_SCHEMA_VERSION = 1;
 const GRAPH_CACHE_TTL_MS = Object.freeze({
   energy: Object.freeze({
     daily: 5 * 60 * 1000,
@@ -70,6 +93,7 @@ const GRAPH_CACHE_TTL_MS = Object.freeze({
 
 const state = {
   config: { ...DEFAULT_CONFIG },
+  uiMode: "pro",
   status: null,
   pending: new Map(),
   reqSeq: 0,
@@ -92,6 +116,23 @@ const state = {
     persistHandle: null,
     energy: {},
     climate: {},
+  },
+  analyticsCache: {
+    loaded: false,
+    persistHandle: null,
+    entries: {},
+  },
+  moduleHistoryCache: {
+    loaded: false,
+    persistHandle: null,
+    entries: {},
+  },
+  dailyArchiveCache: {
+    loaded: false,
+    persistHandle: null,
+    dates: [],
+    datesFetchedAtMs: 0,
+    entries: {},
   },
   graphSync: {
     queue: null,
@@ -118,11 +159,17 @@ const state = {
     lastTimestamp: 0,
     historyReady: false,
     lastHistoryFetchMs: 0,
+    persistHandle: null,
+    // "" означає "сьогодні, наживо"; конкретна дата "YYYY-MM-DD" - перегляд
+    // збереженої на флешці load_controller доби без живого дозапису.
+    selectedDate: "",
   },
   events: {
     items: [],
     loadedAtMs: 0,
     viewMode: "all",
+    cardKey: "",
+    cardDate: "",
   },
   automationHistory: {
     items: [],
@@ -162,7 +209,7 @@ window.HubNative = {
   onStatusResult(requestId, payload) {
     const data = normalizePayload(payload);
     if (!data) {
-      rejectPending(requestId, "Invalid status payload");
+      rejectPending(requestId, "Некоректні дані статусу");
       return;
     }
 
@@ -193,9 +240,9 @@ window.HubNative = {
   },
 
   onStatusError(requestId, message) {
-    rejectPending(requestId, message || "Status error");
+    rejectPending(requestId, message || "Помилка статусу");
     applyLiveCardStates(state.status, { flash: false });
-    showToast(message || "Status request failed");
+    showToast(message || "Не вдалося отримати статус");
   },
 
   onActionResult(requestId, ok, message) {
@@ -209,14 +256,14 @@ window.HubNative = {
     if (ok) {
       pending.resolve(true);
     } else {
-      pending.reject(new Error(message || "Command failed"));
+      pending.reject(new Error(message || "Команда не виконана"));
     }
   },
 
   onDataResult(requestId, payload) {
     const data = normalizePayload(payload);
     if (!data) {
-      rejectPending(requestId, "Invalid data payload");
+      rejectPending(requestId, "Некоректні дані");
       return;
     }
     const pending = state.pending.get(requestId);
@@ -229,7 +276,7 @@ window.HubNative = {
   },
 
   onDataError(requestId, message) {
-    rejectPending(requestId, message || "Data request failed");
+    rejectPending(requestId, message || "Не вдалося отримати дані");
   },
 };
 
@@ -244,7 +291,7 @@ function nextRequestId(prefix) {
 
 function bridgeRequest(prefix, invoker) {
   if (!hasBridge()) {
-    return Promise.reject(new Error("Bridge unavailable"));
+    return Promise.reject(new Error("Міст недоступний"));
   }
 
   const requestId = nextRequestId(prefix);
@@ -270,7 +317,7 @@ function rejectPending(requestId, message) {
   if (pending.timer) {
     clearTimeout(pending.timer);
   }
-  pending.reject(new Error(message || "Request failed"));
+  pending.reject(new Error(message || "Запит не виконано"));
 }
 
 function isPartialStatusRequestId(requestId) {
@@ -347,6 +394,24 @@ function pruneGraphCacheSlot(slot) {
   });
 }
 
+function pruneTimestampedCacheEntries(entries, maxEntries) {
+  const slot = entries && typeof entries === "object" ? entries : {};
+  const keys = Object.keys(slot);
+  if (keys.length <= maxEntries) return;
+
+  keys.sort((a, b) => {
+    const ea = slot[a] || {};
+    const eb = slot[b] || {};
+    const sa = Number(ea.viewedAtMs || ea.fetchedAtMs || 0);
+    const sb = Number(eb.viewedAtMs || eb.fetchedAtMs || 0);
+    return sb - sa;
+  });
+
+  keys.slice(maxEntries).forEach((key) => {
+    delete slot[key];
+  });
+}
+
 function persistGraphCacheNow() {
   if (!state.graphCache.loaded) return;
   try {
@@ -396,6 +461,793 @@ function loadGraphCacheFromStorage() {
   } catch (error) {
     // Ignore invalid cache payload.
   }
+}
+
+function persistAnalyticsCacheNow() {
+  if (!state.analyticsCache.loaded) return;
+  try {
+    const payload = {
+      version: ANALYTICS_CACHE_SCHEMA_VERSION,
+      entries: state.analyticsCache.entries || {},
+      savedAtMs: Date.now(),
+    };
+    localStorage.setItem(ANALYTICS_CACHE_STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    // Ignore storage errors (quota/private mode).
+  }
+}
+
+function scheduleAnalyticsCachePersist() {
+  if (state.analyticsCache.persistHandle) {
+    clearTimeout(state.analyticsCache.persistHandle);
+  }
+  state.analyticsCache.persistHandle = setTimeout(() => {
+    state.analyticsCache.persistHandle = null;
+    persistAnalyticsCacheNow();
+  }, 400);
+}
+
+function loadAnalyticsCacheFromStorage() {
+  if (state.analyticsCache.loaded) return;
+  state.analyticsCache.loaded = true;
+  state.analyticsCache.entries = {};
+  try {
+    const raw = localStorage.getItem(ANALYTICS_CACHE_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+    if (Number(parsed.version) !== ANALYTICS_CACHE_SCHEMA_VERSION) return;
+    if (parsed.entries && typeof parsed.entries === "object") {
+      state.analyticsCache.entries = parsed.entries;
+    }
+    pruneTimestampedCacheEntries(state.analyticsCache.entries, ANALYTICS_CACHE_MAX_ENTRIES);
+  } catch (error) {
+    // Ignore invalid cache payload.
+  }
+}
+
+function getAnalyticsCacheEntry(period, selector) {
+  loadAnalyticsCacheFromStorage();
+  const key = graphEntryKey(period, selector);
+  const entry = state.analyticsCache.entries[key];
+  if (!entry || typeof entry !== "object" || !entry.payload) return null;
+  return entry;
+}
+
+function touchAnalyticsCacheEntry(period, selector, viewedAtMs = Date.now()) {
+  loadAnalyticsCacheFromStorage();
+  const key = graphEntryKey(period, selector);
+  const entry = state.analyticsCache.entries[key];
+  if (!entry || typeof entry !== "object") return;
+  entry.viewedAtMs = viewedAtMs;
+  scheduleAnalyticsCachePersist();
+}
+
+function upsertAnalyticsCacheEntry(period, selector, payload, fetchedAtMs = Date.now()) {
+  loadAnalyticsCacheFromStorage();
+  const key = graphEntryKey(period, selector);
+  const previous = state.analyticsCache.entries[key];
+  const viewedAtMs = Number(previous?.viewedAtMs || fetchedAtMs);
+  state.analyticsCache.entries[key] = {
+    payload,
+    fetchedAtMs,
+    viewedAtMs,
+  };
+  pruneTimestampedCacheEntries(state.analyticsCache.entries, ANALYTICS_CACHE_MAX_ENTRIES);
+  scheduleAnalyticsCachePersist();
+}
+
+function isAnalyticsCacheStale(entry, period, nowMs = Date.now()) {
+  if (!entry || typeof entry !== "object") return true;
+  const fetchedAtMs = Number(entry.fetchedAtMs || 0);
+  if (!Number.isFinite(fetchedAtMs) || fetchedAtMs <= 0) return true;
+  return nowMs - fetchedAtMs > graphCacheTtlMs("energy", period);
+}
+
+function moduleHistoryCacheKey(moduleKey, date) {
+  return `${safeText(moduleKey, "module")}::${safeText(date, "current")}`;
+}
+
+function moduleHistoryCacheTtlMs(date) {
+  const day = safeText(date, "");
+  if (day && day !== todayIso()) {
+    return 30 * 24 * 60 * 60 * 1000;
+  }
+  return 5 * 60 * 1000;
+}
+
+function persistModuleHistoryCacheNow() {
+  if (!state.moduleHistoryCache.loaded) return;
+  try {
+    const payload = {
+      version: MODULE_HISTORY_CACHE_SCHEMA_VERSION,
+      entries: state.moduleHistoryCache.entries || {},
+      savedAtMs: Date.now(),
+    };
+    localStorage.setItem(MODULE_HISTORY_CACHE_STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    // Ignore storage errors (quota/private mode).
+  }
+}
+
+function scheduleModuleHistoryCachePersist() {
+  if (state.moduleHistoryCache.persistHandle) {
+    clearTimeout(state.moduleHistoryCache.persistHandle);
+  }
+  state.moduleHistoryCache.persistHandle = setTimeout(() => {
+    state.moduleHistoryCache.persistHandle = null;
+    persistModuleHistoryCacheNow();
+  }, 400);
+}
+
+function loadModuleHistoryCacheFromStorage() {
+  if (state.moduleHistoryCache.loaded) return;
+  state.moduleHistoryCache.loaded = true;
+  state.moduleHistoryCache.entries = {};
+  try {
+    const raw = localStorage.getItem(MODULE_HISTORY_CACHE_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+    if (Number(parsed.version) !== MODULE_HISTORY_CACHE_SCHEMA_VERSION) return;
+    if (parsed.entries && typeof parsed.entries === "object") {
+      state.moduleHistoryCache.entries = parsed.entries;
+    }
+    pruneTimestampedCacheEntries(state.moduleHistoryCache.entries, MODULE_HISTORY_CACHE_MAX_ENTRIES);
+  } catch (error) {
+    // Ignore invalid cache payload.
+  }
+}
+
+function getModuleHistoryCacheEntry(moduleKey, date) {
+  loadModuleHistoryCacheFromStorage();
+  const key = moduleHistoryCacheKey(moduleKey, date);
+  const entry = state.moduleHistoryCache.entries[key];
+  if (!entry || typeof entry !== "object" || !entry.payload) return null;
+  return entry;
+}
+
+function upsertModuleHistoryCacheEntry(moduleKey, date, payload, fetchedAtMs = Date.now()) {
+  loadModuleHistoryCacheFromStorage();
+  const payloadDate = safeText(payload?.date, date || "current");
+  const key = moduleHistoryCacheKey(moduleKey, payloadDate);
+  const previous = state.moduleHistoryCache.entries[key];
+  const viewedAtMs = Number(previous?.viewedAtMs || fetchedAtMs);
+  state.moduleHistoryCache.entries[key] = {
+    payload,
+    fetchedAtMs,
+    viewedAtMs,
+  };
+  pruneTimestampedCacheEntries(state.moduleHistoryCache.entries, MODULE_HISTORY_CACHE_MAX_ENTRIES);
+  scheduleModuleHistoryCachePersist();
+}
+
+function touchModuleHistoryCacheEntry(moduleKey, date, viewedAtMs = Date.now()) {
+  loadModuleHistoryCacheFromStorage();
+  const key = moduleHistoryCacheKey(moduleKey, date);
+  const entry = state.moduleHistoryCache.entries[key];
+  if (!entry || typeof entry !== "object") return;
+  entry.viewedAtMs = viewedAtMs;
+  scheduleModuleHistoryCachePersist();
+}
+
+function isModuleHistoryCacheStale(entry, date, nowMs = Date.now()) {
+  if (!entry || typeof entry !== "object") return true;
+  const fetchedAtMs = Number(entry.fetchedAtMs || 0);
+  if (!Number.isFinite(fetchedAtMs) || fetchedAtMs <= 0) return true;
+  return nowMs - fetchedAtMs > moduleHistoryCacheTtlMs(date);
+}
+
+function normalizeIsoDate(value) {
+  const date = safeText(value, "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "";
+  return date;
+}
+
+function normalizeIsoMonth(value) {
+  const month = safeText(value, "");
+  if (!/^\d{4}-\d{2}$/.test(month)) return "";
+  return month;
+}
+
+function sortIsoDatesDesc(values) {
+  const unique = Array.from(new Set((Array.isArray(values) ? values : []).map((item) => normalizeIsoDate(item)).filter(Boolean)));
+  unique.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  return unique;
+}
+
+function parseInverterDatesPayload(payload) {
+  if (!Array.isArray(payload)) return [];
+  const dates = payload
+    .map((row) => normalizeIsoDate(row?.date || row?.value || row?.day || row))
+    .filter(Boolean);
+  return sortIsoDatesDesc(dates);
+}
+
+function persistDailyArchiveCacheNow() {
+  if (!state.dailyArchiveCache.loaded) return;
+  try {
+    const payload = {
+      version: DAILY_ARCHIVE_CACHE_SCHEMA_VERSION,
+      dates: state.dailyArchiveCache.dates || [],
+      datesFetchedAtMs: Number(state.dailyArchiveCache.datesFetchedAtMs || 0),
+      entries: state.dailyArchiveCache.entries || {},
+      savedAtMs: Date.now(),
+    };
+    localStorage.setItem(DAILY_ARCHIVE_CACHE_STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    // Ignore storage errors (quota/private mode).
+  }
+}
+
+function scheduleDailyArchiveCachePersist() {
+  if (state.dailyArchiveCache.persistHandle) {
+    clearTimeout(state.dailyArchiveCache.persistHandle);
+  }
+  state.dailyArchiveCache.persistHandle = setTimeout(() => {
+    state.dailyArchiveCache.persistHandle = null;
+    persistDailyArchiveCacheNow();
+  }, 450);
+}
+
+function pruneDailyArchiveEntries() {
+  const entries = state.dailyArchiveCache.entries || {};
+  const dates = Object.keys(entries)
+    .map((date) => normalizeIsoDate(date))
+    .filter(Boolean)
+    .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  if (dates.length <= DAILY_ARCHIVE_CACHE_MAX_ENTRIES) return;
+  dates.slice(DAILY_ARCHIVE_CACHE_MAX_ENTRIES).forEach((date) => {
+    delete entries[date];
+  });
+}
+
+function loadDailyArchiveCacheFromStorage() {
+  if (state.dailyArchiveCache.loaded) return;
+  state.dailyArchiveCache.loaded = true;
+  state.dailyArchiveCache.dates = [];
+  state.dailyArchiveCache.datesFetchedAtMs = 0;
+  state.dailyArchiveCache.entries = {};
+  try {
+    const raw = localStorage.getItem(DAILY_ARCHIVE_CACHE_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+    if (Number(parsed.version) !== DAILY_ARCHIVE_CACHE_SCHEMA_VERSION) return;
+    state.dailyArchiveCache.dates = sortIsoDatesDesc(parsed.dates);
+    state.dailyArchiveCache.datesFetchedAtMs = Number(parsed.datesFetchedAtMs || 0);
+    if (parsed.entries && typeof parsed.entries === "object") {
+      Object.entries(parsed.entries).forEach(([key, value]) => {
+        const date = normalizeIsoDate(key);
+        if (!date || !value || typeof value !== "object") return;
+        if (!value.payload || typeof value.payload !== "object") return;
+        state.dailyArchiveCache.entries[date] = {
+          payload: value.payload,
+          fetchedAtMs: Number(value.fetchedAtMs || 0),
+          viewedAtMs: Number(value.viewedAtMs || 0),
+        };
+      });
+    }
+    pruneDailyArchiveEntries();
+  } catch (error) {
+    // Ignore invalid cache payload.
+  }
+}
+
+function dailyArchiveEntryTtlMs(date) {
+  const day = normalizeIsoDate(date);
+  if (!day || day !== todayIso()) {
+    return 12 * 60 * 60 * 1000;
+  }
+  return 5 * 60 * 1000;
+}
+
+function isDailyArchiveEntryStale(entry, date, nowMs = Date.now()) {
+  if (!entry || typeof entry !== "object") return true;
+  const fetchedAtMs = Number(entry.fetchedAtMs || 0);
+  if (!Number.isFinite(fetchedAtMs) || fetchedAtMs <= 0) return true;
+  return nowMs - fetchedAtMs > dailyArchiveEntryTtlMs(date);
+}
+
+function getDailyArchiveEntry(date) {
+  loadDailyArchiveCacheFromStorage();
+  const day = normalizeIsoDate(date);
+  if (!day) return null;
+  const entry = state.dailyArchiveCache.entries[day];
+  if (!entry || typeof entry !== "object" || !entry.payload) return null;
+  if (!isDailyPayloadLike(entry.payload, day)) {
+    delete state.dailyArchiveCache.entries[day];
+    state.dailyArchiveCache.dates = sortIsoDatesDesc([
+      ...(state.dailyArchiveCache.dates || []),
+      ...Object.keys(state.dailyArchiveCache.entries || {}),
+    ]);
+    scheduleDailyArchiveCachePersist();
+    return null;
+  }
+  return entry;
+}
+
+function touchDailyArchiveEntry(date, viewedAtMs = Date.now()) {
+  loadDailyArchiveCacheFromStorage();
+  const day = normalizeIsoDate(date);
+  if (!day) return;
+  const entry = state.dailyArchiveCache.entries[day];
+  if (!entry || typeof entry !== "object") return;
+  entry.viewedAtMs = viewedAtMs;
+  scheduleDailyArchiveCachePersist();
+}
+
+function upsertDailyArchiveEntry(date, payload, fetchedAtMs = Date.now()) {
+  loadDailyArchiveCacheFromStorage();
+  const day = normalizeIsoDate(date);
+  if (!day || !payload || typeof payload !== "object") return;
+  if (!isDailyPayloadLike(payload, day)) return;
+  const previous = state.dailyArchiveCache.entries[day];
+  state.dailyArchiveCache.entries[day] = {
+    payload,
+    fetchedAtMs,
+    viewedAtMs: Number(previous?.viewedAtMs || fetchedAtMs),
+  };
+  state.dailyArchiveCache.dates = sortIsoDatesDesc([
+    ...(state.dailyArchiveCache.dates || []),
+    day,
+    ...Object.keys(state.dailyArchiveCache.entries),
+  ]);
+  pruneDailyArchiveEntries();
+  scheduleDailyArchiveCachePersist();
+}
+
+function setDailyArchiveKnownDates(dates, fetchedAtMs = Date.now()) {
+  loadDailyArchiveCacheFromStorage();
+  state.dailyArchiveCache.dates = sortIsoDatesDesc([
+    ...(state.dailyArchiveCache.dates || []),
+    ...dates,
+    ...Object.keys(state.dailyArchiveCache.entries),
+  ]);
+  state.dailyArchiveCache.datesFetchedAtMs = fetchedAtMs;
+  scheduleDailyArchiveCachePersist();
+}
+
+function datesForMonth(year, month) {
+  const safeYear = Number.isInteger(year) ? year : Number.parseInt(year, 10);
+  const safeMonth = Number.isInteger(month) ? month : Number.parseInt(month, 10);
+  if (!Number.isFinite(safeYear) || !Number.isFinite(safeMonth) || safeMonth < 1 || safeMonth > 12) {
+    return [];
+  }
+  const lastDay = new Date(safeYear, safeMonth, 0).getDate();
+  const prefix = `${String(safeYear).padStart(4, "0")}-${String(safeMonth).padStart(2, "0")}`;
+  const dates = [];
+  for (let day = 1; day <= lastDay; day += 1) {
+    dates.push(`${prefix}-${String(day).padStart(2, "0")}`);
+  }
+  return dates;
+}
+
+async function fetchInverterDatesFromBridge(options = {}) {
+  loadDailyArchiveCacheFromStorage();
+  const force = !!options.force;
+  const nowMs = Date.now();
+  const cachedDates = sortIsoDatesDesc(state.dailyArchiveCache.dates || []);
+  const hasFreshDates =
+    cachedDates.length > 0 &&
+    nowMs - Number(state.dailyArchiveCache.datesFetchedAtMs || 0) <= DAILY_ARCHIVE_DATES_STALE_MS;
+
+  if (!force && hasFreshDates) {
+    return cachedDates;
+  }
+  if (!hasBridge() || !window.AndroidHub || typeof window.AndroidHub.fetchInverterDates !== "function") {
+    return cachedDates;
+  }
+
+  try {
+    const payload = await bridgeRequest("dates", (requestId) => {
+      window.AndroidHub.fetchInverterDates(requestId);
+    });
+    const dates = parseInverterDatesPayload(payload);
+    if (dates.length > 0) {
+      setDailyArchiveKnownDates(dates, nowMs);
+      return dates;
+    }
+  } catch (error) {
+    // Silent fallback to cached dates.
+  }
+
+  return cachedDates;
+}
+
+function isDailyPayloadLike(payload, expectedDate = "") {
+  if (!(payload && typeof payload === "object" && Array.isArray(payload.hours))) return false;
+  const expected = normalizeIsoDate(expectedDate);
+  if (!expected) return true;
+  const payloadDate = normalizeIsoDate(payload?.date || "");
+  if (!payloadDate) return false;
+  return payloadDate === expected;
+}
+
+async function fetchDailyPayloadFromBridge(date, options = {}) {
+  const day = normalizeIsoDate(date);
+  if (!day) return null;
+
+  const force = !!options.force;
+  const cachedEntry = getDailyArchiveEntry(day);
+  if (!force && cachedEntry && !isDailyArchiveEntryStale(cachedEntry, day, Date.now())) {
+    touchDailyArchiveEntry(day);
+    return cachedEntry.payload;
+  }
+
+  if (!hasBridge() || !window.AndroidHub || typeof window.AndroidHub.fetchInverterDaily !== "function") {
+    return cachedEntry?.payload || null;
+  }
+
+  const payload = await bridgeRequest("daily-sync", (requestId) => {
+    window.AndroidHub.fetchInverterDaily(day, requestId);
+  });
+  if (!isDailyPayloadLike(payload, day)) {
+    return cachedEntry?.payload || null;
+  }
+  upsertDailyArchiveEntry(day, payload, Date.now());
+  upsertAnalyticsCacheEntry("daily", day, payload, Date.now());
+  return payload;
+}
+
+function computeDailyEnergyTotals(payload) {
+  const rows = Array.isArray(payload?.hours) ? payload.hours : [];
+  const totals = payload?.totals && typeof payload.totals === "object" ? payload.totals : {};
+  let pv = maybeFiniteNumber(totals.dailyPV, null);
+  let home = maybeFiniteNumber(totals.dailyHome, null);
+  let grid = maybeFiniteNumber(totals.dailyGrid, null);
+
+  if (pv === null) {
+    pv = rows.reduce((sum, row) => sum + toFiniteNumber(row?.pv, 0), 0);
+  }
+  if (home === null) {
+    home = rows.reduce((sum, row) => sum + toFiniteNumber(row?.home, 0), 0);
+  }
+  if (grid === null) {
+    grid = rows.reduce((sum, row) => sum + toFiniteNumber(row?.grid, 0), 0);
+  }
+
+  return {
+    pv: Math.round(pv * 10) / 10,
+    home: Math.round(home * 10) / 10,
+    grid: Math.round(grid * 10) / 10,
+  };
+}
+
+const DAILY_CLIMATE_CANDIDATE_KEYS = Object.freeze({
+  temp: Object.freeze(["temp", "temp_int", "temp_internal", "inside_temp", "internal.temp"]),
+  hum: Object.freeze(["hum", "hum_int", "hum_internal", "inside_hum", "internal.hum"]),
+  press: Object.freeze(["press", "press_int", "press_internal", "inside_press", "internal.press"]),
+  tempExt: Object.freeze(["temp_ext", "external_temp", "outside_temp", "external.temp", "outside.temp"]),
+  humExt: Object.freeze(["hum_ext", "external_hum", "outside_hum", "external.hum", "outside.hum"]),
+  pressExt: Object.freeze(["press_ext", "external_press", "outside_press", "external.press", "outside.press"]),
+  tempCorridor: Object.freeze(["temp_corridor", "corridor_temp", "temp_load", "temp_lc", "corridor.temp"]),
+  humCorridor: Object.freeze(["hum_corridor", "corridor_hum", "hum_load", "hum_lc", "corridor.hum"]),
+  pressCorridor: Object.freeze(["press_corridor", "corridor_press", "press_load", "press_lc", "corridor.press"]),
+  tempGarage: Object.freeze(["temp_garage", "garage_temp", "garage.temp"]),
+  humGarage: Object.freeze(["hum_garage", "garage_hum", "garage.hum"]),
+  pressGarage: Object.freeze(["press_garage", "garage_press", "garage.press"]),
+  tempInverter: Object.freeze(["inverter_temp", "inverterTemp", "inverter_rs232_temp", "inverter_rs232.temp", "rs232_temp"]),
+});
+
+function averageDailyRowByCandidates(rows, keys) {
+  if (!Array.isArray(rows) || !Array.isArray(keys)) return 0;
+  let sum = 0;
+  let count = 0;
+  rows.forEach((row) => {
+    const value = climateNumberFromCandidates(row, keys);
+    if (Number.isFinite(value)) {
+      sum += value;
+      count += 1;
+    }
+  });
+  if (!count) return 0;
+  return Math.round((sum / count) * 10) / 10;
+}
+
+function computeDailyClimateSummary(payload) {
+  const rows = Array.isArray(payload?.hours) ? payload.hours : [];
+  return {
+    temp: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.temp),
+    hum: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.hum),
+    press: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.press),
+    temp_ext: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.tempExt),
+    hum_ext: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.humExt),
+    press_ext: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.pressExt),
+    temp_corridor: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.tempCorridor),
+    hum_corridor: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.humCorridor),
+    press_corridor: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.pressCorridor),
+    temp_garage: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.tempGarage),
+    hum_garage: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.humGarage),
+    press_garage: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.pressGarage),
+    inverter_temp: averageDailyRowByCandidates(rows, DAILY_CLIMATE_CANDIDATE_KEYS.tempInverter),
+  };
+}
+
+async function syncDailyArchiveDates(options = {}) {
+  const dates = await fetchInverterDatesFromBridge({ force: !!options.forceDates });
+  if (dates.length) {
+    setDailyArchiveKnownDates(dates, Date.now());
+  }
+  return dates;
+}
+
+function hasPendingBridgeRequestPrefix(prefix) {
+  const safePrefix = safeText(prefix, "");
+  if (!safePrefix) return false;
+  for (const requestId of state.pending.keys()) {
+    if (typeof requestId !== "string") continue;
+    if (requestId.startsWith(`${safePrefix}-`)) return true;
+  }
+  return false;
+}
+
+function isLoadControllerIdleForArchiveSync() {
+  if (!state.config.loadControllerEnabled) return true;
+  if (hasPendingBridgeRequestPrefix("cmd")) return false;
+
+  const loadController = state.status?.loadController;
+  if (!loadController || typeof loadController !== "object") {
+    return true;
+  }
+
+  const relayBusy = loadController.boiler1On === true || loadController.pumpOn === true;
+  const boilerPower = Math.abs(toFiniteNumber(loadController.boilerPower, 0));
+  const pumpPower = Math.abs(toFiniteNumber(loadController.pumpPower, 0));
+  const powerBusy = boilerPower >= LOAD_TIMELINE_POWER_ON_THRESHOLD || pumpPower >= LOAD_TIMELINE_POWER_ON_THRESHOLD;
+  return !relayBusy && !powerBusy;
+}
+
+async function ensureDailyArchiveEntries(targetDates, options = {}) {
+  const force = !!options.force;
+  const onlyWhenLoadIdle = options.onlyWhenLoadIdle === true;
+  const configuredLimit = graphSyncPerCycleFromConfig();
+  const requestedLimit = Number(options.maxFetch);
+  const maxFetch = Math.max(
+    0,
+    Number.isFinite(requestedLimit) ? requestedLimit : configuredLimit,
+  );
+
+  const dates = sortIsoDatesDesc(targetDates);
+  const stats = {
+    requested: dates.length,
+    fetched: 0,
+    blockedByBusy: false,
+  };
+  if (!maxFetch || !dates.length) return stats;
+
+  let fetched = 0;
+  for (const date of dates) {
+    if (fetched >= maxFetch) break;
+    const entry = getDailyArchiveEntry(date);
+    if (!force && entry && !isDailyArchiveEntryStale(entry, date, Date.now())) {
+      continue;
+    }
+    if (onlyWhenLoadIdle && !isLoadControllerIdleForArchiveSync()) {
+      stats.blockedByBusy = true;
+      break;
+    }
+    try {
+      const payload = await fetchDailyPayloadFromBridge(date, { force });
+      if (payload && isDailyPayloadLike(payload, date)) {
+        fetched += 1;
+        stats.fetched += 1;
+      }
+    } catch (error) {
+      // Silent: sync must not interrupt UI flow.
+    }
+  }
+  return stats;
+}
+
+function buildMonthlyPayloadFromArchive(monthSelector) {
+  loadDailyArchiveCacheFromStorage();
+  const month = normalizeIsoMonth(monthSelector);
+  if (!month) {
+    throw new Error("Некоректний вибір місяця");
+  }
+  const year = Number.parseInt(month.slice(0, 4), 10);
+  const monthNum = Number.parseInt(month.slice(5, 7), 10);
+  const monthDates = datesForMonth(year, monthNum);
+  const knownMonthDates = sortIsoDatesDesc(state.dailyArchiveCache.dates || [])
+    .filter((date) => date.startsWith(`${month}-`));
+  const knownMonthDaysCount = knownMonthDates.length > 0 ? knownMonthDates.length : monthDates.length;
+  let syncedDays = 0;
+  const days = monthDates.map((date) => {
+    const dayNumber = Number.parseInt(date.slice(8, 10), 10);
+    const entry = getDailyArchiveEntry(date);
+    if (!entry || !isDailyPayloadLike(entry.payload)) {
+      return {
+        day: dayNumber,
+        pv: 0,
+        home: 0,
+        grid: 0,
+        temp: 0,
+        hum: 0,
+        press: 0,
+        temp_ext: 0,
+        hum_ext: 0,
+        press_ext: 0,
+        temp_corridor: 0,
+        hum_corridor: 0,
+        press_corridor: 0,
+        temp_garage: 0,
+        hum_garage: 0,
+        press_garage: 0,
+      };
+    }
+    syncedDays += 1;
+    const energy = computeDailyEnergyTotals(entry.payload);
+    const climate = computeDailyClimateSummary(entry.payload);
+    return {
+      day: dayNumber,
+      pv: energy.pv,
+      home: energy.home,
+      grid: energy.grid,
+      temp: climate.temp,
+      hum: climate.hum,
+      press: climate.press,
+      temp_ext: climate.temp_ext,
+      hum_ext: climate.hum_ext,
+      press_ext: climate.press_ext,
+      temp_corridor: climate.temp_corridor,
+      hum_corridor: climate.hum_corridor,
+      press_corridor: climate.press_corridor,
+      temp_garage: climate.temp_garage,
+      hum_garage: climate.hum_garage,
+      press_garage: climate.press_garage,
+    };
+  });
+  return {
+    month,
+    days,
+    _coverage: {
+      period: "monthly",
+      expectedDays: monthDates.length,
+      knownDays: knownMonthDaysCount,
+      syncedDays,
+    },
+  };
+}
+
+function buildYearlyPayloadFromArchive(yearValue) {
+  loadDailyArchiveCacheFromStorage();
+  const targetYear = Number.parseInt(String(yearValue), 10);
+  if (!Number.isFinite(targetYear) || targetYear < 2000 || targetYear > 2099) {
+    throw new Error("Некоректний вибір року");
+  }
+
+  const monthLabels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
+  const monthly = Array.from({ length: 12 }, () => ({
+    pv: 0,
+    home: 0,
+    grid: 0,
+    climateDays: 0,
+    temp: 0,
+    hum: 0,
+    press: 0,
+    temp_ext: 0,
+    hum_ext: 0,
+    press_ext: 0,
+    corridorDays: 0,
+    temp_corridor: 0,
+    hum_corridor: 0,
+    press_corridor: 0,
+    garageDays: 0,
+    temp_garage: 0,
+    hum_garage: 0,
+    press_garage: 0,
+    inverterDays: 0,
+    inverter_temp: 0,
+  }));
+
+  const cachedDates = sortIsoDatesDesc(Object.keys(state.dailyArchiveCache.entries || {}))
+    .filter((date) => date.startsWith(`${targetYear}-`));
+  const knownYearDates = sortIsoDatesDesc(state.dailyArchiveCache.dates || [])
+    .filter((date) => date.startsWith(`${targetYear}-`));
+  const knownYearDaysCount = Math.max(knownYearDates.length, cachedDates.length);
+  let syncedDays = 0;
+  cachedDates.forEach((date) => {
+    const monthIndex = Number.parseInt(date.slice(5, 7), 10) - 1;
+    if (monthIndex < 0 || monthIndex > 11) return;
+    const entry = getDailyArchiveEntry(date);
+    if (!entry || !isDailyPayloadLike(entry.payload)) return;
+    syncedDays += 1;
+
+    const energy = computeDailyEnergyTotals(entry.payload);
+    const climate = computeDailyClimateSummary(entry.payload);
+    const bucket = monthly[monthIndex];
+    bucket.pv += energy.pv;
+    bucket.home += energy.home;
+    bucket.grid += energy.grid;
+
+    if (climate.temp || climate.hum || climate.press || climate.temp_ext || climate.hum_ext || climate.press_ext) {
+      bucket.climateDays += 1;
+      bucket.temp += climate.temp;
+      bucket.hum += climate.hum;
+      bucket.press += climate.press;
+      bucket.temp_ext += climate.temp_ext;
+      bucket.hum_ext += climate.hum_ext;
+      bucket.press_ext += climate.press_ext;
+    }
+    if (climate.temp_corridor || climate.hum_corridor || climate.press_corridor) {
+      bucket.corridorDays += 1;
+      bucket.temp_corridor += climate.temp_corridor;
+      bucket.hum_corridor += climate.hum_corridor;
+      bucket.press_corridor += climate.press_corridor;
+    }
+    if (climate.temp_garage || climate.hum_garage || climate.press_garage) {
+      bucket.garageDays += 1;
+      bucket.temp_garage += climate.temp_garage;
+      bucket.hum_garage += climate.hum_garage;
+      bucket.press_garage += climate.press_garage;
+    }
+    if (climate.inverter_temp) {
+      bucket.inverterDays += 1;
+      bucket.inverter_temp += climate.inverter_temp;
+    }
+  });
+
+  const avg = (sum, count) => (count > 0 ? Math.round((sum / count) * 10) / 10 : 0);
+  return {
+    status: "success",
+    current_year: targetYear,
+    months: monthLabels,
+    pv: monthly.map((row) => Math.round(row.pv * 10) / 10),
+    home: monthly.map((row) => Math.round(row.home * 10) / 10),
+    grid: monthly.map((row) => Math.round(row.grid * 10) / 10),
+    temp: monthly.map((row) => avg(row.temp, row.climateDays)),
+    hum: monthly.map((row) => avg(row.hum, row.climateDays)),
+    press: monthly.map((row) => avg(row.press, row.climateDays)),
+    temp_ext: monthly.map((row) => avg(row.temp_ext, row.climateDays)),
+    hum_ext: monthly.map((row) => avg(row.hum_ext, row.climateDays)),
+    press_ext: monthly.map((row) => avg(row.press_ext, row.climateDays)),
+    temp_corridor: monthly.map((row) => avg(row.temp_corridor, row.corridorDays)),
+    hum_corridor: monthly.map((row) => avg(row.hum_corridor, row.corridorDays)),
+    press_corridor: monthly.map((row) => avg(row.press_corridor, row.corridorDays)),
+    temp_garage: monthly.map((row) => avg(row.temp_garage, row.garageDays)),
+    hum_garage: monthly.map((row) => avg(row.hum_garage, row.garageDays)),
+    press_garage: monthly.map((row) => avg(row.press_garage, row.garageDays)),
+    inverter_temp: monthly.map((row) => avg(row.inverter_temp, row.inverterDays)),
+    _coverage: {
+      period: "yearly",
+      expectedDays: 0,
+      knownDays: knownYearDaysCount,
+      syncedDays,
+    },
+  };
+}
+
+async function syncDailyArchiveQuiet(options = {}) {
+  const force = !!options.force;
+  const onlyWhenLoadIdle = options.onlyWhenLoadIdle === true;
+  const configuredLimit = graphSyncPerCycleFromConfig();
+  const requestedLimit = Number(options.maxFetch);
+  const maxFetch = Math.max(
+    0,
+    Number.isFinite(requestedLimit) ? requestedLimit : configuredLimit,
+  );
+  if (!hasBridge() || maxFetch <= 0) {
+    return {
+      requested: 0,
+      fetched: 0,
+      blockedByBusy: false,
+    };
+  }
+
+  const dates = await syncDailyArchiveDates({ forceDates: force });
+  if (!dates.length) {
+    return {
+      requested: 0,
+      fetched: 0,
+      blockedByBusy: false,
+    };
+  }
+  return ensureDailyArchiveEntries(dates, {
+    force,
+    maxFetch,
+    onlyWhenLoadIdle,
+  });
 }
 
 function getGraphCacheEntry(graphType, period, selector) {
@@ -503,7 +1355,23 @@ function maybeNum(value, digits = 1, fallback = "--") {
 
 function boolText(value) {
   if (value === null || value === undefined) return "---";
-  return value ? "ON" : "OFF";
+  return value ? "УВІМК" : "ВИМК";
+}
+
+// Уже перекладена версія boolText(); залишена окремою функцією, бо
+// renderPowerScheme() використовує "--" замість "---" для невідомого стану.
+function boolTextUk(value) {
+  if (value === null || value === undefined) return "--";
+  return value ? "увімк." : "вимк.";
+}
+
+function setSchemeNodeOnOff(id, isOn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const unknown = isOn === null || isOn === undefined;
+  el.classList.toggle("is-on", isOn === true);
+  el.classList.toggle("is-off", isOn === false);
+  el.classList.toggle("is-unknown", unknown);
 }
 
 function safeText(value, fallback = "---") {
@@ -626,6 +1494,36 @@ function clampRealtimePoll(value) {
   return Math.max(3, Math.min(60, Math.round(parsed)));
 }
 
+function clampGraphSyncIntervalMin(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 15;
+  return Math.max(2, Math.min(120, Math.round(parsed)));
+}
+
+function clampGraphSyncPerCycle(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 2;
+  return Math.max(1, Math.min(12, Math.round(parsed)));
+}
+
+function clampGraphSyncRequestFetchLimit(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 365;
+  return Math.max(1, Math.min(365, Math.round(parsed)));
+}
+
+function graphSyncIntervalMsFromConfig() {
+  return clampGraphSyncIntervalMin(state.config.graphSyncIntervalMin) * 60 * 1000;
+}
+
+function graphSyncPerCycleFromConfig() {
+  return clampGraphSyncPerCycle(state.config.graphSyncPerCycle);
+}
+
+function graphSyncRequestFetchLimitFromConfig() {
+  return clampGraphSyncRequestFetchLimit(state.config.graphSyncRequestFetchLimit);
+}
+
 function normalizeBaseUrl(value) {
   const trimmed = safeText(value, "").trim().replace(/\/+$/, "");
   if (!trimmed) return "";
@@ -678,7 +1576,7 @@ function formatDateTimeFromMs(ts) {
 }
 
 function moduleUpdatedText(enabled, module) {
-  if (!enabled) return "disabled";
+  if (!enabled) return "вимкнено";
   const moduleTs = Number(module?.updatedAtMs);
   if (!Number.isFinite(moduleTs) || moduleTs <= 0) return "--:--:--";
   return formatClockFromMs(moduleTs);
@@ -698,36 +1596,39 @@ function classifyGateState(garage) {
   return "unknown";
 }
 
-function setGateActionButtonLabel(stateName) {
-  const btn = document.getElementById("gateActionBtn");
-  if (!btn) return;
-
+function setGateActionButtonLabel(stateName, options = {}) {
+  const { disabled = false } = options;
+  // label лишається внутрішнім англійським ключем для class-перемикачів
+  // нижче; displayLabel — те, що бачить користувач.
   let label = "stop";
   if (stateName === "closed") label = "open";
   else if (stateName === "open") label = "close";
+  const displayLabel = label === "open" ? "відкрити" : label === "close" ? "зачинити" : "стоп";
 
-  btn.textContent = label;
-  btn.classList.toggle("is-open", label === "open");
-  btn.classList.toggle("is-close", label === "close");
-  btn.classList.toggle("is-stop", label === "stop");
+  document.querySelectorAll("[data-gate-action]").forEach((btn) => {
+    btn.disabled = !!disabled;
+    btn.textContent = disabled ? "--" : displayLabel;
+    btn.classList.toggle("is-open", !disabled && label === "open");
+    btn.classList.toggle("is-close", !disabled && label === "close");
+    btn.classList.toggle("is-stop", !disabled && label === "stop");
+  });
 }
 
 function setGarageLightActionButtonState({ disabled = false, on = false, reason = "" } = {}) {
-  const btn = document.getElementById("garageLightActionBtn");
-  if (!btn) return;
+  document.querySelectorAll("[data-garage-light-action]").forEach((btn) => {
+    btn.disabled = !!disabled;
+    btn.classList.toggle("is-on", !disabled && !!on);
+    btn.classList.toggle("is-off", !disabled && !on);
 
-  btn.disabled = !!disabled;
-  btn.classList.toggle("is-on", !disabled && !!on);
-  btn.classList.toggle("is-off", !disabled && !on);
+    if (disabled) {
+      btn.textContent = "світло --";
+      btn.title = "модуль гаража вимкнено";
+      return;
+    }
 
-  if (disabled) {
-    btn.textContent = "light\n--";
-    btn.title = "garage module disabled";
-    return;
-  }
-
-  btn.textContent = `light\n${on ? "ON" : "OFF"}`;
-  btn.title = reason ? `garage light (${reason})` : "garage light";
+    btn.textContent = `світло ${on ? "УВІМК" : "ВИМК"}`;
+    btn.title = reason ? `світло гаража (${reason})` : "світло гаража";
+  });
 }
 
 function readChecked(id, fallback = false) {
@@ -770,6 +1671,113 @@ function loadTimelineDayKey(timestampMs) {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function normalizeInterfaceMode(value) {
+  return "pro";
+}
+
+function syncInterfaceModeButtons() {
+  // Single-mode UI: no interface mode buttons remain.
+}
+
+function applyInterfaceMode(mode) {
+  const normalized = "pro";
+  state.config.interfaceMode = normalized;
+  state.uiMode = normalized;
+  if (document.body) {
+    document.body.setAttribute("data-ui-mode", normalized);
+  }
+  syncInterfaceModeButtons();
+}
+
+function bindQuickInterfaceModeSwitch() {
+  // Additional UI modes were removed; hub always runs in pro mode.
+}
+
+function normalizeTimelineSample(rawSample) {
+  const ts = Number(rawSample?.ts);
+  if (!Number.isFinite(ts) || ts <= 0) return null;
+  return {
+    ts,
+    boilerOn: !!rawSample?.boilerOn,
+    garageBoilerOn: !!rawSample?.garageBoilerOn,
+    pumpOn: !!rawSample?.pumpOn,
+    gridOn: !!rawSample?.gridOn,
+    pvOn: !!rawSample?.pvOn,
+  };
+}
+
+function sanitizeTimelineSamples(rawSamples) {
+  if (!Array.isArray(rawSamples) || !rawSamples.length) return [];
+  const mapped = rawSamples
+    .map(normalizeTimelineSample)
+    .filter((item) => item !== null)
+    .sort((a, b) => a.ts - b.ts);
+  if (!mapped.length) return [];
+
+  const dedup = [];
+  for (let i = 0; i < mapped.length; i += 1) {
+    const sample = mapped[i];
+    const tail = dedup[dedup.length - 1];
+    if (tail && tail.ts === sample.ts) {
+      dedup[dedup.length - 1] = sample;
+    } else {
+      dedup.push(sample);
+    }
+  }
+  return dedup;
+}
+
+function persistTimelineCacheNow() {
+  try {
+    const day = safeText(state.timeline.day, "");
+    const samples = sanitizeTimelineSamples(state.timeline.samples);
+    if (!day || !samples.length) return;
+    const payload = {
+      version: TIMELINE_CACHE_SCHEMA_VERSION,
+      day,
+      lastTimestamp: Number(state.timeline.lastTimestamp || 0),
+      samples,
+      savedAtMs: Date.now(),
+    };
+    localStorage.setItem(TIMELINE_CACHE_STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    // Ignore storage errors (quota/private mode).
+  }
+}
+
+function scheduleTimelineCachePersist() {
+  if (state.timeline.persistHandle) {
+    clearTimeout(state.timeline.persistHandle);
+  }
+  state.timeline.persistHandle = setTimeout(() => {
+    state.timeline.persistHandle = null;
+    persistTimelineCacheNow();
+  }, 400);
+}
+
+function loadTimelineCacheFromStorage() {
+  if (state.timeline.samples.length) return;
+  try {
+    const raw = localStorage.getItem(TIMELINE_CACHE_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || Number(parsed.version) !== TIMELINE_CACHE_SCHEMA_VERSION) return;
+    const day = safeText(parsed.day, "");
+    const samples = sanitizeTimelineSamples(parsed.samples);
+    if (!day || !samples.length) return;
+
+    state.timeline.day = day;
+    state.timeline.samples = samples;
+    state.timeline.lastTimestamp = Math.max(
+      Number(parsed.lastTimestamp || 0),
+      samples[samples.length - 1]?.ts || 0,
+    );
+    state.timeline.historyReady = true;
+  } catch (error) {
+    // Ignore invalid cache payload.
+  }
 }
 
 function resizeLoadTimelineCanvas(canvas) {
@@ -837,7 +1845,7 @@ function renderLoadTimeline() {
   const dayEnd = new Date(`${dateLabel}T23:55:00`).getTime();
   const windowMs = Math.max(1, dayEnd - dayStart);
 
-  const padding = { left: 60, right: 18, top: 16, bottom: 28 };
+  const padding = { left: 86, right: 18, top: 16, bottom: 28 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
   if (plotWidth <= 10 || plotHeight <= 10) return;
@@ -847,11 +1855,12 @@ function renderLoadTimeline() {
   ctx.fillStyle = "rgba(255,255,255,0.04)";
   ctx.fillRect(padding.left, padding.top, plotWidth, plotHeight);
 
-  const rowGap = 10;
-  const rows = 4;
+  const rowGap = 8;
+  const rows = 5;
   const rowHeight = (plotHeight - rowGap * (rows - 1)) / rows;
-  const boilerTop = padding.top;
-  const pumpTop = boilerTop + rowHeight + rowGap;
+  const houseBoilerTop = padding.top;
+  const garageBoilerTop = houseBoilerTop + rowHeight + rowGap;
+  const pumpTop = garageBoilerTop + rowHeight + rowGap;
   const gridTop = pumpTop + rowHeight + rowGap;
   const pvTop = gridTop + rowHeight + rowGap;
 
@@ -878,13 +1887,16 @@ function renderLoadTimeline() {
   ctx.fillStyle = "rgba(230, 241, 255, 0.75)";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  ctx.fillText("BOILER", padding.left - 8, boilerTop + rowHeight / 2);
-  ctx.fillText("PUMP", padding.left - 8, pumpTop + rowHeight / 2);
-  ctx.fillText("GRID", padding.left - 8, gridTop + rowHeight / 2);
-  ctx.fillText("PV", padding.left - 8, pvTop + rowHeight / 2);
+  ctx.fillText("БОЙЛЕР", padding.left - 8, houseBoilerTop + rowHeight / 2);
+  ctx.fillText("ГАРАЖ", padding.left - 8, garageBoilerTop + rowHeight / 2);
+  ctx.fillText("НАСОС", padding.left - 8, pumpTop + rowHeight / 2);
+  ctx.fillText("МЕРЕЖА", padding.left - 8, gridTop + rowHeight / 2);
+  ctx.fillText("СОНЦЕ", padding.left - 8, pvTop + rowHeight / 2);
 
   ctx.fillStyle = "rgba(255,77,109,0.12)";
-  ctx.fillRect(padding.left, boilerTop, plotWidth, rowHeight);
+  ctx.fillRect(padding.left, houseBoilerTop, plotWidth, rowHeight);
+  ctx.fillStyle = "rgba(0,230,255,0.12)";
+  ctx.fillRect(padding.left, garageBoilerTop, plotWidth, rowHeight);
   ctx.fillStyle = "rgba(79,124,255,0.12)";
   ctx.fillRect(padding.left, pumpTop, plotWidth, rowHeight);
   ctx.fillStyle = "rgba(51,255,153,0.1)";
@@ -892,7 +1904,8 @@ function renderLoadTimeline() {
   ctx.fillStyle = "rgba(255,179,71,0.12)";
   ctx.fillRect(padding.left, pvTop, plotWidth, rowHeight);
 
-  drawLoadTimelineRow(ctx, samples, "boilerOn", xFor, boilerTop, rowHeight, "rgba(255,77,109,0.85)");
+  drawLoadTimelineRow(ctx, samples, "boilerOn", xFor, houseBoilerTop, rowHeight, "rgba(255,77,109,0.85)");
+  drawLoadTimelineRow(ctx, samples, "garageBoilerOn", xFor, garageBoilerTop, rowHeight, "rgba(0,230,255,0.85)");
   drawLoadTimelineRow(ctx, samples, "pumpOn", xFor, pumpTop, rowHeight, "rgba(79,124,255,0.85)");
   drawLoadTimelineRow(ctx, samples, "gridOn", xFor, gridTop, rowHeight, "rgba(51,255,153,0.85)");
   drawLoadTimelineRow(ctx, samples, "pvOn", xFor, pvTop, rowHeight, "rgba(255,179,71,0.85)");
@@ -901,24 +1914,29 @@ function renderLoadTimeline() {
     ctx.fillStyle = "rgba(230, 241, 255, 0.7)";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("no timeline data", width / 2, height / 2);
+    ctx.fillText("немає даних хронології", width / 2, height / 2);
   }
 
-  setText("timelineMeta", `date: ${dateLabel} (00:00-23:55), view ~${visibleHours}h`);
+  const garageNote = isTimelineViewingToday() ? "" : " · дані бойлера гаража за минулі доби не зберігаються";
+  setText("timelineMeta", `дата: ${dateLabel} (00:00-23:55), вікно перегляду ~${visibleHours} год${garageNote}`);
 }
 
 function applyLoadTimelineHistory(payload) {
   const dateLabel = safeText(payload?.date, "");
   const rows = Array.isArray(payload?.samples) ? payload.samples : [];
   if (!dateLabel) {
-    throw new Error("history payload is empty");
+    throw new Error("дані історії порожні");
   }
 
   const dayStart = new Date(`${dateLabel}T00:00:00`).getTime();
   if (!Number.isFinite(dayStart)) {
-    throw new Error("invalid timeline date");
+    throw new Error("некоректна дата хронології");
   }
 
+  const previousGarageByTs = new Map(
+    (Array.isArray(state.timeline.samples) ? state.timeline.samples : [])
+      .map((sample) => [Number(sample?.ts) || 0, !!sample?.garageBoilerOn]),
+  );
   const samples = [];
   rows.forEach((row) => {
     const minute = Number(row?.m);
@@ -928,25 +1946,73 @@ function applyLoadTimelineHistory(payload) {
     samples.push({
       ts,
       boilerOn: (flags & 0x01) !== 0,
+      garageBoilerOn: previousGarageByTs.get(ts) || false,
       pumpOn: (flags & 0x02) !== 0,
       gridOn: (flags & 0x04) !== 0,
       pvOn: (flags & 0x08) !== 0,
     });
   });
 
-  samples.sort((a, b) => a.ts - b.ts);
-  state.timeline.samples = samples;
+  state.timeline.samples = sanitizeTimelineSamples(samples);
   state.timeline.day = dateLabel;
-  state.timeline.lastTimestamp = samples.length ? samples[samples.length - 1].ts : dayStart;
+  state.timeline.lastTimestamp = state.timeline.samples.length
+    ? state.timeline.samples[state.timeline.samples.length - 1].ts
+    : dayStart;
   state.timeline.historyReady = true;
+  scheduleTimelineCachePersist();
 }
 
-function recordLoadTimelineSample(loadController) {
+function applyGarageBoilerTimelineHistory(payload) {
+  const rows = Array.isArray(payload?.samples) ? payload.samples : [];
+  const garageDate = safeText(payload?.date, "");
+  const dayKey = safeText(state.timeline.day, "");
+  if (!dayKey || !rows.length || !state.timeline.samples.length) return;
+  if (garageDate && garageDate !== dayKey) return;
+
+  const dayStart = new Date(`${dayKey}T00:00:00`).getTime();
+  if (!Number.isFinite(dayStart)) return;
+
+  const garagePoints = rows
+    .map((row) => {
+      const minute = Number(row?.m);
+      if (!Number.isFinite(minute) || minute < 0 || minute > 1439) return null;
+      const flags = Number(row?.f) || 0;
+      return { minute, on: (flags & 0x01) !== 0 };
+    })
+    .filter((item) => item !== null)
+    .sort((a, b) => a.minute - b.minute);
+
+  if (!garagePoints.length) return;
+
+  let pointIndex = 0;
+  let lastKnown = null;
+  state.timeline.samples.forEach((sample) => {
+    const minute = Math.max(0, Math.min(1439, Math.floor((sample.ts - dayStart) / 60000)));
+    while (pointIndex < garagePoints.length && garagePoints[pointIndex].minute <= minute) {
+      lastKnown = garagePoints[pointIndex].on;
+      pointIndex += 1;
+    }
+    if (typeof lastKnown === "boolean") {
+      sample.garageBoilerOn = lastKnown;
+    }
+  });
+  scheduleTimelineCachePersist();
+}
+
+function recordLoadTimelineSample(loadController, garage = null) {
   if (!loadController || typeof loadController !== "object") return;
+  // Під час перегляду минулої доби живі семпли не дозаписуємо, щоб не
+  // підмішати "сьогодні" у відображену історію.
+  if (state.timeline.selectedDate) return;
 
   const boilerPower = Number(loadController.boilerPower);
   const pumpPower = Number(loadController.pumpPower);
-  const hasSampleBasis = Number.isFinite(boilerPower) || Number.isFinite(pumpPower);
+  const garageBoilerPower = Number(garage?.boilerPower);
+  const hasSampleBasis =
+    Number.isFinite(boilerPower) ||
+    Number.isFinite(pumpPower) ||
+    Number.isFinite(garageBoilerPower) ||
+    typeof garage?.boiler2On === "boolean";
   if (!hasSampleBasis) return;
 
   let ts = parseRtcTimestampParts(loadController.rtcDate, loadController.rtcTime);
@@ -969,7 +2035,10 @@ function recordLoadTimelineSample(loadController) {
   const sample = {
     ts,
     boilerOn: Number.isFinite(boilerPower) ? boilerPower > LOAD_TIMELINE_POWER_ON_THRESHOLD : !!loadController.boiler1On,
-    pumpOn: Number.isFinite(pumpPower) ? pumpPower > LOAD_TIMELINE_POWER_ON_THRESHOLD : !!loadController.pumpOn,
+    garageBoilerOn: Number.isFinite(garageBoilerPower)
+      ? garageBoilerPower > LOAD_TIMELINE_POWER_ON_THRESHOLD
+      : !!garage?.boiler2On,
+    pumpOn: Number.isFinite(pumpPower) ? pumpPower > LOAD_TIMELINE_PUMP_POWER_ON_THRESHOLD : !!loadController.pumpOn,
     gridOn: Number(loadController.lineVoltage) > 180,
     pvOn: Number(loadController.pvW) > 22,
   };
@@ -982,11 +2051,57 @@ function recordLoadTimelineSample(loadController) {
         state.timeline.samples.length - LOAD_TIMELINE_MAX_SAMPLES,
       );
     }
+    scheduleTimelineCachePersist();
   }
 
   if (isModalOpen("timelineModal")) {
     renderLoadTimeline();
   }
+}
+
+function timelineTodayKey() {
+  return loadTimelineDayKey(Date.now());
+}
+
+function timelineActiveDayKey() {
+  return state.timeline.selectedDate || timelineTodayKey();
+}
+
+function isTimelineViewingToday() {
+  return !state.timeline.selectedDate || state.timeline.selectedDate === timelineTodayKey();
+}
+
+function updateTimelineDayControls() {
+  const label = document.getElementById("timelineDayLabel");
+  if (label) {
+    label.textContent = isTimelineViewingToday() ? "сьогодні" : timelineActiveDayKey();
+  }
+  const nextBtn = document.getElementById("timelineDayNextBtn");
+  if (nextBtn) {
+    nextBtn.disabled = isTimelineViewingToday();
+  }
+  const todayBtn = document.getElementById("timelineDayTodayBtn");
+  if (todayBtn) {
+    todayBtn.disabled = isTimelineViewingToday();
+  }
+}
+
+async function shiftTimelineDay(deltaDays) {
+  const base = new Date(`${timelineActiveDayKey()}T00:00:00`);
+  if (!Number.isFinite(base.getTime())) return;
+  base.setDate(base.getDate() + deltaDays);
+  const candidate = loadTimelineDayKey(base.getTime());
+  const todayKey = timelineTodayKey();
+  state.timeline.selectedDate = candidate >= todayKey ? "" : candidate;
+  updateTimelineDayControls();
+  await loadLoadTimelineHistory({ force: true });
+}
+
+async function jumpTimelineToToday() {
+  if (isTimelineViewingToday()) return;
+  state.timeline.selectedDate = "";
+  updateTimelineDayControls();
+  await loadLoadTimelineHistory({ force: true });
 }
 
 async function loadLoadTimelineHistory(options = {}) {
@@ -997,13 +2112,17 @@ async function loadLoadTimelineHistory(options = {}) {
   }
   if (!state.config.loadControllerEnabled) {
     renderLoadTimeline();
-    showToast("load controller module disabled");
+    showToast("модуль load controller вимкнено");
     return;
   }
+
+  const targetDate = state.timeline.selectedDate || "";
+  const viewingToday = !targetDate;
 
   const nowMs = Date.now();
   if (
     !force &&
+    viewingToday &&
     state.timeline.samples.length &&
     nowMs - state.timeline.lastHistoryFetchMs < LOAD_TIMELINE_HISTORY_REFRESH_MS
   ) {
@@ -1011,51 +2130,245 @@ async function loadLoadTimelineHistory(options = {}) {
     return;
   }
 
-  setText("timelineChartTitle", "load controller timeline - loading...");
+  setText("timelineChartTitle", "хронологія load controller - завантаження...");
   try {
-    const payload = await bridgeRequest("timeline-history", (requestId) => {
-      window.AndroidHub.fetchLoadControllerHistory(requestId);
+    const loadHistoryPromise = bridgeRequest("timeline-history", (requestId) => {
+      window.AndroidHub.fetchLoadControllerHistory(requestId, targetDate);
     });
+    const garageHistoryPromise =
+      viewingToday &&
+      state.config.garageEnabled &&
+      window.AndroidHub &&
+      typeof window.AndroidHub.fetchGarageHistory === "function"
+        ? bridgeRequest("timeline-garage-history", (requestId) => {
+            window.AndroidHub.fetchGarageHistory(requestId);
+          }).catch(() => null)
+        : Promise.resolve(null);
+
+    const [payload, garagePayload] = await Promise.all([loadHistoryPromise, garageHistoryPromise]);
     applyLoadTimelineHistory(payload);
-    setText("timelineChartTitle", "load controller timeline");
+    if (garagePayload) {
+      applyGarageBoilerTimelineHistory(garagePayload);
+    }
+    setText("timelineChartTitle", "хронологія load controller");
     renderLoadTimeline();
   } catch (error) {
-    setText("timelineChartTitle", "load controller timeline - error");
+    setText("timelineChartTitle", "хронологія load controller - помилка");
     renderLoadTimeline();
-    showToast(`timeline load failed: ${error.message}`);
+    showToast(`не вдалося завантажити хронологію: ${error.message}`);
   } finally {
     state.timeline.lastHistoryFetchMs = nowMs;
+    updateTimelineDayControls();
   }
 }
 
 async function openTimelineModal() {
   openModal("timelineModal");
+  state.timeline.selectedDate = "";
+  updateTimelineDayControls();
   await loadLoadTimelineHistory({ force: true });
 }
 
 function normalizeEventJournalViewMode(value) {
-  return value === "gateDaily" ? "gateDaily" : "all";
+  if (value === "gateDaily") return "gateDaily";
+  if (value === "cardDaily") return "cardDaily";
+  return "all";
+}
+
+const CARD_EVENT_FILTERS = Object.freeze({
+  // terms/exclude нижче звіряються (у нижньому регістрі) і з "kind" події, і
+  // з "title"/"body" — а вони приходять з двох різних джерел, що поки що
+  // різняться мовою: LocalEventEngine.kt (нативні сповіщення, вже українською
+  // після цього перекладу) і сирі лог-рядки прошивок (ще англійською, доки їх
+  // не перекладено окремо). Тому тут навмисно лишені ОБИДВІ мови — англійська
+  // не видалена, українська додана поруч, — щоб фільтр не зламався для жодного
+  // джерела в перехідний період.
+  cardPv: Object.freeze({
+    title: "події сонячної панелі",
+    empty: "сьогодні подій сонячної панелі немає",
+    modules: Object.freeze(["inverter"]),
+    kinds: Object.freeze(["pv_generation"]),
+    terms: Object.freeze(["pv", "solar", "generation", "сонячн", "генерац"]),
+    exclude: Object.freeze(["grid", "load mode", "boiler", "pump", "gate", "door", "light", "мереж", "бойлер", "насос", "ворот", "світло"]),
+  }),
+  cardGrid: Object.freeze({
+    title: "події мережі",
+    empty: "сьогодні подій мережі немає",
+    modules: Object.freeze(["inverter"]),
+    kinds: Object.freeze(["grid_relay", "grid_presence", "grid_mode"]),
+    terms: Object.freeze(["grid", "relay", "line voltage", "pin34", "мереж", "реле", "напруга мереж"]),
+    exclude: Object.freeze(["gate", "door", "light", "ворот", "світло"]),
+  }),
+  cardBattery: Object.freeze({
+    title: "події акумулятора",
+    empty: "сьогодні подій акумулятора немає",
+    modules: Object.freeze(["inverter"]),
+    kinds: Object.freeze([]),
+    terms: Object.freeze(["battery", "soc", "charge", "discharge", "voltage", "overload", "акб", "заряд", "акумулятор"]),
+    exclude: Object.freeze(["boiler", "pump", "gate", "door", "light", "бойлер", "насос", "ворот", "світло"]),
+  }),
+  cardLoad: Object.freeze({
+    title: "події навантаження",
+    empty: "сьогодні подій навантаження немає",
+    modules: Object.freeze(["inverter"]),
+    kinds: Object.freeze(["load_mode", "power_alert"]),
+    terms: Object.freeze(["load", "pinload", "overload", "load mode", "навантаж", "перевантаж"]),
+    exclude: Object.freeze(["boiler", "pump", "gate", "door", "light", "бойлер", "насос", "ворот", "світло"]),
+  }),
+  cardBoiler1: Object.freeze({
+    title: "події бойлера 1",
+    empty: "сьогодні подій бойлера 1 немає",
+    modules: Object.freeze(["load_controller"]),
+    kinds: Object.freeze(["boiler1_mode", "boiler_mode"]),
+    terms: Object.freeze([
+      "boiler1",
+      "boiler 1",
+      "boiler mode",
+      "boiler state",
+      "boiler auto window",
+      "boiler battery protection",
+      "daily energy: boiler=",
+      "reason:",
+      "boiler",
+      "бойлер 1",
+      "бойлера 1",
+      "бойлер",
+      "причина:",
+    ]),
+    exclude: Object.freeze([]),
+  }),
+  cardPump: Object.freeze({
+    title: "події насоса",
+    empty: "сьогодні подій насоса немає",
+    modules: Object.freeze(["load_controller"]),
+    kinds: Object.freeze(["pump_mode"]),
+    terms: Object.freeze(["pump", "pump mode", "pump state", "насос"]),
+    exclude: Object.freeze(["boiler", "gate", "door", "light", "бойлер", "ворот", "світло"]),
+  }),
+  cardBoiler2: Object.freeze({
+    title: "події бойлера 2",
+    empty: "сьогодні подій бойлера 2 немає",
+    modules: Object.freeze(["garage"]),
+    kinds: Object.freeze(["boiler2_mode", "boiler_mode"]),
+    terms: Object.freeze([
+      "boiler2",
+      "boiler 2",
+      "boiler mode",
+      "boiler state",
+      "boiler auto window",
+      "boiler battery protection",
+      "daily energy: boiler=",
+      "reason:",
+      "boiler",
+      "бойлер 2",
+      "бойлера 2",
+      "бойлер",
+      "причина:",
+    ]),
+    exclude: Object.freeze([]),
+  }),
+  cardGate: Object.freeze({
+    title: "події гаража",
+    empty: "сьогодні подій гаража немає",
+    modules: Object.freeze(["garage"]),
+    kinds: Object.freeze(["gate_state"]),
+    terms: Object.freeze(["gate", "door", "garage light", "light", "garage", "ворот", "світло гаража", "гараж"]),
+    exclude: Object.freeze(["boiler", "pump"]),
+  }),
+});
+function normalizeCardEventKey(value) {
+  const key = safeText(value, "");
+  return Object.prototype.hasOwnProperty.call(CARD_EVENT_FILTERS, key) ? key : "";
+}
+
+function cardEventFilter(cardKey) {
+  const key = normalizeCardEventKey(cardKey);
+  return key ? CARD_EVENT_FILTERS[key] : null;
+}
+
+function normalizeLogModuleName(value) {
+  const raw = safeText(value, "unknown").toLowerCase();
+  if (!raw) return "unknown";
+  if (raw.includes("invert")) return "inverter";
+  if (raw.includes("load")) return "load_controller";
+  if (raw.includes("garage")) return "garage";
+  return raw;
+}
+
+function matchCardEventFilter(cardFilter, payload = {}) {
+  if (!cardFilter || typeof cardFilter !== "object") return false;
+
+  const moduleName = normalizeLogModuleName(payload.moduleName);
+  if (Array.isArray(cardFilter.modules) && cardFilter.modules.length) {
+    if (!cardFilter.modules.includes(moduleName)) return false;
+  }
+
+  const searchable = [
+    moduleName,
+    safeText(payload.level, ""),
+    safeText(payload.kind, ""),
+    safeText(payload.title, ""),
+    safeText(payload.body, ""),
+    safeText(payload.message, ""),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const kinds = Array.isArray(cardFilter.kinds) ? cardFilter.kinds : [];
+  const kindText = safeText(payload.kind, "").toLowerCase();
+  if (kinds.length && kindText) {
+    const kindMatched = kinds.some((token) => token && kindText.includes(String(token).toLowerCase()));
+    if (!kindMatched) return false;
+  }
+
+  const terms = Array.isArray(cardFilter.terms) ? cardFilter.terms : [];
+  if (terms.length) {
+    const includeMatched = terms.some((token) => token && searchable.includes(String(token).toLowerCase()));
+    if (!includeMatched) return false;
+  }
+
+  const exclude = Array.isArray(cardFilter.exclude) ? cardFilter.exclude : [];
+  const blocked = exclude.some((token) => token && searchable.includes(String(token).toLowerCase()));
+  if (blocked) return false;
+
+  return true;
 }
 
 function eventJournalViewTitle(viewMode) {
   const mode = normalizeEventJournalViewMode(viewMode);
   if (mode === "gateDaily") {
-    return `garage gate history (${loadTimelineDayKey(Date.now())})`;
+    return `історія воріт гаража (${loadTimelineDayKey(Date.now())})`;
   }
-  return "event journal";
+  if (mode === "cardDaily") {
+    const cardFilter = cardEventFilter(state.events.cardKey);
+    const date = safeText(state.events.cardDate, todayIso());
+    return `${safeText(cardFilter?.title, "події картки")} (${date})`;
+  }
+  return "журнал подій";
 }
 
 function eventJournalEmptyText(viewMode) {
   const mode = normalizeEventJournalViewMode(viewMode);
   if (mode === "gateDaily") {
-    return "no gate state changes today";
+    return "сьогодні змін стану воріт немає";
   }
-  return "no events";
+  if (mode === "cardDaily") {
+    const cardFilter = cardEventFilter(state.events.cardKey);
+    return safeText(cardFilter?.empty, "сьогодні подій картки немає");
+  }
+  return "подій немає";
 }
 
-function syncEventJournalView(viewMode) {
+function syncEventJournalView(viewMode, options = {}) {
   const mode = normalizeEventJournalViewMode(viewMode);
   state.events.viewMode = mode;
+  if (mode === "cardDaily") {
+    state.events.cardKey = normalizeCardEventKey(options.cardKey || state.events.cardKey);
+    state.events.cardDate = safeText(options.cardDate || state.events.cardDate, todayIso());
+  } else {
+    state.events.cardKey = "";
+    state.events.cardDate = "";
+  }
   const clearBtn = document.getElementById("eventsClearBtn");
   if (clearBtn) {
     clearBtn.hidden = mode !== "all";
@@ -1071,12 +2384,15 @@ function eventDayKey(atMs) {
 function isGateStateChangeEvent(entry) {
   const title = safeText(entry?.title, "").toLowerCase();
   const body = safeText(entry?.body, "").toLowerCase();
-  return title.includes("gate state changed") || (title.includes("gate") && body.includes("reason:"));
+  // "стан воріт змінено" / "причина:" відповідають заголовку й тілу, які
+  // тепер шле LocalEventEngine.kt (раніше було "gate state changed"/"reason:").
+  return title.includes("стан воріт змінено") || (title.includes("ворот") && body.includes("причина:"));
 }
 
 function filterEventJournalItems(items, viewMode) {
   const list = Array.isArray(items) ? items : [];
   const mode = normalizeEventJournalViewMode(viewMode);
+  if (mode === "cardDaily") return list;
   if (mode !== "gateDaily") return list;
   const todayKey = loadTimelineDayKey(Date.now());
   return list.filter((entry) => isGateStateChangeEvent(entry) && eventDayKey(entry?.atMs) === todayKey);
@@ -1112,6 +2428,134 @@ function mapGarageDoorHistoryPayloadToEvents(payload) {
   return { date, items };
 }
 
+function mapCardLogPayloadToEvents(payload, cardKey) {
+  const cardFilter = cardEventFilter(cardKey);
+  if (!cardFilter) return [];
+
+  const defaultDate = safeText(payload?.date, todayIso());
+  const rows = Array.isArray(payload?.items) ? payload.items : [];
+  const events = [];
+
+  rows.forEach((row) => {
+    const message = safeText(row?.message, "");
+    if (!message) return;
+
+    const moduleName = normalizeLogModuleName(row?.module);
+    if (!matchCardEventFilter(cardFilter, {
+      moduleName,
+      level: row?.level,
+      message,
+    })) return;
+
+    const date = safeText(row?.date, defaultDate);
+    const time = safeText(row?.time, "--:--:--");
+    const parsedAtMs = Date.parse(`${date}T${time}`);
+    const atMs = Number.isFinite(parsedAtMs) ? parsedAtMs : Date.now();
+    const level = safeText(row?.level, "info").toLowerCase();
+    const severity = level.includes("err") ? "alert" : level.includes("warn") ? "warn" : "info";
+
+    events.push({
+      atMs,
+      atText: `${date} ${time}`,
+      title: safeText(cardFilter.title, "події картки"),
+      body: message,
+      severity,
+      kind: "log",
+      module: moduleName,
+    });
+  });
+
+  events.sort((a, b) => Number(b.atMs || 0) - Number(a.atMs || 0));
+  return events;
+}
+
+function mapEventJournalPayloadToCardEvents(payload, cardKey, cardDate = "") {
+  const cardFilter = cardEventFilter(cardKey);
+  if (!cardFilter) return [];
+
+  const expectedDate = safeText(cardDate, todayIso());
+  const rows = Array.isArray(payload?.items) ? payload.items : [];
+  const events = [];
+
+  rows.forEach((row) => {
+    const atMs = Number(row?.atMs);
+    if (!Number.isFinite(atMs) || atMs <= 0) return;
+    if (expectedDate && eventDayKey(atMs) !== expectedDate) return;
+
+    const moduleName = normalizeLogModuleName(row?.module);
+    if (!matchCardEventFilter(cardFilter, {
+      moduleName,
+      kind: row?.kind,
+      title: row?.title,
+      body: row?.body,
+    })) return;
+
+    events.push({
+      atMs,
+      atText: safeText(row?.atText, formatDateTimeShort(atMs)),
+      title: safeText(row?.title, safeText(cardFilter.title, "події картки")),
+      body: safeText(row?.body, ""),
+      severity: safeText(row?.severity, "info").toLowerCase(),
+      kind: safeText(row?.kind, "event"),
+      module: moduleName,
+    });
+  });
+
+  events.sort((a, b) => Number(b.atMs || 0) - Number(a.atMs || 0));
+  return events;
+}
+
+async function loadCardDailyEvents(options = {}) {
+  const cardKey = normalizeCardEventKey(options.cardKey || state.events.cardKey);
+  if (!cardKey) {
+    renderEventJournal([], { emptyText: "невідома картка" });
+    setText("eventChartTitle", "події картки - помилка");
+    return;
+  }
+
+  const cardDate = safeText(options.cardDate, todayIso());
+  syncEventJournalView("cardDaily", { cardKey, cardDate });
+  setText("eventChartTitle", `${eventJournalViewTitle("cardDaily")} - loading...`);
+
+  if (!hasBridge()) {
+    renderEventJournal([], { emptyText: eventJournalEmptyText("cardDaily") });
+    showToast("міст Android недоступний");
+    return;
+  }
+  if (!window.AndroidHub || typeof window.AndroidHub.fetchCardDailyEvents !== "function") {
+    renderEventJournal([], { emptyText: eventJournalEmptyText("cardDaily") });
+    showToast("міст логів картки недоступний");
+    return;
+  }
+
+  try {
+    const payload = await bridgeRequest(`card-events-${cardKey}`, (requestId) => {
+      window.AndroidHub.fetchCardDailyEvents(cardKey, cardDate, requestId);
+    });
+    const items = mapCardLogPayloadToEvents(payload, cardKey);
+    state.events.items = items;
+    state.events.loadedAtMs = Date.now();
+    renderEventJournal(items, { emptyText: eventJournalEmptyText("cardDaily") });
+    setText("eventChartTitle", eventJournalViewTitle("cardDaily"));
+  } catch (error) {
+    try {
+      const payload = await bridgeRequest(`card-events-fallback-${cardKey}`, (requestId) => {
+        window.AndroidHub.fetchEventJournal(requestId);
+      });
+      const fallbackItems = mapEventJournalPayloadToCardEvents(payload, cardKey, cardDate);
+      state.events.items = fallbackItems;
+      state.events.loadedAtMs = Date.now();
+      renderEventJournal(fallbackItems, { emptyText: eventJournalEmptyText("cardDaily") });
+      setText("eventChartTitle", `${eventJournalViewTitle("cardDaily")} - fallback`);
+      showToast(`логи картки недоступні: ${error.message}`);
+    } catch (fallbackError) {
+      renderEventJournal([], { emptyText: eventJournalEmptyText("cardDaily") });
+      setText("eventChartTitle", `${eventJournalViewTitle("cardDaily")} - error`);
+      showToast(`не вдалося отримати події картки: ${fallbackError.message || error.message}`);
+    }
+  }
+}
+
 async function loadGarageGateHistory() {
   const viewMode = "gateDaily";
   syncEventJournalView(viewMode);
@@ -1119,7 +2563,7 @@ async function loadGarageGateHistory() {
 
   if (!hasBridge()) {
     renderEventJournal([], { emptyText: eventJournalEmptyText(viewMode) });
-    showToast("Android bridge not available");
+    showToast("міст Android недоступний");
     return;
   }
   if (!window.AndroidHub || typeof window.AndroidHub.fetchGarageDoorHistory !== "function") {
@@ -1138,7 +2582,7 @@ async function loadGarageGateHistory() {
   } catch (error) {
     // Fallback to local app journal filter for older garage firmware.
     await loadEventJournal({ viewMode: "gateDaily" });
-    showToast(`garage history fallback: ${error.message}`);
+    showToast(`резервна історія гаража: ${error.message}`);
   }
 }
 
@@ -1149,7 +2593,7 @@ async function loadEventJournal(options = {}) {
 
   if (!hasBridge()) {
     renderEventJournal([], { emptyText: eventJournalEmptyText(viewMode) });
-    showToast("Android bridge not available");
+    showToast("міст Android недоступний");
     return;
   }
 
@@ -1168,16 +2612,16 @@ async function loadEventJournal(options = {}) {
   } catch (error) {
     renderEventJournal([], { emptyText: eventJournalEmptyText(viewMode) });
     setText("eventChartTitle", `${eventJournalViewTitle(viewMode)} - error`);
-    showToast(`event journal failed: ${error.message}`);
+    showToast(`не вдалося завантажити журнал подій: ${error.message}`);
   }
 }
 
 async function clearEventJournal() {
   if (!hasBridge()) {
-    showToast("Android bridge not available");
+    showToast("міст Android недоступний");
     return;
   }
-  if (!window.confirm("clear event journal?")) return;
+  if (!window.confirm("очистити журнал подій?")) return;
 
   try {
     await bridgeRequest("events-clear", (requestId) => {
@@ -1186,9 +2630,9 @@ async function clearEventJournal() {
     state.events.items = [];
     state.events.loadedAtMs = Date.now();
     renderEventJournal([], { emptyText: eventJournalEmptyText(state.events.viewMode) });
-    showToast("event journal cleared");
+    showToast("журнал подій очищено");
   } catch (error) {
-    showToast(`event clear failed: ${error.message}`);
+    showToast(`не вдалося очистити журнал: ${error.message}`);
   }
 }
 
@@ -1200,6 +2644,16 @@ async function openEventModal() {
 async function openGateHistoryModal() {
   openModal("eventModal");
   await loadGarageGateHistory();
+}
+
+async function openCardDailyEventsModal(cardKey) {
+  const normalized = normalizeCardEventKey(cardKey);
+  if (!normalized) return;
+  openModal("eventModal");
+  await loadCardDailyEvents({
+    cardKey: normalized,
+    cardDate: todayIso(),
+  });
 }
 
 function updateButtonStates(selector, expected) {
@@ -1228,12 +2682,24 @@ function setModeButtonLocked(buttonId, locked) {
   btn.classList.toggle("locked", !!locked);
 }
 
+function setModeButtonsLocked(buttonIds, locked) {
+  (Array.isArray(buttonIds) ? buttonIds : [buttonIds]).forEach((buttonId) => {
+    setModeButtonLocked(buttonId, locked);
+  });
+}
+
 function setActiveModeGroup(prefix, mode) {
   const normalizedMode = safeText(mode, "").trim().toUpperCase();
   ["AUTO", "OFF", "ON"].forEach((item) => {
     const btn = document.getElementById(`${prefix}${item}`);
     if (!btn) return;
     btn.classList.toggle("active", item === normalizedMode);
+  });
+}
+
+function setActiveModeGroups(prefixes, mode) {
+  (Array.isArray(prefixes) ? prefixes : [prefixes]).forEach((prefix) => {
+    setActiveModeGroup(prefix, mode);
   });
 }
 
@@ -1245,6 +2711,12 @@ function applyLockedActiveButtons(prefix, lockMode) {
   });
   const lockedBtn = document.getElementById(`${prefix}${lockMode}`);
   if (lockedBtn) lockedBtn.classList.add("active");
+}
+
+function applyLockedActiveButtonGroups(prefixes, lockMode) {
+  (Array.isArray(prefixes) ? prefixes : [prefixes]).forEach((prefix) => {
+    applyLockedActiveButtons(prefix, lockMode);
+  });
 }
 
 function showToast(message) {
@@ -1415,81 +2887,103 @@ function hasOtherOpenModal(exceptId) {
 }
 
 function formatLogicAutoWindowFact(enabled, start, end, active) {
-  if (!enabled) return "AUTO window: always active";
-  return `AUTO window: ${safeText(start, "00:00")}-${safeText(end, "00:00")} (${active ? "active now" : "inactive now"})`;
+  if (!enabled) return "вікно АВТО: активне завжди";
+  return `вікно АВТО: ${safeText(start, "00:00")}-${safeText(end, "00:00")} (${active ? "зараз активне" : "зараз неактивне"})`;
 }
 
 function getLogicModalDefinition(key) {
   const defs = {
     grid: {
       moduleKey: "inverter",
-      title: "grid AUTO logic",
+      title: "логіка АВТО мережі",
       getModule: (status) => status?.inverter || null,
       getConfig: (status) => status?.inverter?.gridLogic || null,
       getMode: (status) => safeText(status?.inverter?.mode),
       getState: (status) => boolText(!!status?.inverter?.gridRelayOn),
       fields: [
-        { key: "pvThresholdW", label: "PV threshold", unit: "W", step: "1", min: "0", max: "20000" },
-        { key: "offDelaySec", label: "GRID OFF delay", unit: "sec", step: "1", min: "0", max: "86400" },
-        { key: "onDelaySec", label: "GRID ON delay", unit: "sec", step: "1", min: "0", max: "86400" },
-        { key: "forceGridOnW", label: "Force GRID ON by LOAD", unit: "W", step: "1", min: "0", max: "20000" },
+        { key: "pvThresholdW", label: "поріг PV", unit: "Вт", step: "1", min: "0", max: "20000" },
+        { key: "offDelaySec", label: "затримка ВИКЛ мережі", unit: "с", step: "1", min: "0", max: "86400" },
+        { key: "onDelaySec", label: "затримка УВІМК мережі", unit: "с", step: "1", min: "0", max: "86400" },
+        { key: "forceGridOnW", label: "примусове УВІМК мережі за навантаженням", unit: "Вт", step: "1", min: "0", max: "20000" },
+        { key: "batteryLowSocPct", label: "заряд рятування АКБ", unit: "%", step: "0.1", min: "0", max: "100" },
+        { key: "offMinSocPct", label: "мін. заряд для ВИКЛ мережі", unit: "%", step: "0.1", min: "0", max: "100" },
       ],
       getFacts: (_status, cfg) => [
-        `Battery rescue below ${num(cfg.batteryLowSocPct, 0)}%`,
-        `GRID OFF allowed only above ${num(cfg.offMinSocPct, 0)}% battery`,
+        `рятування АКБ нижче ${num(cfg.batteryLowSocPct, 0)}%`,
+        `ВИКЛ мережі дозволено лише вище ${num(cfg.offMinSocPct, 0)}% заряду АКБ`,
       ],
       getSteps: (_status, cfg) => [
-        { tone: "warn", when: `LOAD > ${num(cfg.forceGridOnW, 0)} W`, action: "GRID ON immediately" },
-        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} W and battery > ${num(cfg.offMinSocPct, 0)} %`, delay: `wait ${num(cfg.offDelaySec, 0)} sec`, action: "GRID OFF" },
-        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} W`, delay: `wait ${num(cfg.onDelaySec, 0)} sec`, action: "GRID ON" },
-        { tone: "alert", when: `battery < ${num(cfg.batteryLowSocPct, 0)} %`, action: "GRID ON immediately" },
+        { tone: "warn", when: `навантаження > ${num(cfg.forceGridOnW, 0)} Вт`, action: "негайно УВІМК мережу" },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт і заряд > ${num(cfg.offMinSocPct, 0)} %`, delay: `зачекати ${num(cfg.offDelaySec, 0)} с`, action: "ВИКЛ мережу" },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт`, delay: `зачекати ${num(cfg.onDelaySec, 0)} с`, action: "УВІМК мережу" },
+        { tone: "alert", when: `заряд АКБ < ${num(cfg.batteryLowSocPct, 0)} %`, action: "негайно УВІМК мережу" },
       ],
-      fixedNote: (cfg) => `Fixed conditions: battery rescue ${num(cfg.batteryLowSocPct, 0)}%, GRID OFF requires battery above ${num(cfg.offMinSocPct, 0)}%.`,
+      fixedNote: () => "Усі числові пороги цієї логіки редагуються і зберігаються на контролері.",
       invokeSave: (values, requestId) => {
-        window.AndroidHub.setInverterGridLogic(values.pvThresholdW, values.offDelaySec, values.onDelaySec, values.forceGridOnW, requestId);
+        window.AndroidHub.setInverterGridLogic(
+          values.pvThresholdW,
+          values.offDelaySec,
+          values.onDelaySec,
+          values.forceGridOnW,
+          values.batteryLowSocPct,
+          values.offMinSocPct,
+          requestId,
+        );
       },
-      saveSuccessMessage: "grid logic updated",
+      saveSuccessMessage: "логіку мережі оновлено",
     },
     load: {
       moduleKey: "inverter",
-      title: "load AUTO logic",
+      title: "логіка АВТО навантаження",
       getModule: (status) => status?.inverter || null,
       getConfig: (status) => status?.inverter?.loadLogic || null,
       getMode: (status) => safeText(status?.inverter?.loadMode),
       getState: (status) => boolText(!!status?.inverter?.loadRelayOn),
       fields: [
-        { key: "pvThresholdW", label: "PV threshold", unit: "W", step: "1", min: "0", max: "20000" },
-        { key: "shutdownDelaySec", label: "Shutdown delay", unit: "sec", step: "1", min: "0", max: "86400" },
-        { key: "overloadPowerW", label: "Overload threshold", unit: "W", step: "1", min: "0", max: "20000" },
+        { key: "pvThresholdW", label: "поріг PV", unit: "Вт", step: "1", min: "0", max: "20000" },
+        { key: "shutdownDelaySec", label: "затримка вимкнення", unit: "с", step: "1", min: "0", max: "86400" },
+        { key: "overloadPowerW", label: "поріг перевантаження", unit: "Вт", step: "1", min: "0", max: "20000" },
+        { key: "gridRestoreV", label: "поріг відновлення мережі", unit: "В", step: "0.1", min: "100", max: "300" },
+        { key: "overloadGridV", label: "захист перевантаження по мережі", unit: "В", step: "0.1", min: "100", max: "300" },
       ],
       getFacts: (_status, cfg) => [
-        `GRID restore threshold ${num(cfg.gridRestoreV, 0)} V`,
-        `Overload guard works only below ${num(cfg.overloadGridV, 0)} V grid`,
+        `поріг відновлення мережі ${num(cfg.gridRestoreV, 0)} В`,
+        `захист перевантаження діє лише нижче ${num(cfg.overloadGridV, 0)} В мережі`,
       ],
       getSteps: (_status, cfg) => [
-        { tone: "alert", when: `LOAD > ${num(cfg.overloadPowerW, 0)} W and GRID < ${num(cfg.overloadGridV, 0)} V`, action: "mode switches to OFF" },
-        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} W and GRID < ${num(cfg.gridRestoreV, 0)} V`, delay: `wait ${num(cfg.shutdownDelaySec, 0)} sec`, action: "LOAD relay OFF" },
-        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} W or GRID >= ${num(cfg.gridRestoreV, 0)} V`, action: "LOAD relay ON" },
+        { tone: "alert", when: `навантаження > ${num(cfg.overloadPowerW, 0)} Вт і мережа < ${num(cfg.overloadGridV, 0)} В`, action: "режим перемикається на ВИКЛ" },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "реле навантаження ВИКЛ" },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "реле навантаження УВІМК" },
       ],
-      fixedNote: (cfg) => `Fixed conditions: AUTO resumes on grid return, overload voltage threshold ${num(cfg.overloadGridV, 0)} V.`,
+      fixedNote: () => "Усі числові пороги цієї логіки редагуються і зберігаються на контролері.",
       invokeSave: (values, requestId) => {
-        window.AndroidHub.setInverterLoadLogic(values.pvThresholdW, values.shutdownDelaySec, values.overloadPowerW, requestId);
+        window.AndroidHub.setInverterLoadLogic(
+          values.pvThresholdW,
+          values.shutdownDelaySec,
+          values.overloadPowerW,
+          values.gridRestoreV,
+          values.overloadGridV,
+          requestId,
+        );
       },
-      saveSuccessMessage: "load logic updated",
+      saveSuccessMessage: "логіку навантаження оновлено",
     },
     boiler1: {
       moduleKey: "loadController",
-      title: "boiler1 AUTO logic",
+      title: "логіка АВТО бойлера 1",
       getModule: (status) => status?.loadController || null,
       getConfig: (status) => status?.loadController?.boilerLogic || null,
       getMode: (status) => safeText(status?.loadController?.boiler1Mode),
       getState: (status) => boolText(!!status?.loadController?.boiler1On),
       fields: [
-        { key: "pvThresholdW", label: "PV threshold", unit: "W", step: "1", min: "0", max: "20000" },
-        { key: "shutdownDelaySec", label: "Shutdown delay", unit: "sec", step: "1", min: "0", max: "86400" },
-        { key: "batteryShutoffW", label: "Battery shutoff", unit: "W", step: "1", min: "-10000", max: "0" },
-        { key: "batteryResumeW", label: "Battery resume", unit: "W", step: "1", min: "-1000", max: "10000" },
-        { key: "peerActiveW", label: "Garage boiler priority", unit: "W", step: "1", min: "0", max: "20000" },
+        { key: "pvThresholdW", label: "поріг PV", unit: "Вт", step: "1", min: "0", max: "20000" },
+        { key: "shutdownDelaySec", label: "затримка вимкнення", unit: "с", step: "1", min: "0", max: "86400" },
+        { key: "batteryShutoffW", label: "вимкнення по АКБ", unit: "Вт", step: "1", min: "-10000", max: "0" },
+        { key: "batteryResumeW", label: "відновлення по АКБ", unit: "Вт", step: "1", min: "-1000", max: "10000" },
+        { key: "peerActiveW", label: "поріг іншого бойлера", unit: "Вт", step: "1", min: "0", max: "20000" },
+        { key: "gridRestoreV", label: "поріг відновлення мережі", unit: "В", step: "0.1", min: "100", max: "300" },
+        { key: "batteryReleaseGridV", label: "звільнення захисту АКБ по мережі", unit: "В", step: "0.1", min: "100", max: "300" },
+        { key: "batteryReleaseSocPct", label: "звільнення захисту АКБ по заряду", unit: "%", step: "0.1", min: "0", max: "100" },
       ],
       getFacts: (status, cfg) => [
         formatLogicAutoWindowFact(
@@ -1498,32 +2992,43 @@ function getLogicModalDefinition(key) {
           status?.loadController?.boiler1AutoWindowEnd,
           status?.loadController?.boiler1AutoWindowActive !== false,
         ),
-        `Battery release: GRID > ${num(cfg.batteryReleaseGridV, 0)} V or SOC > ${num(cfg.batteryReleaseSocPct, 0)} %`,
+        `звільнення захисту АКБ: мережа > ${num(cfg.batteryReleaseGridV, 0)} В або заряд > ${num(cfg.batteryReleaseSocPct, 0)} %`,
       ],
       getSteps: (_status, cfg) => [
-        { tone: "warn", when: "outside AUTO window", action: "boiler OFF" },
-        { tone: "alert", when: `battery_power <= ${num(cfg.batteryShutoffW, 0)} W`, action: "battery protection latch" },
-        { tone: "good", when: `battery_power >= ${num(cfg.batteryResumeW, 0)} W`, action: "battery latch can clear" },
-        { tone: "warn", when: `garage boiler > ${num(cfg.peerActiveW, 0)} W`, action: "boiler OFF" },
-        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} W and GRID < ${num(cfg.gridRestoreV, 0)} V`, delay: `wait ${num(cfg.shutdownDelaySec, 0)} sec`, action: "boiler OFF" },
-        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} W or GRID >= ${num(cfg.gridRestoreV, 0)} V`, action: "boiler ON" },
+        { tone: "warn", when: "поза вікном АВТО", action: "бойлер ВИКЛ" },
+        { tone: "alert", when: `потужність_АКБ <= ${num(cfg.batteryShutoffW, 0)} Вт`, action: "захисна фіксація АКБ" },
+        { tone: "good", when: `потужність_АКБ >= ${num(cfg.batteryResumeW, 0)} Вт`, action: "захисну фіксацію АКБ можна зняти" },
+        { tone: "warn", when: `інший бойлер > ${num(cfg.peerActiveW, 0)} Вт`, action: "бойлер ВИКЛ" },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "бойлер ВИКЛ" },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "бойлер УВІМК" },
       ],
-      fixedNote: (cfg) => `Fixed conditions: battery latch also clears on GRID > ${num(cfg.batteryReleaseGridV, 0)} V or SOC > ${num(cfg.batteryReleaseSocPct, 0)} %.`,
+      fixedNote: () => "Усі числові пороги цієї логіки редагуються і зберігаються на контролері.",
       invokeSave: (values, requestId) => {
-        window.AndroidHub.setBoiler1Logic(values.pvThresholdW, values.shutdownDelaySec, values.batteryShutoffW, values.batteryResumeW, values.peerActiveW, requestId);
+        window.AndroidHub.setBoiler1Logic(
+          values.pvThresholdW,
+          values.shutdownDelaySec,
+          values.batteryShutoffW,
+          values.batteryResumeW,
+          values.peerActiveW,
+          values.gridRestoreV,
+          values.batteryReleaseGridV,
+          values.batteryReleaseSocPct,
+          requestId,
+        );
       },
-      saveSuccessMessage: "boiler1 logic updated",
+      saveSuccessMessage: "логіку бойлера 1 оновлено",
     },
     pump: {
       moduleKey: "loadController",
-      title: "pump AUTO logic",
+      title: "логіка АВТО насоса",
       getModule: (status) => status?.loadController || null,
       getConfig: (status) => status?.loadController?.pumpLogic || null,
       getMode: (status) => safeText(status?.loadController?.pumpMode),
       getState: (status) => boolText(!!status?.loadController?.pumpOn),
       fields: [
-        { key: "pvThresholdW", label: "PV threshold", unit: "W", step: "1", min: "0", max: "20000" },
-        { key: "shutdownDelaySec", label: "Shutdown delay", unit: "sec", step: "1", min: "0", max: "86400" },
+        { key: "pvThresholdW", label: "поріг PV", unit: "Вт", step: "1", min: "0", max: "20000" },
+        { key: "shutdownDelaySec", label: "затримка вимкнення", unit: "с", step: "1", min: "0", max: "86400" },
+        { key: "gridRestoreV", label: "поріг відновлення мережі", unit: "В", step: "0.1", min: "100", max: "300" },
       ],
       getFacts: (status, cfg) => [
         formatLogicAutoWindowFact(
@@ -1532,32 +3037,35 @@ function getLogicModalDefinition(key) {
           status?.loadController?.pumpAutoWindowEnd,
           status?.loadController?.pumpAutoWindowActive !== false,
         ),
-        `GRID restore threshold ${num(cfg.gridRestoreV, 0)} V`,
+        `поріг відновлення мережі ${num(cfg.gridRestoreV, 0)} В`,
       ],
       getSteps: (_status, cfg) => [
-        { tone: "warn", when: "outside AUTO window", action: "pump OFF" },
-        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} W and GRID < ${num(cfg.gridRestoreV, 0)} V`, delay: `wait ${num(cfg.shutdownDelaySec, 0)} sec`, action: "pump OFF" },
-        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} W or GRID >= ${num(cfg.gridRestoreV, 0)} V`, action: "pump ON" },
+        { tone: "warn", when: "поза вікном АВТО", action: "насос ВИКЛ" },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "насос ВИКЛ" },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "насос УВІМК" },
       ],
-      fixedNote: (cfg) => `Fixed conditions: AUTO restarts on GRID >= ${num(cfg.gridRestoreV, 0)} V.`,
+      fixedNote: () => "Усі числові пороги цієї логіки редагуються і зберігаються на контролері.",
       invokeSave: (values, requestId) => {
-        window.AndroidHub.setPumpLogic(values.pvThresholdW, values.shutdownDelaySec, requestId);
+        window.AndroidHub.setPumpLogic(values.pvThresholdW, values.shutdownDelaySec, values.gridRestoreV, requestId);
       },
-      saveSuccessMessage: "pump logic updated",
+      saveSuccessMessage: "логіку насоса оновлено",
     },
     boiler2: {
       moduleKey: "garage",
-      title: "boiler2 AUTO logic",
+      title: "логіка АВТО бойлера 2",
       getModule: (status) => status?.garage || null,
       getConfig: (status) => status?.garage?.boilerLogic || null,
       getMode: (status) => safeText(status?.garage?.boiler2Mode),
       getState: (status) => boolText(!!status?.garage?.boiler2On),
       fields: [
-        { key: "pvThresholdW", label: "PV threshold", unit: "W", step: "1", min: "0", max: "20000" },
-        { key: "shutdownDelaySec", label: "Shutdown delay", unit: "sec", step: "1", min: "0", max: "86400" },
-        { key: "batteryShutoffW", label: "Battery shutoff", unit: "W", step: "1", min: "-10000", max: "0" },
-        { key: "batteryResumeW", label: "Battery resume", unit: "W", step: "1", min: "-1000", max: "10000" },
-        { key: "peerActiveW", label: "House boiler priority", unit: "W", step: "1", min: "0", max: "20000" },
+        { key: "pvThresholdW", label: "поріг PV", unit: "Вт", step: "1", min: "0", max: "20000" },
+        { key: "shutdownDelaySec", label: "затримка вимкнення", unit: "с", step: "1", min: "0", max: "86400" },
+        { key: "batteryShutoffW", label: "вимкнення по АКБ", unit: "Вт", step: "1", min: "-10000", max: "0" },
+        { key: "batteryResumeW", label: "відновлення по АКБ", unit: "Вт", step: "1", min: "-1000", max: "10000" },
+        { key: "peerActiveW", label: "поріг іншого бойлера", unit: "Вт", step: "1", min: "0", max: "20000" },
+        { key: "gridRestoreV", label: "поріг відновлення мережі", unit: "В", step: "0.1", min: "100", max: "300" },
+        { key: "batteryReleaseGridV", label: "звільнення захисту АКБ по мережі", unit: "В", step: "0.1", min: "100", max: "300" },
+        { key: "batteryReleaseSocPct", label: "звільнення захисту АКБ по заряду", unit: "%", step: "0.1", min: "0", max: "100" },
       ],
       getFacts: (status, cfg) => [
         formatLogicAutoWindowFact(
@@ -1566,21 +3074,31 @@ function getLogicModalDefinition(key) {
           status?.garage?.boiler2AutoWindowEnd,
           status?.garage?.boiler2AutoWindowActive !== false,
         ),
-        `Battery release: GRID > ${num(cfg.batteryReleaseGridV, 0)} V or SOC > ${num(cfg.batteryReleaseSocPct, 0)} %`,
+        `звільнення захисту АКБ: мережа > ${num(cfg.batteryReleaseGridV, 0)} В або заряд > ${num(cfg.batteryReleaseSocPct, 0)} %`,
       ],
       getSteps: (_status, cfg) => [
-        { tone: "warn", when: "outside AUTO window", action: "boiler OFF" },
-        { tone: "alert", when: `battery_power <= ${num(cfg.batteryShutoffW, 0)} W`, action: "battery protection latch" },
-        { tone: "good", when: `battery_power >= ${num(cfg.batteryResumeW, 0)} W`, action: "battery latch can clear" },
-        { tone: "warn", when: `house boiler > ${num(cfg.peerActiveW, 0)} W`, action: "boiler OFF" },
-        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} W and GRID < ${num(cfg.gridRestoreV, 0)} V`, delay: `wait ${num(cfg.shutdownDelaySec, 0)} sec`, action: "boiler OFF" },
-        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} W or GRID >= ${num(cfg.gridRestoreV, 0)} V`, action: "boiler ON" },
+        { tone: "warn", when: "поза вікном АВТО", action: "бойлер ВИКЛ" },
+        { tone: "alert", when: `потужність_АКБ <= ${num(cfg.batteryShutoffW, 0)} Вт`, action: "захисна фіксація АКБ" },
+        { tone: "good", when: `потужність_АКБ >= ${num(cfg.batteryResumeW, 0)} Вт`, action: "захисну фіксацію АКБ можна зняти" },
+        { tone: "warn", when: `інший бойлер > ${num(cfg.peerActiveW, 0)} Вт`, action: "бойлер ВИКЛ" },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "бойлер ВИКЛ" },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "бойлер УВІМК" },
       ],
-      fixedNote: (cfg) => `Fixed conditions: battery latch also clears on GRID > ${num(cfg.batteryReleaseGridV, 0)} V or SOC > ${num(cfg.batteryReleaseSocPct, 0)} %.`,
+      fixedNote: () => "Усі числові пороги цієї логіки редагуються і зберігаються на контролері.",
       invokeSave: (values, requestId) => {
-        window.AndroidHub.setBoiler2Logic(values.pvThresholdW, values.shutdownDelaySec, values.batteryShutoffW, values.batteryResumeW, values.peerActiveW, requestId);
+        window.AndroidHub.setBoiler2Logic(
+          values.pvThresholdW,
+          values.shutdownDelaySec,
+          values.batteryShutoffW,
+          values.batteryResumeW,
+          values.peerActiveW,
+          values.gridRestoreV,
+          values.batteryReleaseGridV,
+          values.batteryReleaseSocPct,
+          requestId,
+        );
       },
-      saveSuccessMessage: "boiler2 logic updated",
+      saveSuccessMessage: "логіку бойлера 2 оновлено",
     },
   };
 
@@ -1604,6 +3122,61 @@ function buildLogicFieldMarkup(field, value, disabled) {
       >
     </label>
   `;
+}
+
+function buildLogicFlowMarkup(steps) {
+  const safeSteps = Array.isArray(steps) ? steps : [];
+  if (!safeSteps.length) {
+    return '<div class="logic-flow-empty">logic steps unavailable</div>';
+  }
+
+  let markup = `
+    <div class="logic-flow-entry"><span>Початок циклу AUTO</span></div>
+    <div class="logic-flow-arrow" aria-hidden="true"><span></span></div>
+    <section class="logic-flow-stage">
+      <div class="logic-flow-stage-title">Зчитати Вхідні Дані</div>
+      <div class="logic-flow-stage-body">PV потужність, напруга GRID, LOAD потужність, SOC/потужність АКБ, стан авто-вікна</div>
+    </section>
+  `;
+  safeSteps.forEach((step, index) => {
+    const tone = safeText(step?.tone, "warn");
+    const delay = safeText(step?.delay, "");
+    const toneLabel = tone === "alert"
+      ? "захисне правило"
+      : tone === "good"
+        ? "правило увімкнення"
+        : "правило вимкнення";
+    const nextRule = index < safeSteps.length - 1
+      ? `перейти до правила ${String(index + 2).padStart(2, "0")}`
+      : "залишити поточний стан реле";
+    markup += `
+      <div class="logic-flow-arrow" aria-hidden="true"><span></span></div>
+      <section class="logic-flow-rule ${escapeHtml(tone)}">
+        <header class="logic-flow-rule-head">
+          <div class="logic-flow-rule-index">правило ${String(index + 1).padStart(2, "0")}</div>
+          <div class="logic-flow-rule-type">${escapeHtml(toneLabel)}</div>
+        </header>
+        <div class="logic-flow-decision-wrap">
+          <div class="logic-flow-decision">
+            <span>${escapeHtml(safeText(step?.when, "---"))}</span>
+          </div>
+        </div>
+        <div class="logic-flow-branch-grid">
+          <div class="logic-flow-branch yes">
+            <div class="logic-flow-branch-title">ТАК</div>
+            ${delay ? `<div class="logic-flow-node-delay">${escapeHtml(delay)}</div>` : ""}
+            <div class="logic-flow-process">${escapeHtml(safeText(step?.action, "---"))}</div>
+          </div>
+          <div class="logic-flow-branch no">
+            <div class="logic-flow-branch-title">НІ</div>
+            <div class="logic-flow-next">${escapeHtml(nextRule)}</div>
+          </div>
+        </div>
+      </section>
+    `;
+  });
+  markup += '<div class="logic-flow-arrow" aria-hidden="true"><span></span></div><div class="logic-flow-exit"><span>повторювати на кожному оновленні статусу</span></div>';
+  return markup;
 }
 
 function formatDurationCompact(totalSec) {
@@ -1757,7 +3330,7 @@ async function ensureAutomationHistory(hours = AUTOMATION_HISTORY_DEFAULT_HOURS,
     return state.automationHistory.items;
   } catch (error) {
     if (!silent) {
-      showToast(`automation history failed: ${error.message}`);
+      showToast(`не вдалося завантажити історію автоматики: ${error.message}`);
     }
     return state.automationHistory.items;
   }
@@ -1822,16 +3395,16 @@ function logicTransitionReason(logicKey, samples, index, cfg, nextState) {
     case "grid":
       if (nextState) {
         if (Number.isFinite(loadW) && loadW >= Number(cfg.forceGridOnW)) {
-          return `LOAD ${num(loadW, 0)}W >= ${num(cfg.forceGridOnW, 0)}W`;
+          return `навантаження ${num(loadW, 0)}Вт >= ${num(cfg.forceGridOnW, 0)}Вт`;
         }
         if (Number.isFinite(batterySoc) && batterySoc <= Number(cfg.batteryLowSocPct)) {
-          return `battery ${num(batterySoc, 0)}% <= ${num(cfg.batteryLowSocPct, 0)}%`;
+          return `заряд ${num(batterySoc, 0)}% <= ${num(cfg.batteryLowSocPct, 0)}%`;
         }
-        return `PV ${num(pvW, 0)}W < ${num(cfg.pvThresholdW, 0)}W for ${formatDurationCompact(
+        return `PV ${num(pvW, 0)}Вт < ${num(cfg.pvThresholdW, 0)}Вт протягом ${formatDurationCompact(
           measureConditionDurationSec(samples, index, (row) => Number(row?.pvW) < Number(cfg.pvThresholdW)),
         )}`;
       }
-      return `PV ${num(pvW, 0)}W >= ${num(cfg.pvThresholdW, 0)}W and battery ${num(batterySoc, 0)}% >= ${num(cfg.offMinSocPct, 0)}% for ${formatDurationCompact(
+      return `PV ${num(pvW, 0)}Вт >= ${num(cfg.pvThresholdW, 0)}Вт і заряд ${num(batterySoc, 0)}% >= ${num(cfg.offMinSocPct, 0)}% протягом ${formatDurationCompact(
         measureConditionDurationSec(
           samples,
           index,
@@ -1841,9 +3414,9 @@ function logicTransitionReason(logicKey, samples, index, cfg, nextState) {
     case "load":
       if (!nextState) {
         if (Number.isFinite(loadW) && loadW >= Number(cfg.overloadPowerW)) {
-          return `LOAD ${num(loadW, 0)}W >= ${num(cfg.overloadPowerW, 0)}W`;
+          return `навантаження ${num(loadW, 0)}Вт >= ${num(cfg.overloadPowerW, 0)}Вт`;
         }
-        return `PV ${num(pvW, 0)}W < ${num(cfg.pvThresholdW, 0)}W and GRID ${num(invGridV, 0)}V < ${num(cfg.gridRestoreV, 0)}V for ${formatDurationCompact(
+        return `PV ${num(pvW, 0)}Вт < ${num(cfg.pvThresholdW, 0)}Вт і мережа ${num(invGridV, 0)}В < ${num(cfg.gridRestoreV, 0)}В протягом ${formatDurationCompact(
           measureConditionDurationSec(
             samples,
             index,
@@ -1852,19 +3425,19 @@ function logicTransitionReason(logicKey, samples, index, cfg, nextState) {
         )}`;
       }
       if (Number.isFinite(invGridV) && invGridV >= Number(cfg.gridRestoreV)) {
-        return `GRID ${num(invGridV, 0)}V >= ${num(cfg.gridRestoreV, 0)}V`;
+        return `мережа ${num(invGridV, 0)}В >= ${num(cfg.gridRestoreV, 0)}В`;
       }
-      return `PV ${num(pvW, 0)}W >= ${num(cfg.pvThresholdW, 0)}W`;
+      return `PV ${num(pvW, 0)}Вт >= ${num(cfg.pvThresholdW, 0)}Вт`;
     case "boiler1":
       if (!nextState) {
-        if (sample.boiler1AutoWindowActive === false) return "outside AUTO window";
+        if (sample.boiler1AutoWindowActive === false) return "поза вікном АВТО";
         if (Number.isFinite(batteryPower) && batteryPower <= Number(cfg.batteryShutoffW)) {
-          return `battery ${num(batteryPower, 0)}W <= ${num(cfg.batteryShutoffW, 0)}W`;
+          return `АКБ ${num(batteryPower, 0)}Вт <= ${num(cfg.batteryShutoffW, 0)}Вт`;
         }
         if (Number.isFinite(peerGarageW) && peerGarageW >= Number(cfg.peerActiveW)) {
-          return `garage boiler ${num(peerGarageW, 0)}W >= ${num(cfg.peerActiveW, 0)}W`;
+          return `інший бойлер ${num(peerGarageW, 0)}Вт >= ${num(cfg.peerActiveW, 0)}Вт`;
         }
-        return `PV ${num(pvW, 0)}W < ${num(cfg.pvThresholdW, 0)}W and GRID ${num(loadGridV, 0)}V < ${num(cfg.gridRestoreV, 0)}V for ${formatDurationCompact(
+        return `PV ${num(pvW, 0)}Вт < ${num(cfg.pvThresholdW, 0)}Вт і мережа ${num(loadGridV, 0)}В < ${num(cfg.gridRestoreV, 0)}В протягом ${formatDurationCompact(
           measureConditionDurationSec(
             samples,
             index,
@@ -1873,16 +3446,16 @@ function logicTransitionReason(logicKey, samples, index, cfg, nextState) {
         )}`;
       }
       if (Number.isFinite(loadGridV) && loadGridV >= Number(cfg.gridRestoreV)) {
-        return `GRID ${num(loadGridV, 0)}V >= ${num(cfg.gridRestoreV, 0)}V`;
+        return `мережа ${num(loadGridV, 0)}В >= ${num(cfg.gridRestoreV, 0)}В`;
       }
       if (Number.isFinite(batteryPower) && batteryPower >= Number(cfg.batteryResumeW)) {
-        return `battery ${num(batteryPower, 0)}W >= ${num(cfg.batteryResumeW, 0)}W`;
+        return `АКБ ${num(batteryPower, 0)}Вт >= ${num(cfg.batteryResumeW, 0)}Вт`;
       }
-      return `PV ${num(pvW, 0)}W >= ${num(cfg.pvThresholdW, 0)}W`;
+      return `PV ${num(pvW, 0)}Вт >= ${num(cfg.pvThresholdW, 0)}Вт`;
     case "pump":
       if (!nextState) {
-        if (sample.pumpAutoWindowActive === false) return "outside AUTO window";
-        return `PV ${num(pvW, 0)}W < ${num(cfg.pvThresholdW, 0)}W and GRID ${num(loadGridV, 0)}V < ${num(cfg.gridRestoreV, 0)}V for ${formatDurationCompact(
+        if (sample.pumpAutoWindowActive === false) return "поза вікном АВТО";
+        return `PV ${num(pvW, 0)}Вт < ${num(cfg.pvThresholdW, 0)}Вт і мережа ${num(loadGridV, 0)}В < ${num(cfg.gridRestoreV, 0)}В протягом ${formatDurationCompact(
           measureConditionDurationSec(
             samples,
             index,
@@ -1891,19 +3464,19 @@ function logicTransitionReason(logicKey, samples, index, cfg, nextState) {
         )}`;
       }
       if (Number.isFinite(loadGridV) && loadGridV >= Number(cfg.gridRestoreV)) {
-        return `GRID ${num(loadGridV, 0)}V >= ${num(cfg.gridRestoreV, 0)}V`;
+        return `мережа ${num(loadGridV, 0)}В >= ${num(cfg.gridRestoreV, 0)}В`;
       }
-      return `PV ${num(pvW, 0)}W >= ${num(cfg.pvThresholdW, 0)}W`;
+      return `PV ${num(pvW, 0)}Вт >= ${num(cfg.pvThresholdW, 0)}Вт`;
     case "boiler2":
       if (!nextState) {
-        if (sample.boiler2AutoWindowActive === false) return "outside AUTO window";
+        if (sample.boiler2AutoWindowActive === false) return "поза вікном АВТО";
         if (Number.isFinite(batteryPower) && batteryPower <= Number(cfg.batteryShutoffW)) {
-          return `battery ${num(batteryPower, 0)}W <= ${num(cfg.batteryShutoffW, 0)}W`;
+          return `АКБ ${num(batteryPower, 0)}Вт <= ${num(cfg.batteryShutoffW, 0)}Вт`;
         }
         if (Number.isFinite(peerHouseW) && peerHouseW >= Number(cfg.peerActiveW)) {
-          return `house boiler ${num(peerHouseW, 0)}W >= ${num(cfg.peerActiveW, 0)}W`;
+          return `інший бойлер ${num(peerHouseW, 0)}Вт >= ${num(cfg.peerActiveW, 0)}Вт`;
         }
-        return `PV ${num(pvW, 0)}W < ${num(cfg.pvThresholdW, 0)}W and GRID ${num(garageGridV, 0)}V < ${num(cfg.gridRestoreV, 0)}V for ${formatDurationCompact(
+        return `PV ${num(pvW, 0)}Вт < ${num(cfg.pvThresholdW, 0)}Вт і мережа ${num(garageGridV, 0)}В < ${num(cfg.gridRestoreV, 0)}В протягом ${formatDurationCompact(
           measureConditionDurationSec(
             samples,
             index,
@@ -1912,14 +3485,14 @@ function logicTransitionReason(logicKey, samples, index, cfg, nextState) {
         )}`;
       }
       if (Number.isFinite(garageGridV) && garageGridV >= Number(cfg.gridRestoreV)) {
-        return `GRID ${num(garageGridV, 0)}V >= ${num(cfg.gridRestoreV, 0)}V`;
+        return `мережа ${num(garageGridV, 0)}В >= ${num(cfg.gridRestoreV, 0)}В`;
       }
       if (Number.isFinite(batteryPower) && batteryPower >= Number(cfg.batteryResumeW)) {
-        return `battery ${num(batteryPower, 0)}W >= ${num(cfg.batteryResumeW, 0)}W`;
+        return `АКБ ${num(batteryPower, 0)}Вт >= ${num(cfg.batteryResumeW, 0)}Вт`;
       }
-      return `PV ${num(pvW, 0)}W >= ${num(cfg.pvThresholdW, 0)}W`;
+      return `PV ${num(pvW, 0)}Вт >= ${num(cfg.pvThresholdW, 0)}Вт`;
     default:
-      return "transition detected";
+      return "виявлено перехід";
   }
 }
 
@@ -1950,7 +3523,7 @@ function deriveLogicTransitions(logicKey, samples, cfg) {
       out.push({
         atMs: curr.atMs,
         title: `mode ${prevMode} -> ${currMode}`,
-        body: "mode changed without relay transition",
+        body: "режим змінився без перемикання реле",
         severity: "info",
         kind: "mode",
         module: logicCapability(logicKey).moduleKey || "hub",
@@ -2228,13 +3801,13 @@ function collectActiveAlerts() {
 
   if (hasSignalHistory) {
     if (state.config.inverterEnabled && !moduleHasFreshSignal("inverter", true, status?.inverter)) {
-      pushAlert("offline-inverter", "inverter offline", "no fresh status from inverter", "alert");
+      pushAlert("offline-inverter", "інвертор офлайн", "немає свіжого статусу від інвертора", "alert");
     }
     if (state.config.loadControllerEnabled && !moduleHasFreshSignal("loadController", true, status?.loadController)) {
-      pushAlert("offline-load", "load controller offline", "no fresh status from load controller", "alert");
+      pushAlert("offline-load", "load controller офлайн", "немає свіжого статусу від load controller", "alert");
     }
     if (state.config.garageEnabled && !moduleHasFreshSignal("garage", true, status?.garage)) {
-      pushAlert("offline-garage", "garage offline", "no fresh status from garage controller", "alert");
+      pushAlert("offline-garage", "гараж офлайн", "немає свіжого статусу від контролера гаража", "alert");
     }
   }
 
@@ -2242,7 +3815,7 @@ function collectActiveAlerts() {
   if (status?.inverter && loadCfg && Number(status.inverter.loadW) > Number(loadCfg.overloadPowerW || 0)) {
     pushAlert(
       "load-overload",
-      "load overload",
+      "перевантаження навантаження",
       `LOAD ${num(status.inverter.loadW, 0)}W > ${num(loadCfg.overloadPowerW, 0)}W`,
       "alert",
       "load",
@@ -2318,7 +3891,9 @@ function applyCapabilityDrivenUi(status) {
 
 function renderLogicModal({ force = false } = {}) {
   if (!isModalOpen("logicModal") && !force) return;
-  const preserveForm = state.logic.formDirty && !force;
+  const activeElement = document.activeElement;
+  const formHasFocus = activeElement instanceof Element && !!activeElement.closest("#logicModalForm");
+  const preserveForm = (state.logic.formDirty || formHasFocus) && !force;
 
   const def = getLogicModalDefinition(state.logic.currentKey);
   const status = state.status || {};
@@ -2327,8 +3902,8 @@ function renderLogicModal({ force = false } = {}) {
   const disabled = !def || !moduleState || !config;
 
   setText("logicModalTitle", def ? def.title : "mode logic");
-  setText("logicModalMode", disabled ? "mode: unavailable" : `mode: ${def.getMode(status)}`);
-  setText("logicModalState", disabled ? "state: unavailable" : `state: ${def.getState(status)}`);
+  setText("logicModalMode", disabled ? "режим: недоступно" : `режим: ${def.getMode(status)}`);
+  setText("logicModalState", disabled ? "стан: недоступно" : `стан: ${def.getState(status)}`);
 
   const factsEl = document.getElementById("logicModalFacts");
   const alertsEl = document.getElementById("logicModalAlerts");
@@ -2345,15 +3920,15 @@ function renderLogicModal({ force = false } = {}) {
   });
 
   if (!def || disabled) {
-    if (factsEl) factsEl.innerHTML = '<div class="logic-fact-chip">logic config unavailable</div>';
+    if (factsEl) factsEl.innerHTML = '<div class="logic-fact-chip">конфігурація логіки недоступна</div>';
     if (alertsEl) alertsEl.innerHTML = "";
     if (flowEl) flowEl.innerHTML = "";
     if (formEl) formEl.innerHTML = "";
-    if (fixedNoteEl) fixedNoteEl.textContent = "Update device firmware and refresh status to edit this logic.";
-    if (historyTitleEl) historyTitleEl.textContent = "logic history";
-    if (historyMetaEl) historyMetaEl.textContent = "history unavailable";
+    if (fixedNoteEl) fixedNoteEl.textContent = "Оновіть прошивку пристрою й статус, щоб редагувати цю логіку.";
+    if (historyTitleEl) historyTitleEl.textContent = "історія логіки";
+    if (historyMetaEl) historyMetaEl.textContent = "історія недоступна";
     drawLogicHistoryChart(state.logic.currentKey, config || {}, []);
-    renderEventList(journalEl, [], { emptyText: "logic journal unavailable" });
+    renderEventList(journalEl, [], { emptyText: "журнал логіки недоступний" });
     if (saveBtn) saveBtn.disabled = true;
     return;
   }
@@ -2380,34 +3955,21 @@ function renderLogicModal({ force = false } = {}) {
   }
 
   if (flowEl) {
-    flowEl.innerHTML = steps
-      .map(
-        (step, index) => `
-          <div class="logic-step ${escapeHtml(step.tone || "warn")}">
-            <div class="logic-step-index">${String(index + 1).padStart(2, "0")}</div>
-            <div class="logic-step-body">
-              <div class="logic-step-when">${escapeHtml(step.when)}</div>
-              ${step.delay ? `<div class="logic-step-delay">${escapeHtml(step.delay)}</div>` : ""}
-              <div class="logic-step-action">${escapeHtml(step.action)}</div>
-            </div>
-          </div>
-        `,
-      )
-      .join("");
+    flowEl.innerHTML = buildLogicFlowMarkup(steps);
   }
 
   const historySamples = automationHistoryItems(state.logic.historyHours);
   const transitions = deriveLogicTransitions(state.logic.currentKey, historySamples, config);
   if (historyTitleEl) {
-    historyTitleEl.textContent = `${def.title} history`;
+    historyTitleEl.textContent = `історія: ${def.title}`;
   }
   if (historyMetaEl) {
     historyMetaEl.textContent = historySamples.length
-      ? `window: ${state.logic.historyHours}h | samples: ${historySamples.length} | transitions: ${transitions.length}`
-      : `window: ${state.logic.historyHours}h | history will appear after the first sync`;
+      ? `вікно: ${state.logic.historyHours}г | зразків: ${historySamples.length} | переходів: ${transitions.length}`
+      : `вікно: ${state.logic.historyHours}г | історія з'явиться після першої синхронізації`;
   }
   drawLogicHistoryChart(state.logic.currentKey, config, historySamples);
-  renderEventList(journalEl, transitions, { emptyText: "no transitions in selected window" });
+  renderEventList(journalEl, transitions, { emptyText: "у вибраному вікні переходів немає" });
 
   if (formEl && !preserveForm) {
     formEl.innerHTML = def.fields.map((field) => buildLogicFieldMarkup(field, config[field.key], false)).join("");
@@ -2435,6 +3997,14 @@ function readLogicModalValues(def) {
     if (!Number.isFinite(parsed)) {
       throw new Error(`${field.label} is invalid`);
     }
+    const minValue = field.min === "" || field.min == null ? null : Number(field.min);
+    const maxValue = field.max === "" || field.max == null ? null : Number(field.max);
+    if (Number.isFinite(minValue) && parsed < minValue) {
+      throw new Error(`${field.label} must be >= ${field.min}`);
+    }
+    if (Number.isFinite(maxValue) && parsed > maxValue) {
+      throw new Error(`${field.label} must be <= ${field.max}`);
+    }
     values[field.key] = field.step === "1" ? Math.round(parsed) : parsed;
   }
   return values;
@@ -2461,7 +4031,7 @@ async function saveLogicModalConfig() {
   try {
     values = readLogicModalValues(def);
   } catch (error) {
-    showToast(error.message || "invalid logic values");
+    showToast(error.message || "некоректні значення логіки");
     return;
   }
 
@@ -2672,6 +4242,16 @@ function bindCardEvents() {
     card.addEventListener("click", () => openModal(modalId));
   });
 
+  document.querySelectorAll("[data-card-events-btn]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const cardKey = btn.getAttribute("data-card-events-btn");
+      if (!cardKey) return;
+      openCardDailyEventsModal(cardKey);
+    });
+  });
+
   const energyCards = ["cardPv", "cardBattery"];
   energyCards.forEach((cardId) => {
     const card = document.getElementById(cardId);
@@ -2723,6 +4303,13 @@ function bindCardEvents() {
         loadGarageGateHistory();
         return;
       }
+      if (state.events.viewMode === "cardDaily") {
+        loadCardDailyEvents({
+          cardKey: state.events.cardKey,
+          cardDate: state.events.cardDate || todayIso(),
+        });
+        return;
+      }
       loadEventJournal({ viewMode: state.events.viewMode });
     });
   }
@@ -2738,6 +4325,27 @@ function bindCardEvents() {
   if (timelineReloadBtn) {
     timelineReloadBtn.addEventListener("click", () => {
       loadLoadTimelineHistory({ force: true });
+    });
+  }
+
+  const timelineDayPrevBtn = document.getElementById("timelineDayPrevBtn");
+  if (timelineDayPrevBtn) {
+    timelineDayPrevBtn.addEventListener("click", () => {
+      shiftTimelineDay(-1);
+    });
+  }
+
+  const timelineDayNextBtn = document.getElementById("timelineDayNextBtn");
+  if (timelineDayNextBtn) {
+    timelineDayNextBtn.addEventListener("click", () => {
+      shiftTimelineDay(1);
+    });
+  }
+
+  const timelineDayTodayBtn = document.getElementById("timelineDayTodayBtn");
+  if (timelineDayTodayBtn) {
+    timelineDayTodayBtn.addEventListener("click", () => {
+      jumpTimelineToToday();
     });
   }
 
@@ -2815,9 +4423,9 @@ async function sendGridMode(mode, options = {}) {
       window.AndroidHub.setInverterGridMode(mode, requestId);
     });
     setActiveModeGroup("btnGrid", mode);
-    if (!silent) showToast(`grid mode: ${mode}`);
+    if (!silent) showToast(`режим мережі: ${mode}`);
   } catch (error) {
-    showToast(`grid mode failed: ${error.message}`);
+    showToast(`не вдалося змінити режим мережі: ${error.message}`);
   }
 }
 
@@ -2833,11 +4441,11 @@ async function sendInverterLoadLock(locked, options = {}) {
       setActiveModeGroup("btnLoad", "ON");
     }
     if (!silent) {
-      showToast(locked ? "load ON locked" : "load ON unlocked");
+      showToast(locked ? "УВІМК навантаження зафіксовано" : "фіксацію УВІМК навантаження знято");
     }
     return true;
   } catch (error) {
-    showToast(`load lock failed: ${error.message}`);
+    showToast(`не вдалося зафіксувати навантаження: ${error.message}`);
     return false;
   }
 }
@@ -2852,9 +4460,9 @@ async function sendLoadMode(mode, options = {}) {
       window.AndroidHub.setInverterLoadMode(mode, requestId);
     });
     setActiveModeGroup("btnLoad", mode);
-    if (!silent) showToast(`load mode: ${mode}`);
+    if (!silent) showToast(`режим навантаження: ${mode}`);
   } catch (error) {
-    showToast(`load mode failed: ${error.message}`);
+    showToast(`не вдалося змінити режим навантаження: ${error.message}`);
   }
 }
 
@@ -2871,10 +4479,10 @@ async function sendBoiler1Lock(mode, options = {}) {
     if (lockMode === "ON" || lockMode === "OFF") {
       setActiveModeGroup("btnBoiler1", lockMode);
     }
-    if (!silent) showToast(`boiler1 lock: ${lockMode}`);
+    if (!silent) showToast(`фіксація бойлера 1: ${lockMode}`);
     return true;
   } catch (error) {
-    showToast(`boiler1 lock failed: ${error.message}`);
+    showToast(`не вдалося зафіксувати бойлер 1: ${error.message}`);
     return false;
   }
 }
@@ -2892,9 +4500,9 @@ async function sendBoiler1Mode(mode, options = {}) {
       window.AndroidHub.setBoiler1Mode(mode, requestId);
     });
     setActiveModeGroup("btnBoiler1", mode);
-    if (!silent) showToast(`boiler1 mode: ${mode}`);
+    if (!silent) showToast(`режим бойлера 1: ${mode}`);
   } catch (error) {
-    showToast(`boiler1 mode failed: ${error.message}`);
+    showToast(`не вдалося змінити режим бойлера 1: ${error.message}`);
   }
 }
 
@@ -2911,10 +4519,10 @@ async function sendPumpLock(mode, options = {}) {
     if (lockMode === "ON" || lockMode === "OFF") {
       setActiveModeGroup("btnPump", lockMode);
     }
-    if (!silent) showToast(`pump lock: ${lockMode}`);
+    if (!silent) showToast(`фіксація насоса: ${lockMode}`);
     return true;
   } catch (error) {
-    showToast(`pump lock failed: ${error.message}`);
+    showToast(`не вдалося зафіксувати насос: ${error.message}`);
     return false;
   }
 }
@@ -2932,9 +4540,9 @@ async function sendPumpMode(mode, options = {}) {
       window.AndroidHub.setPumpMode(mode, requestId);
     });
     setActiveModeGroup("btnPump", mode);
-    if (!silent) showToast(`pump mode: ${mode}`);
+    if (!silent) showToast(`режим насоса: ${mode}`);
   } catch (error) {
-    showToast(`pump mode failed: ${error.message}`);
+    showToast(`не вдалося змінити режим насоса: ${error.message}`);
   }
 }
 
@@ -2971,13 +4579,13 @@ function renderAutoWindowBlock(prefix, stateData, options = {}) {
   if (statusEl) {
     statusEl.classList.remove("enabled", "active-now", "inactive-now");
     if (disabled) {
-      statusEl.textContent = "module disabled";
+      statusEl.textContent = "модуль вимкнено";
     } else if (!enabled) {
-      statusEl.textContent = "AUTO: always active";
+      statusEl.textContent = "АВТО: активний завжди";
     } else {
       statusEl.classList.add("enabled");
       statusEl.classList.add(active ? "active-now" : "inactive-now");
-      statusEl.textContent = `AUTO: ${normalizedStart}-${normalizedEnd} (${active ? "active now" : "inactive now"})`;
+      statusEl.textContent = `АВТО: ${normalizedStart}-${normalizedEnd} (${active ? "зараз активне" : "зараз неактивне"})`;
     }
   }
 
@@ -3011,9 +4619,9 @@ async function sendBoiler1AutoWindow() {
       window.AndroidHub.setBoiler1AutoWindow(enabled, start, end, requestId);
     });
     setAutoWindowEditorOpen("boiler1", false);
-    showToast("boiler1 AUTO timer updated");
+    showToast("таймер АВТО бойлера 1 оновлено");
   } catch (error) {
-    showToast(`boiler1 AUTO timer failed: ${error.message}`);
+    showToast(`не вдалося оновити таймер бойлера 1: ${error.message}`);
   }
 }
 
@@ -3030,9 +4638,9 @@ async function sendPumpAutoWindow() {
       window.AndroidHub.setPumpAutoWindow(enabled, start, end, requestId);
     });
     setAutoWindowEditorOpen("pump", false);
-    showToast("pump AUTO timer updated");
+    showToast("таймер АВТО насоса оновлено");
   } catch (error) {
-    showToast(`pump AUTO timer failed: ${error.message}`);
+    showToast(`не вдалося оновити таймер насоса: ${error.message}`);
   }
 }
 
@@ -3049,9 +4657,9 @@ async function sendBoiler2AutoWindow() {
       window.AndroidHub.setBoiler2AutoWindow(enabled, start, end, requestId);
     });
     setAutoWindowEditorOpen("boiler2", false);
-    showToast("boiler2 AUTO timer updated");
+    showToast("таймер АВТО бойлера 2 оновлено");
   } catch (error) {
-    showToast(`boiler2 AUTO timer failed: ${error.message}`);
+    showToast(`не вдалося оновити таймер бойлера 2: ${error.message}`);
   }
 }
 
@@ -3068,10 +4676,10 @@ async function sendBoiler2Lock(mode, options = {}) {
     if (lockMode === "ON" || lockMode === "OFF") {
       setActiveModeGroup("btnBoiler2", lockMode);
     }
-    if (!silent) showToast(`boiler2 lock: ${lockMode}`);
+    if (!silent) showToast(`фіксація бойлера 2: ${lockMode}`);
     return true;
   } catch (error) {
-    showToast(`boiler2 lock failed: ${error.message}`);
+    showToast(`не вдалося зафіксувати бойлер 2: ${error.message}`);
     return false;
   }
 }
@@ -3089,9 +4697,9 @@ async function sendBoiler2Mode(mode, options = {}) {
       window.AndroidHub.setBoiler2Mode(mode, requestId);
     });
     setActiveModeGroup("btnBoiler2", mode);
-    if (!silent) showToast(`boiler2 mode: ${mode}`);
+    if (!silent) showToast(`режим бойлера 2: ${mode}`);
   } catch (error) {
-    showToast(`boiler2 mode failed: ${error.message}`);
+    showToast(`не вдалося змінити режим бойлера 2: ${error.message}`);
   }
 }
 
@@ -3100,9 +4708,9 @@ async function triggerGate() {
     await bridgeRequest("cmd", (requestId) => {
       window.AndroidHub.triggerGate(requestId);
     });
-    showToast("gate command sent");
+    showToast("команду на ворота надіслано");
   } catch (error) {
-    showToast(`gate command failed: ${error.message}`);
+    showToast(`не вдалося надіслати команду воротам: ${error.message}`);
   }
 }
 
@@ -3111,9 +4719,9 @@ async function toggleGarageLight() {
     await bridgeRequest("cmd", (requestId) => {
       window.AndroidHub.toggleGarageLight(requestId);
     });
-    showToast("garage light toggled");
+    showToast("світло гаража перемкнено");
   } catch (error) {
-    showToast(`garage light failed: ${error.message}`);
+    showToast(`не вдалося перемкнути світло гаража: ${error.message}`);
   }
 }
 
@@ -3145,6 +4753,12 @@ function bindPointerClick(buttonId, handler) {
     },
     true,
   );
+}
+
+function bindPointerClickMany(buttonIds, handler) {
+  (Array.isArray(buttonIds) ? buttonIds : [buttonIds]).forEach((buttonId) => {
+    bindPointerClick(buttonId, handler);
+  });
 }
 
 function bindLongPress(buttonId, shortHandler, longHandler, holdMs = 800) {
@@ -3203,6 +4817,12 @@ function bindLongPress(buttonId, shortHandler, longHandler, holdMs = 800) {
   );
 }
 
+function bindLongPressMany(buttonIds, shortHandler, longHandler, holdMs = 800) {
+  (Array.isArray(buttonIds) ? buttonIds : [buttonIds]).forEach((buttonId) => {
+    bindLongPress(buttonId, shortHandler, longHandler, holdMs);
+  });
+}
+
 function bindModeButtons() {
   bindPointerClick("btnGridAUTO", () => sendGridMode("AUTO"));
   bindPointerClick("btnGridOFF", () => sendGridMode("OFF"));
@@ -3227,7 +4847,7 @@ function bindModeButtons() {
     async () => {
       await sendBoiler1Lock("OFF", { silent: true });
       await sendBoiler1Mode("OFF", { silent: true });
-      showToast("boiler1 OFF locked");
+      showToast("ВИКЛ бойлера 1 зафіксовано");
     },
   );
   bindLongPress(
@@ -3236,7 +4856,7 @@ function bindModeButtons() {
     async () => {
       await sendBoiler1Lock("ON", { silent: true });
       await sendBoiler1Mode("ON", { silent: true });
-      showToast("boiler1 ON locked");
+      showToast("УВІМК бойлера 1 зафіксовано");
     },
   );
 
@@ -3247,7 +4867,7 @@ function bindModeButtons() {
     async () => {
       await sendPumpLock("OFF", { silent: true });
       await sendPumpMode("OFF", { silent: true });
-      showToast("pump OFF locked");
+      showToast("ВИКЛ насоса зафіксовано");
     },
   );
   bindLongPress(
@@ -3256,7 +4876,7 @@ function bindModeButtons() {
     async () => {
       await sendPumpLock("ON", { silent: true });
       await sendPumpMode("ON", { silent: true });
-      showToast("pump ON locked");
+      showToast("УВІМК насоса зафіксовано");
     },
   );
 
@@ -3319,7 +4939,7 @@ function bindModeButtons() {
     async () => {
       await sendBoiler2Lock("OFF", { silent: true });
       await sendBoiler2Mode("OFF", { silent: true });
-      showToast("boiler2 OFF locked");
+      showToast("ВИКЛ бойлера 2 зафіксовано");
     },
   );
   bindLongPress(
@@ -3328,7 +4948,7 @@ function bindModeButtons() {
     async () => {
       await sendBoiler2Lock("ON", { silent: true });
       await sendBoiler2Mode("ON", { silent: true });
-      showToast("boiler2 ON locked");
+      showToast("УВІМК бойлера 2 зафіксовано");
     },
   );
 
@@ -3358,29 +4978,32 @@ function bindModeButtons() {
     });
   }
 
-  const gateActionBtn = document.getElementById("gateActionBtn");
-  if (gateActionBtn) {
-    gateActionBtn.addEventListener("click", (event) => {
+  document.querySelectorAll("[data-gate-action]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       triggerGate();
     });
-  }
-  const garageLightActionBtn = document.getElementById("garageLightActionBtn");
-  if (garageLightActionBtn) {
-    garageLightActionBtn.addEventListener("click", (event) => {
+  });
+  document.querySelectorAll("[data-garage-light-action]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (garageLightActionBtn.disabled) return;
+      if (btn.disabled) return;
       toggleGarageLight();
     });
-  }
+  });
 }
 
 function openInverterLogs() {
-  const baseUrl = normalizeBaseUrl(state.config.inverterBaseUrl || DEFAULT_CONFIG.inverterBaseUrl);
+  // Усі логи (власні load controller + переслані з garage та інвертора)
+  // зберігаються лише на load controller — інвертор і гараж лише
+  // редіректять сюди. Раніше тут відкривався inverterBaseUrl: якщо інвертор
+  // офлайн, кнопка логів переставала працювати, хоча самі логи були
+  // доступні.
+  const baseUrl = normalizeBaseUrl(state.config.loadControllerBaseUrl || DEFAULT_CONFIG.loadControllerBaseUrl);
   if (!baseUrl) {
-    showToast("inverter URL is empty");
+    showToast("адреса load controller не задана");
     return;
   }
 
@@ -3389,7 +5012,7 @@ function openInverterLogs() {
   if (hasBridge() && window.AndroidHub && typeof window.AndroidHub.openExternalUrl === "function") {
     const opened = !!window.AndroidHub.openExternalUrl(logsUrl);
     if (!opened) {
-      showToast("failed to open logs");
+      showToast("не вдалося відкрити логи");
     }
     return;
   }
@@ -3416,12 +5039,20 @@ function bindSettings() {
     });
   }
 
+  const schemeSettingsBtn = document.getElementById("schemeSettingsBtn");
+  if (schemeSettingsBtn) {
+    schemeSettingsBtn.addEventListener("click", () => {
+      syncConfigToForm();
+      openModal("settingsModal");
+    });
+  }
+
   const saveBtn = document.getElementById("settingsSaveBtn");
   if (!saveBtn) return;
 
   saveBtn.addEventListener("click", () => {
     if (!hasBridge()) {
-      showToast("bridge unavailable");
+      showToast("міст недоступний");
       return;
     }
 
@@ -3438,6 +5069,9 @@ function bindSettings() {
       garageEnabled: readChecked("cfgGarageEnabled", true),
       realtimeMonitorEnabled: readChecked("cfgRealtimeEnabled", false),
       realtimePollIntervalSec: clampRealtimePoll(document.getElementById("cfgRealtimeSec")?.value),
+      graphSyncIntervalMin: clampGraphSyncIntervalMin(document.getElementById("cfgGraphSyncMin")?.value),
+      graphSyncPerCycle: clampGraphSyncPerCycle(document.getElementById("cfgGraphSyncPerCycle")?.value),
+      graphSyncRequestFetchLimit: clampGraphSyncRequestFetchLimit(document.getElementById("cfgGraphSyncRequestLimit")?.value),
       notifyPvGeneration: readChecked("cfgNotifyPv", true),
       notifyGridRelay: readChecked("cfgNotifyGridRelay", true),
       notifyGridPresence: readChecked("cfgNotifyGridPresence", true),
@@ -3450,22 +5084,25 @@ function bindSettings() {
       notifyModuleOffline: readChecked("cfgNotifyModuleOffline", true),
       notifyPowerOverload: readChecked("cfgNotifyPowerOverload", true),
       notifyLogicUnstable: readChecked("cfgNotifyLogicUnstable", true),
+      interfaceMode: "pro",
     };
 
     const ok = !!window.AndroidHub.saveConfig(JSON.stringify(nextConfig));
     if (!ok) {
-      showToast("settings save failed");
+      showToast("не вдалося зберегти налаштування");
       return;
     }
 
     state.config = { ...DEFAULT_CONFIG, ...nextConfig };
+    applyInterfaceMode(state.config.interfaceMode);
     setText("pollText", `${state.config.pollIntervalSec}s`);
     applyModuleCardStates();
     applyLiveCardStates(state.status);
     restartPolling();
     restartSignalAgeTicker();
+    scheduleNextGraphBackgroundSync(3 * 1000);
     closeModal("settingsModal");
-    showToast("settings saved");
+    showToast("налаштування збережено");
     requestStatus();
   });
 }
@@ -3487,6 +5124,9 @@ function syncConfigToForm() {
   setInput("cfgGaragePass", cfg.garagePassword || "");
   setInput("cfgPollSec", String(clampPoll(cfg.pollIntervalSec)));
   setInput("cfgRealtimeSec", String(clampRealtimePoll(cfg.realtimePollIntervalSec)));
+  setInput("cfgGraphSyncMin", String(clampGraphSyncIntervalMin(cfg.graphSyncIntervalMin)));
+  setInput("cfgGraphSyncPerCycle", String(clampGraphSyncPerCycle(cfg.graphSyncPerCycle)));
+  setInput("cfgGraphSyncRequestLimit", String(clampGraphSyncRequestFetchLimit(cfg.graphSyncRequestFetchLimit)));
   setCheck("cfgInverterEnabled", cfg.inverterEnabled);
   setCheck("cfgLoadEnabled", cfg.loadControllerEnabled);
   setCheck("cfgGarageEnabled", cfg.garageEnabled);
@@ -3516,9 +5156,14 @@ function loadConfigFromBridge() {
       ...parsed,
       pollIntervalSec: clampPoll(parsed.pollIntervalSec),
       realtimePollIntervalSec: clampRealtimePoll(parsed.realtimePollIntervalSec),
+      graphSyncIntervalMin: clampGraphSyncIntervalMin(parsed.graphSyncIntervalMin),
+      graphSyncPerCycle: clampGraphSyncPerCycle(parsed.graphSyncPerCycle),
+      graphSyncRequestFetchLimit: clampGraphSyncRequestFetchLimit(parsed.graphSyncRequestFetchLimit),
+      interfaceMode: "pro",
     };
+    scheduleNextGraphBackgroundSync(3 * 1000);
   } catch (error) {
-    showToast("config read failed");
+    showToast("не вдалося прочитати конфігурацію");
   }
 }
 
@@ -3526,7 +5171,7 @@ async function requestStatus() {
   if (!hasBridge()) {
     if (!state.noBridgeToastShown) {
       state.noBridgeToastShown = true;
-      showToast("Android bridge not available");
+      showToast("міст Android недоступний");
     }
     return;
   }
@@ -3541,7 +5186,7 @@ async function requestStatus() {
       window.AndroidHub.fetchStatus(requestId);
     });
   } catch (error) {
-    showToast(`status failed: ${error.message}`);
+    showToast(`помилка статусу: ${error.message}`);
   } finally {
     state.statusRequestInFlight = false;
   }
@@ -3549,7 +5194,7 @@ async function requestStatus() {
 
 async function requestMulticastRefreshNow() {
   if (!hasBridge()) {
-    showToast("bridge unavailable");
+    showToast("міст недоступний");
     return;
   }
 
@@ -3559,9 +5204,9 @@ async function requestMulticastRefreshNow() {
     await bridgeRequest("status", (requestId) => {
       window.AndroidHub.requestMulticastRefresh(requestId);
     });
-    showToast("refresh requested");
+    showToast("оновлення запитано");
   } catch (error) {
-    showToast(`refresh failed: ${error.message}`);
+    showToast(`не вдалося оновити: ${error.message}`);
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -3591,7 +5236,7 @@ function trackConnectivityHealth(status) {
 
   state.emptyStatusCount += 1;
   if (state.emptyStatusCount === 3) {
-    showToast("No modules reachable. Check controller URLs and Wi-Fi.");
+    showToast("Жоден модуль не відповідає. Перевірте адреси контролерів і Wi-Fi.");
   }
 }
 
@@ -3671,6 +5316,26 @@ function moduleHasFreshSignal(key, enabled, moduleData) {
   return Date.now() - lastSignalTs <= moduleSignalTimeoutMs() * MODULE_STALE_AFTER_MISSES;
 }
 
+function pickFiniteValue(values, fallback = null) {
+  for (const value of values) {
+    const parsed = maybeFiniteNumber(value, null);
+    if (parsed !== null) return parsed;
+  }
+  return fallback;
+}
+
+function moduleHasInverterTelemetryPayload(moduleData) {
+  if (!moduleData || typeof moduleData !== "object") return false;
+  return [
+    moduleData.pvW,
+    moduleData.gridW,
+    moduleData.loadW,
+    moduleData.batterySoc,
+    moduleData.batteryPower,
+    moduleData.lineVoltage,
+  ].some((value) => maybeFiniteNumber(value, null) !== null);
+}
+
 function setModuleCardsDisabled(cardIds, disabled) {
   cardIds.forEach((id) => {
     const el = document.getElementById(id);
@@ -3725,19 +5390,22 @@ function applyLiveCardStates(status, options = {}) {
   const hasInverterData = moduleHasFreshSignal("inverter", state.config.inverterEnabled, status?.inverter);
   const hasLoadData = moduleHasFreshSignal("loadController", state.config.loadControllerEnabled, status?.loadController);
   const hasGarageData = moduleHasFreshSignal("garage", state.config.garageEnabled, status?.garage);
+  const hasLoadInverterProxy = hasLoadData && moduleHasInverterTelemetryPayload(status?.loadController);
+  const hasGarageInverterProxy = hasGarageData && moduleHasInverterTelemetryPayload(status?.garage);
+  const hasInverterCardData = hasInverterData || hasLoadInverterProxy || hasGarageInverterProxy;
   const hasClimateData = hasInverterData || hasLoadData || hasGarageData;
 
-  setCardDataState("cardPv", hasInverterData);
-  setCardDataState("cardGrid", hasInverterData);
-  setCardDataState("cardBattery", hasInverterData);
-  setCardDataState("cardLoad", hasInverterData);
+  setCardDataState("cardPv", hasInverterCardData);
+  setCardDataState("cardGrid", hasInverterCardData);
+  setCardDataState("cardBattery", hasInverterCardData);
+  setCardDataState("cardLoad", hasInverterCardData);
   setCardDataState("cardBoiler1", hasLoadData);
   setCardDataState("cardPump", hasLoadData);
   setCardDataState("cardBoiler2", hasGarageData);
   setCardDataState("cardGate", hasGarageData);
   setCardDataState("climateWideCard", hasClimateData);
 
-  if (flash && hasInverterData) {
+  if (flash && hasInverterCardData) {
     flashCard("cardPv");
     flashCard("cardGrid");
     flashCard("cardBattery");
@@ -3910,7 +5578,7 @@ function drawLineChart(canvas, labels, series, options = {}) {
   const allValues = collectSeriesFiniteValues(series);
 
   if (allValues.length === 0 || labels.length === 0) {
-    drawEmptyCanvas(canvas, "No chart data");
+    drawEmptyCanvas(canvas, "Немає даних графіка");
     return;
   }
 
@@ -3982,7 +5650,7 @@ function drawBarChart(canvas, labels, series, options = {}) {
 
   const allValues = collectSeriesFiniteValues(series);
   if (allValues.length === 0 || labels.length === 0) {
-    drawEmptyCanvas(canvas, "No chart data");
+    drawEmptyCanvas(canvas, "Немає даних графіка");
     return;
   }
 
@@ -4141,9 +5809,53 @@ async function openClimateModal() {
   updateClimateMetricButtons();
   await loadClimateData();
 }
+
+function normalizeCoverage(payloadCoverage) {
+  if (!payloadCoverage || typeof payloadCoverage !== "object") return null;
+  const expectedDays = Math.max(0, Number(payloadCoverage.expectedDays) || 0);
+  const knownDays = Math.max(0, Number(payloadCoverage.knownDays) || 0);
+  const syncedDays = Math.max(0, Number(payloadCoverage.syncedDays) || 0);
+  return {
+    period: safeText(payloadCoverage.period, ""),
+    expectedDays,
+    knownDays,
+    syncedDays,
+  };
+}
+
+function formatCoverageSummary(coverage) {
+  if (!coverage) return "sync: --";
+  const synced = Math.max(0, Number(coverage.syncedDays) || 0);
+  const known = Math.max(0, Number(coverage.knownDays) || 0);
+  const expected = Math.max(0, Number(coverage.expectedDays) || 0);
+  if (known > 0) {
+    const pct = Math.round((synced / known) * 100);
+    return `sync: ${synced}/${known} days (${pct}%)`;
+  }
+  if (expected > 0) {
+    const pct = Math.round((synced / expected) * 100);
+    return `sync: ${synced}/${expected} days (${pct}%)`;
+  }
+  return `sync: ${synced} day${synced === 1 ? "" : "s"}`;
+}
+
+function isCoverageIncomplete(coverage) {
+  if (!coverage || typeof coverage !== "object") return false;
+  const synced = Math.max(0, Number(coverage.syncedDays) || 0);
+  const known = Math.max(0, Number(coverage.knownDays) || 0);
+  const expected = Math.max(0, Number(coverage.expectedDays) || 0);
+  if (known > 0) return synced < known;
+  if (expected > 0) return synced < expected;
+  return false;
+}
+
+function setGraphSyncMeta(id, coverage) {
+  setText(id, formatCoverageSummary(coverage));
+}
+
 function normalizeEnergyPayload(period, payload) {
   if (!payload || typeof payload !== "object") {
-    throw new Error("Empty payload");
+    throw new Error("Порожні дані");
   }
 
   if (period === "daily") {
@@ -4170,13 +5882,20 @@ function normalizeEnergyPayload(period, payload) {
     }
 
     const date = safeText(payload.date, document.getElementById("energyDateInput")?.value || todayIso());
+    const dailyCoverage = normalizeCoverage(payload._coverage) || {
+      period: "daily",
+      expectedDays: 1,
+      knownDays: 1,
+      syncedDays: rows.length > 0 ? 1 : 0,
+    };
     return {
       title: `energy graph - day ${date}`,
-      yTitle: "energy (Wh)",
+      yTitle: "енергія (Вт·год)",
       labels,
       pv,
       home,
       grid,
+      coverage: dailyCoverage,
     };
   }
 
@@ -4197,11 +5916,12 @@ function normalizeEnergyPayload(period, payload) {
     const month = safeText(payload.month, document.getElementById("energyMonthInput")?.value || currentMonthIso());
     return {
       title: `energy graph - month ${month}`,
-      yTitle: "energy (Wh)",
+      yTitle: "енергія (Вт·год)",
       labels,
       pv,
       home,
       grid,
+      coverage: normalizeCoverage(payload._coverage),
     };
   }
 
@@ -4212,11 +5932,12 @@ function normalizeEnergyPayload(period, payload) {
   const year = safeText(payload.current_year, String(new Date().getFullYear()));
   return {
     title: `energy graph - year ${year}`,
-    yTitle: "energy (kWh)",
+    yTitle: "енергія (кВт·год)",
     labels,
     pv,
     home,
     grid,
+    coverage: normalizeCoverage(payload._coverage),
   };
 }
 
@@ -4225,6 +5946,7 @@ function renderEnergyChart(model) {
   if (!canvas) return;
 
   setText("energyChartTitle", model.title);
+  setGraphSyncMeta("energySyncMeta", model.coverage);
   const series = [
     { label: "pv", color: "#f39c12", data: model.pv, fillAlpha: 0.68 },
     { label: "home", color: "#e74c3c", data: model.home, fillAlpha: 0.68 },
@@ -4270,21 +5992,108 @@ function isCurrentClimateSelection(period, selector) {
   return resolveClimateSelector(activePeriod) === selector;
 }
 
-async function fetchEnergyModelFromBridge(period, selector) {
-  let payload;
+async function fetchAnalyticsPayloadFromBridge(period, selector, options = {}) {
+  const force = !!options.force;
+  const background = options.background === true;
   if (period === "daily") {
-    payload = await bridgeRequest("daily", (requestId) => {
-      window.AndroidHub.fetchInverterDaily(selector, requestId);
-    });
-  } else if (period === "monthly") {
-    payload = await bridgeRequest("monthly", (requestId) => {
-      window.AndroidHub.fetchInverterMonthly(selector, requestId);
-    });
-  } else {
-    payload = await bridgeRequest("yearly", (requestId) => {
-      window.AndroidHub.fetchInverterYearly(requestId);
-    });
+    const payload = await fetchDailyPayloadFromBridge(selector, { force });
+    if (!isDailyPayloadLike(payload, normalizeIsoDate(selector))) {
+      throw new Error("Немає даних за добу");
+    }
+    return payload;
   }
+
+  const dates = await syncDailyArchiveDates({ forceDates: force });
+  const requestLimit = graphSyncRequestFetchLimitFromConfig();
+  const cycleLimit = graphSyncPerCycleFromConfig();
+
+  const resolveFetchLimit = (targetCount) => {
+    const safeTarget = Math.max(0, Number(targetCount) || 0);
+    if (!safeTarget) return 0;
+    const chunkLimit = Math.max(1, Math.min(cycleLimit, safeTarget));
+    if (background) {
+      return chunkLimit;
+    }
+    if (!force) {
+      // Foreground open uses already-cached local data and schedules background top-up.
+      return 0;
+    }
+    return Math.max(1, Math.min(requestLimit, chunkLimit, safeTarget));
+  };
+
+  if (period === "monthly") {
+    const month = normalizeIsoMonth(selector) || currentMonthIso();
+    const monthDates = dates.filter((date) => date.startsWith(`${month}-`));
+    const monthYear = Number.parseInt(month.slice(0, 4), 10);
+    const monthNum = Number.parseInt(month.slice(5, 7), 10);
+    const fallbackDates = datesForMonth(monthYear, monthNum);
+    const targetDates = monthDates.length ? monthDates : fallbackDates;
+    const monthlyFetchLimit = resolveFetchLimit(targetDates.length);
+    const syncStats = await ensureDailyArchiveEntries(targetDates, {
+      force,
+      maxFetch: monthlyFetchLimit,
+      onlyWhenLoadIdle: true,
+    });
+    const payload = buildMonthlyPayloadFromArchive(month);
+    if (isCoverageIncomplete(normalizeCoverage(payload._coverage))) {
+      scheduleNextGraphBackgroundSync(syncStats?.blockedByBusy ? GRAPH_SYNC_BUSY_RETRY_MS : GRAPH_SYNC_EAGER_RETRY_MS);
+    }
+    return payload;
+  }
+
+  const selectedYear = Number.parseInt(String(new Date().getFullYear()), 10);
+  const yearDates = dates.filter((date) => date.startsWith(`${selectedYear}-`));
+  const yearlyFetchLimit = resolveFetchLimit(yearDates.length);
+  const syncStats = await ensureDailyArchiveEntries(yearDates, {
+    force,
+    maxFetch: yearlyFetchLimit,
+    onlyWhenLoadIdle: true,
+  });
+  const payload = buildYearlyPayloadFromArchive(selectedYear);
+  if (isCoverageIncomplete(normalizeCoverage(payload._coverage))) {
+    scheduleNextGraphBackgroundSync(syncStats?.blockedByBusy ? GRAPH_SYNC_BUSY_RETRY_MS : GRAPH_SYNC_EAGER_RETRY_MS);
+  }
+  return payload;
+}
+
+async function getAnalyticsPayloadShared(period, selector, options = {}) {
+  const force = !!options.force;
+  const background = options.background === true;
+  const syncKey = `analytics::${period}::${selector}`;
+  const cacheEntry = getAnalyticsCacheEntry(period, selector);
+  const nowMs = Date.now();
+
+  if (!force && cacheEntry?.payload && !isAnalyticsCacheStale(cacheEntry, period, nowMs)) {
+    touchAnalyticsCacheEntry(period, selector, nowMs);
+    return cacheEntry.payload;
+  }
+
+  if (shouldThrottleGraphSyncKey(syncKey, force, nowMs) && cacheEntry?.payload) {
+    touchAnalyticsCacheEntry(period, selector, nowMs);
+    return cacheEntry.payload;
+  }
+
+  const payload = await enqueueGraphSync(syncKey, () => fetchAnalyticsPayloadFromBridge(period, selector, { force, background }));
+  upsertAnalyticsCacheEntry(period, selector, payload, Date.now());
+  return payload;
+}
+
+function buildGraphModelFromAnalyticsCache(graphType, period, selector) {
+  const rawEntry = getAnalyticsCacheEntry(period, selector);
+  if (!rawEntry?.payload) return null;
+  touchAnalyticsCacheEntry(period, selector);
+  try {
+    if (graphType === "climate") {
+      return normalizeClimatePayload(period, rawEntry.payload);
+    }
+    return normalizeEnergyPayload(period, rawEntry.payload);
+  } catch (error) {
+    return null;
+  }
+}
+
+async function fetchEnergyModelFromBridge(period, selector, options = {}) {
+  const payload = await getAnalyticsPayloadShared(period, selector, options);
   return normalizeEnergyPayload(period, payload);
 }
 
@@ -4309,22 +6118,52 @@ function evaluateClimateFallbackNeeds(model) {
   };
 }
 
-async function fetchClimateModelFromBridge(period, selector) {
-  let payload;
-  if (period === "daily") {
-    payload = await bridgeRequest("climate-daily", (requestId) => {
-      window.AndroidHub.fetchInverterDaily(selector, requestId);
-    });
-  } else if (period === "monthly") {
-    payload = await bridgeRequest("climate-monthly", (requestId) => {
-      window.AndroidHub.fetchInverterMonthly(selector, requestId);
-    });
-  } else {
-    payload = await bridgeRequest("climate-yearly", (requestId) => {
-      window.AndroidHub.fetchInverterYearly(requestId);
-    });
+async function fetchModuleHistoryPayload(moduleKey, expectedDate, options = {}) {
+  const force = !!options.force;
+  if (!expectedDate || expectedDate !== todayIso()) return null;
+
+  const cacheEntry = getModuleHistoryCacheEntry(moduleKey, expectedDate);
+  const nowMs = Date.now();
+  if (!force && cacheEntry?.payload && !isModuleHistoryCacheStale(cacheEntry, expectedDate, nowMs)) {
+    touchModuleHistoryCacheEntry(moduleKey, expectedDate, nowMs);
+    return cacheEntry.payload;
   }
 
+  const syncKey = `history::${moduleKey}::${expectedDate}`;
+  if (shouldThrottleGraphSyncKey(syncKey, force, nowMs) && cacheEntry?.payload) {
+    touchModuleHistoryCacheEntry(moduleKey, expectedDate, nowMs);
+    return cacheEntry.payload;
+  }
+
+  let payload = null;
+  if (
+    moduleKey === "corridor" &&
+    state.config.loadControllerEnabled &&
+    window.AndroidHub &&
+    typeof window.AndroidHub.fetchLoadControllerHistory === "function"
+  ) {
+    payload = await enqueueGraphSync(syncKey, () => bridgeRequest("climate-corridor-history", (requestId) => {
+      window.AndroidHub.fetchLoadControllerHistory(requestId, expectedDate);
+    }));
+  } else if (
+    moduleKey === "garage" &&
+    state.config.garageEnabled &&
+    window.AndroidHub &&
+    typeof window.AndroidHub.fetchGarageHistory === "function"
+  ) {
+    payload = await enqueueGraphSync(syncKey, () => bridgeRequest("climate-garage-history", (requestId) => {
+      window.AndroidHub.fetchGarageHistory(requestId);
+    }));
+  }
+
+  if (payload) {
+    upsertModuleHistoryCacheEntry(moduleKey, expectedDate, payload, Date.now());
+  }
+  return payload;
+}
+
+async function fetchClimateModelFromBridge(period, selector, options = {}) {
+  const payload = await getAnalyticsPayloadShared(period, selector, options);
   const model = normalizeClimatePayload(period, payload);
   if (period === "daily") {
     const fallbackNeeds = evaluateClimateFallbackNeeds(model);
@@ -4332,6 +6171,7 @@ async function fetchClimateModelFromBridge(period, selector) {
       await enrichDailyClimateModelWithModuleHistory(model, {
         corridor: fallbackNeeds.corridorMissing,
         garage: fallbackNeeds.garageMissing,
+        forceRefresh: !!options.force,
       });
     }
   }
@@ -4340,6 +6180,7 @@ async function fetchClimateModelFromBridge(period, selector) {
 
 async function syncGraphModel(graphType, period, selector, options = {}) {
   const force = !!options.force;
+  const background = options.background === true;
   const syncKey = `${graphType}::${period}::${selector}`;
   const cachedEntry = getGraphCacheEntry(graphType, period, selector);
   const nowMs = Date.now();
@@ -4351,9 +6192,9 @@ async function syncGraphModel(graphType, period, selector, options = {}) {
 
   const model = await enqueueGraphSync(syncKey, async () => {
     if (graphType === "climate") {
-      return fetchClimateModelFromBridge(period, selector);
+      return fetchClimateModelFromBridge(period, selector, { force, background });
     }
-    return fetchEnergyModelFromBridge(period, selector);
+    return fetchEnergyModelFromBridge(period, selector, { force, background });
   });
   upsertGraphCacheEntry(graphType, period, selector, model, Date.now());
   return model;
@@ -4374,6 +6215,7 @@ function applyGraphModelIfCurrent(graphType, period, selector, model) {
 
 function collectBackgroundGraphSyncCandidates(nowMs = Date.now()) {
   loadGraphCacheFromStorage();
+  const maxItems = graphSyncPerCycleFromConfig();
   const candidates = [];
   const appendCandidates = (graphType) => {
     const slot = getGraphCacheSlot(graphType);
@@ -4383,7 +6225,8 @@ function collectBackgroundGraphSyncCandidates(nowMs = Date.now()) {
       if (!Number.isFinite(viewedAtMs) || viewedAtMs <= 0) return;
       if (nowMs - viewedAtMs > GRAPH_SYNC_VIEW_WINDOW_MS) return;
       const parsed = parseGraphEntryKey(entryKey);
-      if (!isGraphCacheStale(entry, graphType, parsed.period, nowMs)) return;
+      const coverageIncomplete = isCoverageIncomplete(entry.model?.coverage);
+      if (!coverageIncomplete && !isGraphCacheStale(entry, graphType, parsed.period, nowMs)) return;
       candidates.push({
         graphType,
         period: parsed.period,
@@ -4396,24 +6239,32 @@ function collectBackgroundGraphSyncCandidates(nowMs = Date.now()) {
   appendCandidates("energy");
   appendCandidates("climate");
   candidates.sort((a, b) => b.viewedAtMs - a.viewedAtMs);
-  return candidates.slice(0, GRAPH_SYNC_MAX_ITEMS_PER_CYCLE);
+  return candidates.slice(0, maxItems);
 }
 
 async function runGraphBackgroundSyncCycle() {
-  if (state.graphSync.cycleInFlight) return;
-  if (!hasBridge() || document.hidden) return;
+  if (state.graphSync.cycleInFlight) return "skip";
+  if (!hasBridge() || document.hidden) return "skip";
 
   state.graphSync.cycleInFlight = true;
   try {
+    const perCycleLimit = graphSyncPerCycleFromConfig();
+    const archiveSyncStats = await syncDailyArchiveQuiet({
+      force: false,
+      maxFetch: perCycleLimit,
+      onlyWhenLoadIdle: true,
+    });
+    const blockedByBusy = archiveSyncStats?.blockedByBusy === true;
     const candidates = collectBackgroundGraphSyncCandidates(Date.now());
     for (const candidate of candidates) {
       try {
-        const model = await syncGraphModel(candidate.graphType, candidate.period, candidate.selector, { force: false });
+        const model = await syncGraphModel(candidate.graphType, candidate.period, candidate.selector, { force: false, background: true });
         applyGraphModelIfCurrent(candidate.graphType, candidate.period, candidate.selector, model);
       } catch (error) {
         // Silent: background sync must not interrupt UI.
       }
     }
+    return blockedByBusy ? "busy" : "ok";
   } finally {
     state.graphSync.cycleInFlight = false;
   }
@@ -4424,16 +6275,27 @@ function scheduleNextGraphBackgroundSync(delayMs = 0) {
     clearTimeout(state.graphSync.timer);
   }
   const jitterMs = Math.floor(Math.random() * GRAPH_SYNC_INTERVAL_JITTER_MS);
-  const nextDelayMs = Math.max(10 * 1000, delayMs || (GRAPH_SYNC_INTERVAL_MS + jitterMs));
+  const configuredIntervalMs = graphSyncIntervalMsFromConfig();
+  const requestedDelayMs = Number(delayMs);
+  const nextDelayMs = Number.isFinite(requestedDelayMs) && requestedDelayMs > 0
+    ? Math.max(5 * 1000, requestedDelayMs)
+    : Math.max(10 * 1000, configuredIntervalMs + jitterMs);
   state.graphSync.timer = setTimeout(async () => {
     state.graphSync.timer = null;
-    await runGraphBackgroundSyncCycle();
+    const cycleResult = await runGraphBackgroundSyncCycle();
+    if (cycleResult === "busy") {
+      scheduleNextGraphBackgroundSync(GRAPH_SYNC_BUSY_RETRY_MS);
+      return;
+    }
     scheduleNextGraphBackgroundSync();
   }, nextDelayMs);
 }
 
 function initGraphSync() {
   loadGraphCacheFromStorage();
+  loadAnalyticsCacheFromStorage();
+  loadModuleHistoryCacheFromStorage();
+  loadDailyArchiveCacheFromStorage();
   ensureGraphSyncQueue();
   scheduleNextGraphBackgroundSync(45 * 1000);
   document.addEventListener("visibilitychange", () => {
@@ -4446,19 +6308,47 @@ function initGraphSync() {
       clearTimeout(state.graphCache.persistHandle);
       state.graphCache.persistHandle = null;
     }
+    if (state.timeline.persistHandle) {
+      clearTimeout(state.timeline.persistHandle);
+      state.timeline.persistHandle = null;
+    }
+    if (state.analyticsCache.persistHandle) {
+      clearTimeout(state.analyticsCache.persistHandle);
+      state.analyticsCache.persistHandle = null;
+    }
+    if (state.moduleHistoryCache.persistHandle) {
+      clearTimeout(state.moduleHistoryCache.persistHandle);
+      state.moduleHistoryCache.persistHandle = null;
+    }
+    if (state.dailyArchiveCache.persistHandle) {
+      clearTimeout(state.dailyArchiveCache.persistHandle);
+      state.dailyArchiveCache.persistHandle = null;
+    }
     persistGraphCacheNow();
+    persistAnalyticsCacheNow();
+    persistModuleHistoryCacheNow();
+    persistDailyArchiveCacheNow();
+    persistTimelineCacheNow();
   });
 }
 
 async function loadEnergyData(options = {}) {
   const forceRefresh = !!options.forceRefresh;
   loadGraphCacheFromStorage();
+  loadAnalyticsCacheFromStorage();
 
   const period = selectedRadioValue("energyPeriod", state.energy.period);
   state.energy.period = period;
   syncEnergyToolbar();
   const selector = resolveEnergySelector(period);
-  const cacheEntry = getGraphCacheEntry("energy", period, selector);
+  let cacheEntry = getGraphCacheEntry("energy", period, selector);
+  if (!cacheEntry) {
+    const derivedModel = buildGraphModelFromAnalyticsCache("energy", period, selector);
+    if (derivedModel) {
+      upsertGraphCacheEntry("energy", period, selector, derivedModel, Date.now());
+      cacheEntry = getGraphCacheEntry("energy", period, selector);
+    }
+  }
   let renderedFromCache = false;
 
   if (cacheEntry?.model) {
@@ -4467,22 +6357,24 @@ async function loadEnergyData(options = {}) {
     renderEnergyChart(cacheEntry.model);
     renderedFromCache = true;
   } else {
-    setText("energyChartTitle", "energy graph - loading...");
+    setText("energyChartTitle", "графік енергії - завантаження...");
+    setGraphSyncMeta("energySyncMeta", null);
   }
 
   if (!hasBridge()) {
     if (!renderedFromCache) {
-      drawEmptyCanvas(document.getElementById("energyCanvas"), "Bridge unavailable");
+      drawEmptyCanvas(document.getElementById("energyCanvas"), "Міст недоступний");
     }
     return;
   }
 
-  const stale = !cacheEntry || isGraphCacheStale(cacheEntry, "energy", period, Date.now());
+  const coverageIncomplete = isCoverageIncomplete(cacheEntry?.model?.coverage);
+  const stale = !cacheEntry || isGraphCacheStale(cacheEntry, "energy", period, Date.now()) || coverageIncomplete;
   if (!forceRefresh && cacheEntry?.model && !stale) {
     return;
   }
 
-  const syncTask = syncGraphModel("energy", period, selector, { force: forceRefresh });
+  const syncTask = syncGraphModel("energy", period, selector, { force: forceRefresh, background: false });
   if (cacheEntry?.model && !forceRefresh) {
     syncTask
       .then((model) => {
@@ -4499,9 +6391,10 @@ async function loadEnergyData(options = {}) {
     applyGraphModelIfCurrent("energy", period, selector, model);
   } catch (error) {
     if (!renderedFromCache) {
-      drawEmptyCanvas(document.getElementById("energyCanvas"), "Failed to load data");
-      setText("energyChartTitle", "energy graph - error");
-      showToast(`energy data failed: ${error.message}`);
+      drawEmptyCanvas(document.getElementById("energyCanvas"), "Не вдалося завантажити дані");
+      setText("energyChartTitle", "графік енергії - помилка");
+      setGraphSyncMeta("energySyncMeta", null);
+      showToast(`не вдалося завантажити дані енергії: ${error.message}`);
     }
   }
 }
@@ -4602,35 +6495,25 @@ async function enrichDailyClimateModelWithModuleHistory(model, options = {}) {
   if (!needCorridor && !needGarage) return;
 
   const expectedDate = safeText(model.date, "");
+  if (!expectedDate || expectedDate !== todayIso()) return;
   const labelCount = Array.isArray(model.labels) ? model.labels.length : 24;
+  const forceRefresh = !!options.forceRefresh;
   const pending = [];
 
-  if (
-    needCorridor &&
-    state.config.loadControllerEnabled &&
-    window.AndroidHub &&
-    typeof window.AndroidHub.fetchLoadControllerHistory === "function"
-  ) {
+  if (needCorridor) {
     pending.push(
-      bridgeRequest("climate-corridor-history", (requestId) => {
-        window.AndroidHub.fetchLoadControllerHistory(requestId);
-      }).then((historyPayload) => {
+      fetchModuleHistoryPayload("corridor", expectedDate, { force: forceRefresh }).then((historyPayload) => {
+        if (!historyPayload) return;
         const corridorHourly = mapHistoryPayloadToHourlyTemperature(historyPayload, expectedDate);
         model.tempCorridor = mergeClimateSeries(model.tempCorridor, corridorHourly, labelCount);
       }),
     );
   }
 
-  if (
-    needGarage &&
-    state.config.garageEnabled &&
-    window.AndroidHub &&
-    typeof window.AndroidHub.fetchGarageHistory === "function"
-  ) {
+  if (needGarage) {
     pending.push(
-      bridgeRequest("climate-garage-history", (requestId) => {
-        window.AndroidHub.fetchGarageHistory(requestId);
-      }).then((historyPayload) => {
+      fetchModuleHistoryPayload("garage", expectedDate, { force: forceRefresh }).then((historyPayload) => {
+        if (!historyPayload) return;
         const garageHourly = mapHistoryPayloadToHourlyTemperature(historyPayload, expectedDate);
         model.tempGarage = mergeClimateSeries(model.tempGarage, garageHourly, labelCount);
       }),
@@ -4643,10 +6526,10 @@ async function enrichDailyClimateModelWithModuleHistory(model, options = {}) {
 
 function normalizeClimatePayload(period, payload) {
   if (!payload || typeof payload !== "object") {
-    throw new Error("Empty payload");
+    throw new Error("Порожні дані");
   }
   if (safeText(payload.error, "") !== "") {
-    throw new Error(safeText(payload.error, "Climate data unavailable"));
+    throw new Error(safeText(payload.error, "Дані клімату недоступні"));
   }
 
   const climateKeys = {
@@ -4656,9 +6539,14 @@ function normalizeClimatePayload(period, payload) {
       press: ["press", "press_int", "press_internal", "inside_press", "internal.press"],
     },
     external: {
-      temp: ["temp_ext", "external_temp", "outside_temp", "external.temp"],
-      hum: ["hum_ext", "external_hum", "outside_hum", "external.hum"],
-      press: ["press_ext", "external_press", "outside_press", "external.press"],
+      temp: ["temp_ext", "external_temp", "outside_temp", "external.temp", "outside.temp"],
+      hum: ["hum_ext", "external_hum", "outside_hum", "external.hum", "outside.hum"],
+      press: ["press_ext", "external_press", "outside_press", "external.press", "outside.press"],
+    },
+    outsideExt: {
+      temp: ["temp_outside_ext", "outside_ext_temp", "outside_ext.temp", "outside_ext.t", "outsideExt.temp"],
+      hum: ["hum_outside_ext", "outside_ext_hum", "outside_ext.hum", "outside_ext.h", "outsideExt.hum"],
+      press: ["press_outside_ext", "outside_ext_press", "outside_ext.press", "outside_ext.p", "outsideExt.press"],
     },
     corridor: {
       temp: ["temp_corridor", "corridor_temp", "temp_load", "temp_lc", "corridor.temp"],
@@ -4669,6 +6557,9 @@ function normalizeClimatePayload(period, payload) {
       temp: ["temp_garage", "garage_temp", "garage.temp"],
       hum: ["hum_garage", "garage_hum", "garage.hum"],
       press: ["press_garage", "garage_press", "garage.press"],
+    },
+    inverter: {
+      temp: ["inverter_temp", "inverterTemp", "inverter_rs232_temp", "inverter_rs232.temp", "rs232_temp"],
     },
   };
 
@@ -4685,6 +6576,15 @@ function normalizeClimatePayload(period, payload) {
     }
   };
 
+  const sanitizeClimateSeries = (series, options = {}) => {
+    const zeroAsNull = options.zeroAsNull === true;
+    const values = Array.isArray(series) ? series : [];
+    for (let i = 0; i < values.length; i += 1) {
+      const parsed = Number.isFinite(values[i]) ? values[i] : null;
+      values[i] = zeroAsNull && parsed === 0 ? null : parsed;
+    }
+  };
+
   if (period === "daily") {
     const rows = Array.isArray(payload.hours) ? payload.hours : [];
     const labels = [];
@@ -4694,12 +6594,16 @@ function normalizeClimatePayload(period, payload) {
     const tempExt = [];
     const humExt = [];
     const pressExt = [];
+    const tempOutsideExt = [];
+    const humOutsideExt = [];
+    const pressOutsideExt = [];
     const tempCorridor = [];
     const humCorridor = [];
     const pressCorridor = [];
     const tempGarage = [];
     const humGarage = [];
     const pressGarage = [];
+    const tempInverter = [];
 
     if (rows.length === 0) {
       for (let i = 0; i < 24; i += 1) {
@@ -4710,12 +6614,16 @@ function normalizeClimatePayload(period, payload) {
         tempExt.push(null);
         humExt.push(null);
         pressExt.push(null);
+        tempOutsideExt.push(null);
+        humOutsideExt.push(null);
+        pressOutsideExt.push(null);
         tempCorridor.push(null);
         humCorridor.push(null);
         pressCorridor.push(null);
         tempGarage.push(null);
         humGarage.push(null);
         pressGarage.push(null);
+        tempInverter.push(null);
       }
     } else {
       rows.forEach((row, idx) => {
@@ -4726,21 +6634,33 @@ function normalizeClimatePayload(period, payload) {
         tempExt.push(climateNumberFromCandidates(row, climateKeys.external.temp));
         humExt.push(climateNumberFromCandidates(row, climateKeys.external.hum));
         pressExt.push(climateNumberFromCandidates(row, climateKeys.external.press));
+        tempOutsideExt.push(climateNumberFromCandidates(row, climateKeys.outsideExt.temp));
+        humOutsideExt.push(climateNumberFromCandidates(row, climateKeys.outsideExt.hum));
+        pressOutsideExt.push(climateNumberFromCandidates(row, climateKeys.outsideExt.press));
         tempCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.temp));
         humCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.hum));
         pressCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.press));
         tempGarage.push(climateNumberFromCandidates(row, climateKeys.garage.temp));
         humGarage.push(climateNumberFromCandidates(row, climateKeys.garage.hum));
         pressGarage.push(climateNumberFromCandidates(row, climateKeys.garage.press));
+        tempInverter.push(climateNumberFromCandidates(row, climateKeys.inverter.temp));
       });
     }
 
     sanitizeClimateTriplets(tempInt, humInt, pressInt);
     sanitizeClimateTriplets(tempExt, humExt, pressExt);
+    sanitizeClimateTriplets(tempOutsideExt, humOutsideExt, pressOutsideExt);
     sanitizeClimateTriplets(tempCorridor, humCorridor, pressCorridor);
     sanitizeClimateTriplets(tempGarage, humGarage, pressGarage);
+    sanitizeClimateSeries(tempInverter, { zeroAsNull: true });
 
     const date = safeText(payload.date, document.getElementById("climateDateInput")?.value || todayIso());
+    const dailyCoverage = normalizeCoverage(payload._coverage) || {
+      period: "daily",
+      expectedDays: 1,
+      knownDays: 1,
+      syncedDays: rows.length > 0 ? 1 : 0,
+    };
     return {
       title: `climate graph - day ${date}`,
       date,
@@ -4751,12 +6671,17 @@ function normalizeClimatePayload(period, payload) {
       tempExt,
       humExt,
       pressExt,
+      tempOutsideExt,
+      humOutsideExt,
+      pressOutsideExt,
       tempCorridor,
       humCorridor,
       pressCorridor,
       tempGarage,
       humGarage,
       pressGarage,
+      tempInverter,
+      coverage: dailyCoverage,
     };
   }
 
@@ -4769,12 +6694,16 @@ function normalizeClimatePayload(period, payload) {
     const tempExt = [];
     const humExt = [];
     const pressExt = [];
+    const tempOutsideExt = [];
+    const humOutsideExt = [];
+    const pressOutsideExt = [];
     const tempCorridor = [];
     const humCorridor = [];
     const pressCorridor = [];
     const tempGarage = [];
     const humGarage = [];
     const pressGarage = [];
+    const tempInverter = [];
 
     rows.forEach((row, idx) => {
       labels.push(safeText(row.day, String(idx + 1)));
@@ -4784,18 +6713,24 @@ function normalizeClimatePayload(period, payload) {
       tempExt.push(climateNumberFromCandidates(row, climateKeys.external.temp));
       humExt.push(climateNumberFromCandidates(row, climateKeys.external.hum));
       pressExt.push(climateNumberFromCandidates(row, climateKeys.external.press));
+      tempOutsideExt.push(climateNumberFromCandidates(row, climateKeys.outsideExt.temp));
+      humOutsideExt.push(climateNumberFromCandidates(row, climateKeys.outsideExt.hum));
+      pressOutsideExt.push(climateNumberFromCandidates(row, climateKeys.outsideExt.press));
       tempCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.temp));
       humCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.hum));
       pressCorridor.push(climateNumberFromCandidates(row, climateKeys.corridor.press));
       tempGarage.push(climateNumberFromCandidates(row, climateKeys.garage.temp));
       humGarage.push(climateNumberFromCandidates(row, climateKeys.garage.hum));
       pressGarage.push(climateNumberFromCandidates(row, climateKeys.garage.press));
+      tempInverter.push(climateNumberFromCandidates(row, climateKeys.inverter.temp));
     });
 
     sanitizeClimateTriplets(tempInt, humInt, pressInt);
     sanitizeClimateTriplets(tempExt, humExt, pressExt);
+    sanitizeClimateTriplets(tempOutsideExt, humOutsideExt, pressOutsideExt);
     sanitizeClimateTriplets(tempCorridor, humCorridor, pressCorridor);
     sanitizeClimateTriplets(tempGarage, humGarage, pressGarage);
+    sanitizeClimateSeries(tempInverter, { zeroAsNull: true });
 
     const month = safeText(payload.month, document.getElementById("climateMonthInput")?.value || currentMonthIso());
     return {
@@ -4808,12 +6743,17 @@ function normalizeClimatePayload(period, payload) {
       tempExt,
       humExt,
       pressExt,
+      tempOutsideExt,
+      humOutsideExt,
+      pressOutsideExt,
       tempCorridor,
       humCorridor,
       pressCorridor,
       tempGarage,
       humGarage,
       pressGarage,
+      tempInverter,
+      coverage: normalizeCoverage(payload._coverage),
     };
   }
 
@@ -4825,16 +6765,22 @@ function normalizeClimatePayload(period, payload) {
   const tempExt = climateArrayFromCandidates(payload, climateKeys.external.temp);
   const humExt = climateArrayFromCandidates(payload, climateKeys.external.hum);
   const pressExt = climateArrayFromCandidates(payload, climateKeys.external.press);
+  const tempOutsideExt = climateArrayFromCandidates(payload, climateKeys.outsideExt.temp);
+  const humOutsideExt = climateArrayFromCandidates(payload, climateKeys.outsideExt.hum);
+  const pressOutsideExt = climateArrayFromCandidates(payload, climateKeys.outsideExt.press);
   const tempCorridor = climateArrayFromCandidates(payload, climateKeys.corridor.temp);
   const humCorridor = climateArrayFromCandidates(payload, climateKeys.corridor.hum);
   const pressCorridor = climateArrayFromCandidates(payload, climateKeys.corridor.press);
   const tempGarage = climateArrayFromCandidates(payload, climateKeys.garage.temp);
   const humGarage = climateArrayFromCandidates(payload, climateKeys.garage.hum);
   const pressGarage = climateArrayFromCandidates(payload, climateKeys.garage.press);
+  const tempInverter = climateArrayFromCandidates(payload, climateKeys.inverter.temp);
   sanitizeClimateTriplets(tempInt, humInt, pressInt);
   sanitizeClimateTriplets(tempExt, humExt, pressExt);
+  sanitizeClimateTriplets(tempOutsideExt, humOutsideExt, pressOutsideExt);
   sanitizeClimateTriplets(tempCorridor, humCorridor, pressCorridor);
   sanitizeClimateTriplets(tempGarage, humGarage, pressGarage);
+  sanitizeClimateSeries(tempInverter, { zeroAsNull: true });
   return {
     title: `climate graph - year ${year}`,
     year,
@@ -4845,12 +6791,17 @@ function normalizeClimatePayload(period, payload) {
     tempExt,
     humExt,
     pressExt,
+    tempOutsideExt,
+    humOutsideExt,
+    pressOutsideExt,
     tempCorridor,
     humCorridor,
     pressCorridor,
     tempGarage,
     humGarage,
     pressGarage,
+    tempInverter,
+    coverage: normalizeCoverage(payload._coverage),
   };
 }
 
@@ -4869,6 +6820,7 @@ function climateSeriesForMetric(model, metric) {
     return {
       primary: model.humInt,
       external: model.humExt,
+      outsideExt: null,
       corridor: model.humCorridor,
       garage: model.humGarage,
     };
@@ -4877,6 +6829,7 @@ function climateSeriesForMetric(model, metric) {
     return {
       primary: model.pressInt,
       external: model.pressExt,
+      outsideExt: null,
       corridor: model.pressCorridor,
       garage: model.pressGarage,
     };
@@ -4884,6 +6837,8 @@ function climateSeriesForMetric(model, metric) {
   return {
     primary: model.tempInt,
     external: model.tempExt,
+    // Reuse the "outside_ext" slot for inverter temperature.
+    outsideExt: model.tempInverter,
     corridor: model.tempCorridor,
     garage: model.tempGarage,
   };
@@ -4900,13 +6855,17 @@ function renderClimateChart() {
   const canvas = document.getElementById("climateCanvas");
   if (!canvas) return;
   if (!model) {
-    drawEmptyCanvas(canvas, "No chart data");
+    drawEmptyCanvas(canvas, "Немає даних графіка");
+    setGraphSyncMeta("climateSyncMeta", null);
     return;
   }
 
   const meta = currentClimateMetricMeta();
   const selected = climateSeriesForMetric(model, state.climate.metric);
   const series = [];
+  const outsideExtLabel = state.climate.metric === "temp"
+    ? `inverter ${meta.label} (${meta.unit})`
+    : `outside ext ${meta.label} (${meta.unit})`;
   const candidates = [
     {
       label: `internal ${meta.label} (${meta.unit})`,
@@ -4922,6 +6881,14 @@ function renderClimateChart() {
       data: selected.external,
       lineWidth: 2,
       pointRadius: 1.3,
+      fillAlpha: 0,
+    },
+    {
+      label: outsideExtLabel,
+      color: "#6f8fff",
+      data: selected.outsideExt,
+      lineWidth: 1.9,
+      pointRadius: 1.2,
       fillAlpha: 0,
     },
     {
@@ -4947,8 +6914,9 @@ function renderClimateChart() {
   });
 
   setText("climateChartTitle", `${model.title} - ${meta.label}`);
+  setGraphSyncMeta("climateSyncMeta", model.coverage);
   if (!series.length) {
-    drawEmptyCanvas(canvas, "No climate data");
+    drawEmptyCanvas(canvas, "Немає даних клімату");
     renderLegend("climateLegend", []);
     return;
   }
@@ -4961,12 +6929,21 @@ function renderClimateChart() {
 async function loadClimateData(options = {}) {
   const forceRefresh = !!options.forceRefresh;
   loadGraphCacheFromStorage();
+  loadAnalyticsCacheFromStorage();
+  loadModuleHistoryCacheFromStorage();
 
   const period = selectedRadioValue("climatePeriod", state.climate.period);
   state.climate.period = period;
   syncClimateToolbar();
   const selector = resolveClimateSelector(period);
-  const cacheEntry = getGraphCacheEntry("climate", period, selector);
+  let cacheEntry = getGraphCacheEntry("climate", period, selector);
+  if (!cacheEntry) {
+    const derivedModel = buildGraphModelFromAnalyticsCache("climate", period, selector);
+    if (derivedModel) {
+      upsertGraphCacheEntry("climate", period, selector, derivedModel, Date.now());
+      cacheEntry = getGraphCacheEntry("climate", period, selector);
+    }
+  }
   let renderedFromCache = false;
 
   if (cacheEntry?.model) {
@@ -4975,22 +6952,24 @@ async function loadClimateData(options = {}) {
     renderClimateChart();
     renderedFromCache = true;
   } else {
-    setText("climateChartTitle", "climate graph - loading...");
+    setText("climateChartTitle", "графік клімату - завантаження...");
+    setGraphSyncMeta("climateSyncMeta", null);
   }
 
   if (!hasBridge()) {
     if (!renderedFromCache) {
-      drawEmptyCanvas(document.getElementById("climateCanvas"), "Bridge unavailable");
+      drawEmptyCanvas(document.getElementById("climateCanvas"), "Міст недоступний");
     }
     return;
   }
 
-  const stale = !cacheEntry || isGraphCacheStale(cacheEntry, "climate", period, Date.now());
+  const coverageIncomplete = isCoverageIncomplete(cacheEntry?.model?.coverage);
+  const stale = !cacheEntry || isGraphCacheStale(cacheEntry, "climate", period, Date.now()) || coverageIncomplete;
   if (!forceRefresh && cacheEntry?.model && !stale) {
     return;
   }
 
-  const syncTask = syncGraphModel("climate", period, selector, { force: forceRefresh });
+  const syncTask = syncGraphModel("climate", period, selector, { force: forceRefresh, background: false });
   if (cacheEntry?.model && !forceRefresh) {
     syncTask
       .then((model) => {
@@ -5007,9 +6986,10 @@ async function loadClimateData(options = {}) {
     applyGraphModelIfCurrent("climate", period, selector, model);
   } catch (error) {
     if (!renderedFromCache) {
-      drawEmptyCanvas(document.getElementById("climateCanvas"), "Failed to load data");
-      setText("climateChartTitle", "climate graph - error");
-      showToast(`climate data failed: ${error.message}`);
+      drawEmptyCanvas(document.getElementById("climateCanvas"), "Не вдалося завантажити дані");
+      setText("climateChartTitle", "графік клімату - помилка");
+      setGraphSyncMeta("climateSyncMeta", null);
+      showToast(`не вдалося завантажити дані клімату: ${error.message}`);
     }
   }
 }
@@ -5069,6 +7049,10 @@ function renderClimateWideCard(inverter, loadController, garage) {
     zones.push(climateZoneRow("outside", inverter.bmeTemp, inverter.bmeHum, inverter.bmePress));
   }
 
+  if (inverter && Object.prototype.hasOwnProperty.call(inverter, "inverterTemp")) {
+    zones.push(climateZoneRow("inverter_temp", inverter.inverterTemp, null, null));
+  }
+
   const loadAvailable = !!(
     loadController &&
     (loadController.bmeAvailable ||
@@ -5078,7 +7062,7 @@ function renderClimateWideCard(inverter, loadController, garage) {
   );
   if (loadAvailable) {
     zones.push(
-      climateZoneRow("коридор", loadController.bmeTemp, loadController.bmeHum, loadController.bmePress),
+      climateZoneRow("corridor", loadController.bmeTemp, loadController.bmeHum, loadController.bmePress),
     );
   }
 
@@ -5090,7 +7074,7 @@ function renderClimateWideCard(inverter, loadController, garage) {
       garage.bmePress !== null)
   );
   if (garageAvailable) {
-    zones.push(climateZoneRow("гараж", garage.bmeTemp, garage.bmeHum, garage.bmePress));
+    zones.push(climateZoneRow("garage", garage.bmeTemp, garage.bmeHum, garage.bmePress));
   }
 
   renderClimateZoneList(zones);
@@ -5203,16 +7187,24 @@ function renderPowerScheme({
   setText("schemeBatterySoc", invOff ? "--%" : `${num(inverter.batterySoc, 0, "--")}%`);
   setText("schemeHouseLoad", invOff ? "-- W" : formatSchemePower(loadPowerDisplayW));
 
-  setText("schemeBoiler1State", loadOff ? "disabled" : boolText(!!loadController.boiler1On));
-  setText("schemePumpState", loadOff ? "disabled" : boolText(!!loadController.pumpOn));
-  setText("schemeBoiler2State", garageOff ? "disabled" : boolText(!!garage.boiler2On));
+  const boiler1On = !loadOff && !!loadController.boiler1On;
+  const pumpOn = !loadOff && !!loadController.pumpOn;
+  const boiler2On = !garageOff && !!garage.boiler2On;
+
+  setText("schemeBoiler1State", loadOff ? "вимкнено" : boolTextUk(boiler1On));
+  setText("schemePumpState", loadOff ? "вимкнено" : boolTextUk(pumpOn));
+  setText("schemeBoiler2State", garageOff ? "вимкнено" : boolTextUk(boiler2On));
+
+  setSchemeNodeOnOff("schemeNodeBoiler1", loadOff ? null : boiler1On);
+  setSchemeNodeOnOff("schemeNodePump", loadOff ? null : pumpOn);
+  setSchemeNodeOnOff("schemeNodeBoiler2", garageOff ? null : boiler2On);
 
   const gridNode = document.getElementById("schemeNodeGrid");
   if (gridNode) {
     gridNode.classList.toggle("is-present", !!gridPresent);
     gridNode.classList.toggle("is-absent", !gridPresent);
   }
-  setText("schemeGridState", invOff ? "disabled" : gridPresent ? "live" : "off");
+  setText("schemeGridState", invOff ? "вимкнено" : gridPresent ? "є" : "немає");
 
   const gridSwitchOn = invOff ? null : !!inverter.gridRelayOn;
   const loadSwitchOn = invOff ? null : !!inverter.loadRelayOn;
@@ -5235,7 +7227,7 @@ function renderPowerScheme({
 
   const topBranchActive = boiler1SwitchOn === true;
   const bottomBranchActive = boiler2SwitchOn === true;
-  // Верхня вертикаль має рух зверху/знизу в протилежному напрямі до нижньої.
+  // Top and bottom vertical branches intentionally animate in opposite directions.
   setSchemeLinkState("schemeLinkHouseTop", -boiler1PowerDisplayW, !invOff && loadSwitchOn === true && topBranchActive, mixedSupplyColor);
   setSchemeLinkState("schemeLinkHouseBottom", boiler2PowerDisplayW, !invOff && loadSwitchOn === true && bottomBranchActive, mixedSupplyColor);
   setSchemeLinkState("schemeLinkBoiler1", boiler1PowerDisplayW, !loadOff && boiler1SwitchOn === true, mixedSupplyColor);
@@ -5253,22 +7245,51 @@ function renderAll() {
   applyModuleCardStates();
   applyLiveCardStates(status);
 
+  const hasInverterFresh = moduleHasFreshSignal("inverter", state.config.inverterEnabled, status?.inverter);
+  const hasLoadFresh = moduleHasFreshSignal("loadController", state.config.loadControllerEnabled, status?.loadController);
+  const hasGarageFresh = moduleHasFreshSignal("garage", state.config.garageEnabled, status?.garage);
+  const inverterTelemetrySources = [];
+  if (hasInverterFresh && inverter && typeof inverter === "object") {
+    inverterTelemetrySources.push(inverter);
+  }
+  if (hasLoadFresh && loadController && typeof loadController === "object") {
+    inverterTelemetrySources.push(loadController);
+  }
+  if (hasGarageFresh && garage && typeof garage === "object") {
+    inverterTelemetrySources.push(garage);
+  }
+  if (!inverterTelemetrySources.length && inverter && typeof inverter === "object") {
+    inverterTelemetrySources.push(inverter);
+  }
+  const inverterTelemetry = {
+    pvW: pickFiniteValue(inverterTelemetrySources.map((src) => src?.pvW), null),
+    gridW: pickFiniteValue(inverterTelemetrySources.map((src) => src?.gridW), null),
+    loadW: pickFiniteValue(inverterTelemetrySources.map((src) => src?.loadW), null),
+    batterySoc: pickFiniteValue(inverterTelemetrySources.map((src) => src?.batterySoc), null),
+    batteryPower: pickFiniteValue(inverterTelemetrySources.map((src) => src?.batteryPower), null),
+    lineVoltage: pickFiniteValue(inverterTelemetrySources.map((src) => src?.lineVoltage), null),
+  };
+  const inverterView = {
+    ...inverter,
+    ...inverterTelemetry,
+  };
+
   const topLineVoltage = pickNumber([
-    inverter.lineVoltage,
+    inverterView.lineVoltage,
     loadController.lineVoltage,
     garage.lineVoltage,
   ]);
-  const topPv = pickNumber([inverter.pvW, loadController.pvW, garage.pvW]);
-  const topGrid = pickNumber([inverter.gridW, loadController.gridW, garage.gridW]);
-  const topLoadRaw = pickNumber([inverter.loadW, loadController.loadW, garage.loadW]);
+  const topPv = pickNumber([inverterView.pvW, loadController.pvW, garage.pvW]);
+  const topGrid = pickNumber([inverterView.gridW, loadController.gridW, garage.gridW]);
+  const topLoadRaw = pickNumber([inverterView.loadW, loadController.loadW, garage.loadW]);
   const topLoad = applyConsumptionDisplayFloor(topLoadRaw);
   const topBatSoc = pickNumber([
-    inverter.batterySoc,
+    inverterView.batterySoc,
     loadController.batterySoc,
     garage.batterySoc,
   ]);
   const topBatPower = pickNumber([
-    inverter.batteryPower,
+    inverterView.batteryPower,
     loadController.batteryPower,
     garage.batteryPower,
   ]);
@@ -5300,7 +7321,7 @@ function renderAll() {
   const gridPresent = !invOff && (
     inverter.gridPresent !== undefined && inverter.gridPresent !== null
       ? !!inverter.gridPresent
-      : Number(inverter.lineVoltage) >= 170
+      : Number(inverterView.lineVoltage) >= 170
   );
   const gridPresenceBadge = document.getElementById("gridPresenceBadge");
   if (gridPresenceBadge) {
@@ -5309,53 +7330,53 @@ function renderAll() {
   }
 
   if (!loadOff) {
-    recordLoadTimelineSample(loadController);
+    recordLoadTimelineSample(loadController, garage);
   }
 
-  const gridPowerCardW = zeroGridPowerWhenNoVoltage(inverter.gridW, inverter.lineVoltage);
-  const loadPowerCardW = applyConsumptionDisplayFloor(inverter.loadW);
+  const gridPowerCardW = zeroGridPowerWhenNoVoltage(inverterView.gridW, inverterView.lineVoltage);
+  const loadPowerCardW = applyConsumptionDisplayFloor(inverterView.loadW);
   const boiler1PowerCardW = applyConsumptionDisplayFloor(loadController.boilerPower);
   const pumpPowerCardW = applyConsumptionDisplayFloor(loadController.pumpPower);
   const boiler2PowerCardW = applyConsumptionDisplayFloor(garage.boilerPower);
 
-  setText("pvValue", invOff ? "--" : num(inverter.pvW, 0));
+  setText("pvValue", invOff ? "--" : num(inverterView.pvW, 0, "--"));
   setText("pvVoltage", invOff ? "--" : num(inverter.pvVoltage, 1));
   setText("dailyPV", invOff ? "--" : num(inverter.dailyPV, 1));
   setText(
     "lastUpdatePV",
-    invOff ? "--:--:--" : safeText(inverter.lastUpdate, safeText(inverter.rtcTime, "--:--:--")),
+    invOff ? "--:--:--" : safeText(inverter.lastUpdate, safeText(inverter.rtcTime || loadController.rtcTime || garage.rtcTime, "--:--:--")),
   );
 
-  setText("gridValue", invOff ? "--" : num(gridPowerCardW, 0));
-  setText("gridVoltage", invOff ? "--" : num(inverter.lineVoltage, 1));
+  setText("gridValue", invOff ? "--" : num(gridPowerCardW, 0, "--"));
+  setText("gridVoltage", invOff ? "--" : num(inverterView.lineVoltage, 1, "--"));
   setText("gridFrequency", invOff ? "--" : num(inverter.gridFrequency, 1));
   setText("dailyGrid", invOff ? "--" : num(inverter.dailyGrid, 1));
-  setText("gridModeIndicator", invOff ? "mode: disabled" : `mode: ${safeText(inverter.mode)}`);
-  setText("gridStateIndicator", invOff ? "state: ---" : `state: ${boolText(!!inverter.gridRelayOn)}`);
+  setText("gridModeIndicator", invOff ? "режим: вимкнено" : `режим: ${safeText(inverter.mode)}`);
+  setText("gridStateIndicator", invOff ? "стан: ---" : `стан: ${boolText(!!inverter.gridRelayOn)}`);
   setText("gridModalState", invOff ? "---" : boolText(!!inverter.gridRelayOn));
-  setText("gridModalReason", invOff ? "module disabled" : uiText(inverter.gridRelayReason, "manual"));
+  setText("gridModalReason", invOff ? "модуль вимкнено" : uiText(inverter.gridRelayReason, "вручну"));
 
-  setText("loadValue", invOff ? "--" : num(loadPowerCardW, 0));
+  setText("loadValue", invOff ? "--" : num(loadPowerCardW, 0, "--"));
   setText("outputVoltage", invOff ? "--" : num(inverter.outputVoltage, 1));
   setText("outputFrequency", invOff ? "--" : num(inverter.outputFrequency, 1));
   setText("dailyHome", invOff ? "--" : num(inverter.dailyHome, 1));
-  setText("loadModeIndicator", invOff ? "mode: disabled" : `mode: ${safeText(inverter.loadMode)}`);
-  setText("loadStateIndicator", invOff ? "state: ---" : `state: ${boolText(!!inverter.loadRelayOn)}`);
+  setText("loadModeIndicator", invOff ? "режим: вимкнено" : `режим: ${safeText(inverter.loadMode)}`);
+  setText("loadStateIndicator", invOff ? "стан: ---" : `стан: ${boolText(!!inverter.loadRelayOn)}`);
   setText("loadModalState", invOff ? "---" : boolText(!!inverter.loadRelayOn));
-  setText("loadModalReason", invOff ? "module disabled" : uiText(inverter.loadRelayReason, "manual"));
+  setText("loadModalReason", invOff ? "модуль вимкнено" : uiText(inverter.loadRelayReason, "вручну"));
 
-  setText("batteryValueMain", invOff ? "--" : num(inverter.batterySoc, 0));
+  setText("batteryValueMain", invOff ? "--" : num(inverterView.batterySoc, 0, "--"));
   setText("batteryVoltage", invOff ? "--" : num(inverter.batteryVoltage, 1));
-  setText("batteryPower", invOff ? "--" : num(inverter.batteryPower, 0));
+  setText("batteryPower", invOff ? "--" : num(inverterView.batteryPower, 0, "--"));
   setText("inverterTemp", invOff ? "--" : num(inverter.inverterTemp, 1));
 
   setText("boiler1Power", loadOff ? "--" : num(boiler1PowerCardW, 0));
-  setText("boiler1Mode", loadOff ? "disabled" : safeText(loadController.boiler1Mode));
+  setText("boiler1Mode", loadOff ? "вимкнено" : safeText(loadController.boiler1Mode));
   setText("boiler1Current", loadOff ? "--" : num(loadController.boilerCurrent, 2));
   setText("boiler1Daily", loadOff ? "--" : num(loadController.dailyBoiler, 0));
   setText("boiler1State", loadOff ? "---" : boolText(!!loadController.boiler1On));
   setText("boiler1ModalState", loadOff ? "---" : boolText(!!loadController.boiler1On));
-  setText("boiler1ModalReason", loadOff ? "module disabled" : uiText(loadController.boiler1StateReason, "manual"));
+  setText("boiler1ModalReason", loadOff ? "модуль вимкнено" : uiText(loadController.boiler1StateReason, "вручну"));
   renderAutoWindowBlock("boiler1", {
     enabled: !!loadController.boiler1AutoWindowEnabled,
     start: safeText(loadController.boiler1AutoWindowStart, "00:00"),
@@ -5364,12 +7385,12 @@ function renderAll() {
   }, { disabled: loadOff });
 
   setText("pumpPower", loadOff ? "--" : num(pumpPowerCardW, 0));
-  setText("pumpMode", loadOff ? "disabled" : safeText(loadController.pumpMode));
+  setText("pumpMode", loadOff ? "вимкнено" : safeText(loadController.pumpMode));
   setText("pumpCurrent", loadOff ? "--" : num(loadController.pumpCurrent, 2));
   setText("pumpDaily", loadOff ? "--" : num(loadController.dailyPump, 0));
   setText("pumpState", loadOff ? "---" : boolText(!!loadController.pumpOn));
   setText("pumpModalState", loadOff ? "---" : boolText(!!loadController.pumpOn));
-  setText("pumpModalReason", loadOff ? "module disabled" : uiText(loadController.pumpStateReason, "manual"));
+  setText("pumpModalReason", loadOff ? "модуль вимкнено" : uiText(loadController.pumpStateReason, "вручну"));
   renderAutoWindowBlock("pump", {
     enabled: !!loadController.pumpAutoWindowEnabled,
     start: safeText(loadController.pumpAutoWindowStart, "00:00"),
@@ -5378,12 +7399,12 @@ function renderAll() {
   }, { disabled: loadOff });
 
   setText("boiler2Power", garageOff ? "--" : num(boiler2PowerCardW, 0));
-  setText("boiler2Mode", garageOff ? "disabled" : safeText(garage.boiler2Mode));
+  setText("boiler2Mode", garageOff ? "вимкнено" : safeText(garage.boiler2Mode));
   setText("boiler2Current", garageOff ? "--" : num(garage.boilerCurrent, 2));
   setText("boiler2Daily", garageOff ? "--" : num(garage.dailyBoiler, 0));
   setText("boiler2State", garageOff ? "---" : boolText(!!garage.boiler2On));
   setText("boiler2ModalState", garageOff ? "---" : boolText(!!garage.boiler2On));
-  setText("boiler2ModalReason", garageOff ? "module disabled" : uiText(garage.boiler2StateReason, "manual"));
+  setText("boiler2ModalReason", garageOff ? "модуль вимкнено" : uiText(garage.boiler2StateReason, "вручну"));
   renderAutoWindowBlock("boiler2", {
     enabled: !!garage.boiler2AutoWindowEnabled,
     start: safeText(garage.boiler2AutoWindowStart, "00:00"),
@@ -5406,16 +7427,16 @@ function renderAll() {
     state.gate.lastState = "";
   }
 
-  setText("gateState", garageOff ? "disabled" : uiText(garage.gateState, gateNormalized));
-  setText("gateReason", garageOff ? "module disabled" : uiText(garage.gateReason, "manual"));
+  setText("gateState", garageOff ? "вимкнено" : uiText(garage.gateState, gateNormalized));
+  setText("gateReason", garageOff ? "модуль вимкнено" : uiText(garage.gateReason, "вручну"));
   setText("gateLastOpen", garageOff ? "--" : safeText(state.gate.lastOpenAt, "--"));
   setText("gateLastClose", garageOff ? "--" : safeText(state.gate.lastCloseAt, "--"));
-  setText("gateModalState", garageOff ? "disabled" : uiText(garage.gateState, gateNormalized));
-  setText("gateModalReason", garageOff ? "module disabled" : uiText(garage.gateReason, "manual"));
-  setGateActionButtonLabel(gateNormalized);
-  const garageLightReason = garageOff ? "module disabled" : uiText(garage.garageLightReason, "manual");
+  setText("gateModalState", garageOff ? "вимкнено" : uiText(garage.gateState, gateNormalized));
+  setText("gateModalReason", garageOff ? "модуль вимкнено" : uiText(garage.gateReason, "вручну"));
+  setGateActionButtonLabel(gateNormalized, { disabled: garageOff });
+  const garageLightReason = garageOff ? "модуль вимкнено" : uiText(garage.garageLightReason, "вручну");
   const garageLightOn = !garageOff && !!garage.garageLightOn;
-  setText("garageLightState", garageOff ? "disabled" : boolText(garageLightOn));
+  setText("garageLightState", garageOff ? "вимкнено" : boolText(garageLightOn));
   setGarageLightActionButtonState({
     disabled: garageOff,
     on: garageLightOn,
@@ -5423,7 +7444,7 @@ function renderAll() {
   });
 
   renderPowerScheme({
-    inverter,
+    inverter: inverterView,
     loadController,
     garage,
     invOff,
@@ -5432,10 +7453,10 @@ function renderAll() {
     gridPresent,
   });
 
-  applyCardNeonByPower("cardPv", inverter.pvW, !invOff);
-  applyCardNeonByPower("cardGrid", inverter.gridW, !invOff);
+  applyCardNeonByPower("cardPv", inverterView.pvW, !invOff);
+  applyCardNeonByPower("cardGrid", inverterView.gridW, !invOff);
   applyCardNeonByPower("cardLoad", loadPowerCardW, !invOff);
-  applyCardNeonByPower("cardBattery", inverter.batteryPower, !invOff);
+  applyCardNeonByPower("cardBattery", inverterView.batteryPower, !invOff);
   applyCardNeonByPower("cardBoiler1", boiler1PowerCardW, !loadOff);
   applyCardNeonByPower("cardPump", pumpPowerCardW, !loadOff);
   applyCardNeonByPower("cardBoiler2", boiler2PowerCardW, !garageOff);
@@ -5512,6 +7533,7 @@ function bindResizeRedraw() {
 
 function initUi() {
   initGraphSync();
+  loadTimelineCacheFromStorage();
   bindCardEvents();
   bindSchemeSwipe();
   bindModeButtons();
@@ -5521,6 +7543,7 @@ function initUi() {
   bindResizeRedraw();
 
   loadConfigFromBridge();
+  applyInterfaceMode("pro");
   syncConfigToForm();
   applyModuleCardStates();
   applyLiveCardStates(null);
@@ -5541,3 +7564,4 @@ function initUi() {
 }
 
 document.addEventListener("DOMContentLoaded", initUi);
+
