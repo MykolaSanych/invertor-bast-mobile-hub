@@ -199,6 +199,10 @@ const state = {
     returnModalId: "",
     formDirty: false,
     historyHours: LOGIC_HISTORY_DEFAULT_HOURS,
+    // Індекси правил, розгорнутих користувачем у поточному відкритті модалки
+    // - flowEl повністю перемальовується на кожне оновлення статусу, тому без
+    // цього стан "розгорнуто" скидався б за кожним циклом опитування.
+    expandedRules: new Set(),
   },
   schemeControlLandscape: false,
   schemeControlReturnToSchemeModalId: "",
@@ -3130,26 +3134,19 @@ function buildLogicFlowMarkup(steps, defFields) {
     return '<div class="logic-flow-empty">кроки логіки недоступні</div>';
   }
   const fieldByKey = new Map((Array.isArray(defFields) ? defFields : []).map((f) => [f.key, f]));
+  const expanded = state.logic.expandedRules instanceof Set ? state.logic.expandedRules : new Set();
 
-  let markup = `
-    <div class="logic-flow-entry"><span>початок циклу АВТО</span></div>
-    <div class="logic-flow-arrow" aria-hidden="true"><span></span></div>
-    <section class="logic-flow-stage">
-      <div class="logic-flow-stage-title">зчитати вхідні дані</div>
-      <div class="logic-flow-stage-body">потужність PV, напруга мережі, потужність навантаження, заряд/потужність АКБ, стан вікна АВТО</div>
-    </section>
-  `;
-  // Правила перевіряються по черзі зверху вниз (як if/else if): щойно
-  // умова одного з них справджується - решта в цьому циклі не діють, тому
-  // кожна картка закінчується явним "інакше -> наступне правило".
+  // Правила перевіряються по черзі зверху вниз (як if/else if): щойно умова
+  // одного з них справджується - решта в цьому циклі не діють. За
+  // замовчуванням кожне правило згорнуто до одного рядка "ЯКЩО ... -> ...";
+  // деталі (затримка, пов'язані поля, гілка "інакше") розкриваються дотиком,
+  // щоб уся логіка не виглядала суцільною стіною карток.
+  let markup = '<div class="logic-flow-entry"><span>перевірка по черзі зверху вниз, на кожному циклі АВТО</span></div>';
   safeSteps.forEach((step, index) => {
     const tone = safeText(step?.tone, "warn");
     const delay = safeText(step?.delay, "");
-    const toneLabel = tone === "alert"
-      ? "захисне правило"
-      : tone === "good"
-        ? "правило увімкнення"
-        : "правило вимкнення";
+    const whenText = safeText(step?.when, "---");
+    const actionText = safeText(step?.action, "---");
     const isLast = index === safeSteps.length - 1;
     const elseText = isLast
       ? "інакше: залишити поточний стан реле"
@@ -3162,29 +3159,50 @@ function buildLogicFlowMarkup(steps, defFields) {
           `<button type="button" class="logic-flow-field-tag" data-logic-jump="${escapeHtml(f.key)}">${escapeHtml(f.label)}</button>`,
       )
       .join("");
+    const isExpanded = expanded.has(index);
     markup += `
-      <div class="logic-flow-arrow" aria-hidden="true"><span></span></div>
-      <section class="logic-flow-rule ${escapeHtml(tone)}">
-        <header class="logic-flow-rule-head">
-          <div class="logic-flow-rule-index">правило ${String(index + 1).padStart(2, "0")}</div>
-          <div class="logic-flow-rule-type">${escapeHtml(toneLabel)}</div>
-        </header>
-        <div class="logic-flow-condition">
-          <span class="logic-flow-condition-badge">ЯКЩО</span>
-          <span class="logic-flow-condition-text">${escapeHtml(safeText(step?.when, "---"))}</span>
+      <section class="logic-flow-rule ${escapeHtml(tone)}${isExpanded ? " is-expanded" : ""}" data-logic-rule="${index}">
+        <button type="button" class="logic-flow-rule-summary" data-logic-rule-toggle="${index}">
+          <span class="logic-flow-rule-dot" aria-hidden="true"></span>
+          <span class="logic-flow-rule-index">${String(index + 1).padStart(2, "0")}</span>
+          <span class="logic-flow-rule-summary-text"><b>ЯКЩО</b> ${escapeHtml(whenText)} <b>→</b> ${escapeHtml(actionText)}</span>
+          <span class="logic-flow-rule-caret" aria-hidden="true">⌄</span>
+        </button>
+        <div class="logic-flow-rule-details">
+          <div class="logic-flow-condition">
+            <span class="logic-flow-condition-badge">ЯКЩО</span>
+            <span class="logic-flow-condition-text">${escapeHtml(whenText)}</span>
+          </div>
+          <div class="logic-flow-action">
+            <span class="logic-flow-action-badge">ТО</span>
+            <span class="logic-flow-action-text">${escapeHtml(actionText)}</span>
+            ${delay ? `<span class="logic-flow-node-delay">${escapeHtml(delay)}</span>` : ""}
+          </div>
+          ${fieldTags ? `<div class="logic-flow-field-tags">${fieldTags}</div>` : ""}
+          <div class="logic-flow-else">${escapeHtml(elseText)}</div>
         </div>
-        <div class="logic-flow-action">
-          <span class="logic-flow-action-badge">ТО</span>
-          <span class="logic-flow-action-text">${escapeHtml(safeText(step?.action, "---"))}</span>
-          ${delay ? `<span class="logic-flow-node-delay">${escapeHtml(delay)}</span>` : ""}
-        </div>
-        ${fieldTags ? `<div class="logic-flow-field-tags">${fieldTags}</div>` : ""}
-        <div class="logic-flow-else">${escapeHtml(elseText)}</div>
       </section>
     `;
   });
-  markup += '<div class="logic-flow-arrow" aria-hidden="true"><span></span></div><div class="logic-flow-exit"><span>повторюється на кожному оновленні статусу</span></div>';
+  markup += '<div class="logic-flow-exit"><span>повторюється на кожному оновленні статусу</span></div>';
   return markup;
+}
+
+function toggleLogicFlowRule(index) {
+  const key = Number(index);
+  if (!Number.isFinite(key)) return;
+  if (!(state.logic.expandedRules instanceof Set)) {
+    state.logic.expandedRules = new Set();
+  }
+  if (state.logic.expandedRules.has(key)) {
+    state.logic.expandedRules.delete(key);
+  } else {
+    state.logic.expandedRules.add(key);
+  }
+  const rule = document.querySelector(`.logic-flow-rule[data-logic-rule="${key}"]`);
+  if (rule) {
+    rule.classList.toggle("is-expanded", state.logic.expandedRules.has(key));
+  }
 }
 
 function scrollToLogicField(key) {
@@ -4035,6 +4053,9 @@ function readLogicModalValues(def) {
 
 function openLogicModal(logicKey, returnModalId = "") {
   if (!getLogicModalDefinition(logicKey) || !isLogicAvailable(logicKey)) return;
+  if (state.logic.currentKey !== logicKey) {
+    state.logic.expandedRules = new Set();
+  }
   state.logic.currentKey = logicKey;
   state.logic.returnModalId = returnModalId || "";
   state.logic.formDirty = false;
@@ -4435,9 +4456,15 @@ function bindCardEvents() {
   const logicFlowEl = document.getElementById("logicModalFlow");
   if (logicFlowEl) {
     logicFlowEl.addEventListener("click", (event) => {
-      const tag = event.target.closest("[data-logic-jump]");
-      if (!tag) return;
-      scrollToLogicField(tag.getAttribute("data-logic-jump"));
+      const jumpTag = event.target.closest("[data-logic-jump]");
+      if (jumpTag) {
+        scrollToLogicField(jumpTag.getAttribute("data-logic-jump"));
+        return;
+      }
+      const toggleBtn = event.target.closest("[data-logic-rule-toggle]");
+      if (toggleBtn) {
+        toggleLogicFlowRule(toggleBtn.getAttribute("data-logic-rule-toggle"));
+      }
     });
   }
 

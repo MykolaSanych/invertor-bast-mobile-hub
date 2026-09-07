@@ -55,9 +55,10 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <View
+    <TextView
         android:layout_width="match_parent"
         android:layout_height="1dp"
+        android:text=""
         android:background="#22FFFFFF" />
 
     <LinearLayout
@@ -94,9 +95,10 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <View
+    <TextView
         android:layout_width="match_parent"
         android:layout_height="1dp"
+        android:text=""
         android:background="#22FFFFFF" />
 
     <LinearLayout
@@ -133,9 +135,10 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <View
+    <TextView
         android:layout_width="match_parent"
         android:layout_height="1dp"
+        android:text=""
         android:background="#22FFFFFF" />
 
     <LinearLayout
@@ -172,9 +175,10 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <View
+    <TextView
         android:layout_width="match_parent"
         android:layout_height="1dp"
+        android:text=""
         android:background="#22FFFFFF" />
 
     <LinearLayout

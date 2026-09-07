@@ -1958,130 +1958,124 @@ body {
 .logic-flow {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-bottom: 16px;
 }
 
 .logic-flow-entry,
 .logic-flow-exit {
-  width: min(100%, 460px);
   display: flex;
   justify-content: center;
+  margin: 2px 0;
 }
 
 .logic-flow-entry span,
 .logic-flow-exit span {
-  border-radius: 999px;
-  border: 1px solid rgba(0, 230, 255, 0.2);
-  background: rgba(6, 10, 22, 0.88);
-  padding: 6px 14px;
-  font-size: 0.72rem;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.logic-flow-arrow {
-  width: 20px;
-  height: 16px;
-  display: flex;
-  justify-content: center;
-}
-
-.logic-flow-arrow span {
-  width: 2px;
-  height: 100%;
-  background: linear-gradient(180deg, rgba(0, 230, 255, 0.5), rgba(255, 255, 255, 0.2));
-  position: relative;
-}
-
-.logic-flow-arrow span::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -2px;
-  width: 0;
-  height: 0;
-  transform: translateX(-50%);
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 6px solid rgba(0, 230, 255, 0.5);
-}
-
-.logic-flow-stage {
-  width: min(100%, 460px);
-  border-radius: 14px;
-  border: 1px solid rgba(0, 230, 255, 0.18);
-  background: rgba(6, 10, 22, 0.85);
-  padding: 10px 12px;
-  display: grid;
-  gap: 5px;
-}
-
-.logic-flow-stage-title {
   font-size: 0.7rem;
-  letter-spacing: 0.35px;
-  text-transform: uppercase;
-  color: var(--neon-cyan);
-}
-
-.logic-flow-stage-body {
-  font-size: 0.78rem;
+  letter-spacing: 0.2px;
   color: var(--muted);
 }
 
 .logic-flow-rule {
-  width: min(100%, 460px);
-  border-radius: 16px;
+  border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(6, 10, 22, 0.25)),
-    rgba(8, 13, 28, 0.9);
-  padding: 12px 12px 10px;
-  display: grid;
-  gap: 10px;
+  background: rgba(8, 13, 28, 0.9);
+  overflow: hidden;
 }
 
 .logic-flow-rule.good {
-  border-color: rgba(51, 255, 153, 0.24);
+  border-color: rgba(51, 255, 153, 0.26);
 }
 
 .logic-flow-rule.warn {
-  border-color: rgba(255, 179, 71, 0.26);
+  border-color: rgba(255, 179, 71, 0.28);
 }
 
 .logic-flow-rule.alert {
-  border-color: rgba(255, 77, 109, 0.28);
+  border-color: rgba(255, 77, 109, 0.3);
 }
 
-.logic-flow-rule-head {
+.logic-flow-rule-summary {
+  width: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 9px;
+  padding: 10px 12px;
+  border: none;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.logic-flow-rule-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.logic-flow-rule.good .logic-flow-rule-dot {
+  background: rgba(51, 255, 153, 0.9);
+  box-shadow: 0 0 6px rgba(51, 255, 153, 0.6);
+}
+
+.logic-flow-rule.warn .logic-flow-rule-dot {
+  background: rgba(255, 179, 71, 0.9);
+  box-shadow: 0 0 6px rgba(255, 179, 71, 0.5);
+}
+
+.logic-flow-rule.alert .logic-flow-rule-dot {
+  background: rgba(255, 77, 109, 0.9);
+  box-shadow: 0 0 6px rgba(255, 77, 109, 0.55);
 }
 
 .logic-flow-rule-index {
-  padding: 4px 9px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(6, 10, 22, 0.92);
+  flex: none;
+  min-width: 16px;
   font-size: 0.7rem;
-  letter-spacing: 0.25px;
-  text-transform: uppercase;
-  color: var(--text);
   font-weight: 700;
+  color: var(--muted);
 }
 
-.logic-flow-rule-type {
-  padding: 4px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(0, 230, 255, 0.24);
-  color: rgba(0, 230, 255, 0.9);
-  text-transform: uppercase;
-  font-size: 0.66rem;
-  letter-spacing: 0.28px;
+.logic-flow-rule-summary-text {
+  flex: 1 1 auto;
+  font-size: 0.82rem;
+  line-height: 1.32;
+  color: rgba(230, 241, 255, 0.92);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.logic-flow-rule-caret {
+  flex: none;
+  font-size: 0.85rem;
+  color: var(--muted);
+  transition: transform 0.2s ease;
+}
+
+.logic-flow-rule.is-expanded .logic-flow-rule-caret {
+  transform: rotate(180deg);
+}
+
+.logic-flow-rule-details {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.25s ease;
+}
+
+.logic-flow-rule.is-expanded .logic-flow-rule-details {
+  max-height: 420px;
+  opacity: 1;
+  padding: 0 12px 12px;
 }
 
 .logic-flow-condition {
@@ -2183,7 +2177,6 @@ body {
 }
 
 .logic-flow-empty {
-  width: min(100%, 460px);
   border-radius: 12px;
   border: 1px dashed rgba(255, 255, 255, 0.16);
   padding: 12px;
