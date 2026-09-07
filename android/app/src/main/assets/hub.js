@@ -2913,10 +2913,10 @@ function getLogicModalDefinition(key) {
         `ВИКЛ мережі дозволено лише вище ${num(cfg.offMinSocPct, 0)}% заряду АКБ`,
       ],
       getSteps: (_status, cfg) => [
-        { tone: "warn", when: `навантаження > ${num(cfg.forceGridOnW, 0)} Вт`, action: "негайно УВІМК мережу" },
-        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт і заряд > ${num(cfg.offMinSocPct, 0)} %`, delay: `зачекати ${num(cfg.offDelaySec, 0)} с`, action: "ВИКЛ мережу" },
-        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт`, delay: `зачекати ${num(cfg.onDelaySec, 0)} с`, action: "УВІМК мережу" },
-        { tone: "alert", when: `заряд АКБ < ${num(cfg.batteryLowSocPct, 0)} %`, action: "негайно УВІМК мережу" },
+        { tone: "warn", when: `навантаження > ${num(cfg.forceGridOnW, 0)} Вт`, action: "негайно УВІМК мережу", fields: ["forceGridOnW"] },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт і заряд > ${num(cfg.offMinSocPct, 0)} %`, delay: `зачекати ${num(cfg.offDelaySec, 0)} с`, action: "ВИКЛ мережу", fields: ["pvThresholdW", "offMinSocPct", "offDelaySec"] },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт`, delay: `зачекати ${num(cfg.onDelaySec, 0)} с`, action: "УВІМК мережу", fields: ["pvThresholdW", "onDelaySec"] },
+        { tone: "alert", when: `заряд АКБ < ${num(cfg.batteryLowSocPct, 0)} %`, action: "негайно УВІМК мережу", fields: ["batteryLowSocPct"] },
       ],
       fixedNote: () => "Усі числові пороги цієї логіки редагуються і зберігаються на контролері.",
       invokeSave: (values, requestId) => {
@@ -2951,9 +2951,9 @@ function getLogicModalDefinition(key) {
         `захист перевантаження діє лише нижче ${num(cfg.overloadGridV, 0)} В мережі`,
       ],
       getSteps: (_status, cfg) => [
-        { tone: "alert", when: `навантаження > ${num(cfg.overloadPowerW, 0)} Вт і мережа < ${num(cfg.overloadGridV, 0)} В`, action: "режим перемикається на ВИКЛ" },
-        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "реле навантаження ВИКЛ" },
-        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "реле навантаження УВІМК" },
+        { tone: "alert", when: `навантаження > ${num(cfg.overloadPowerW, 0)} Вт і мережа < ${num(cfg.overloadGridV, 0)} В`, action: "режим перемикається на ВИКЛ", fields: ["overloadPowerW", "overloadGridV"] },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "реле навантаження ВИКЛ", fields: ["pvThresholdW", "gridRestoreV", "shutdownDelaySec"] },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "реле навантаження УВІМК", fields: ["pvThresholdW", "gridRestoreV"] },
       ],
       fixedNote: () => "Усі числові пороги цієї логіки редагуються і зберігаються на контролері.",
       invokeSave: (values, requestId) => {
@@ -2995,12 +2995,12 @@ function getLogicModalDefinition(key) {
         `звільнення захисту АКБ: мережа > ${num(cfg.batteryReleaseGridV, 0)} В або заряд > ${num(cfg.batteryReleaseSocPct, 0)} %`,
       ],
       getSteps: (_status, cfg) => [
-        { tone: "warn", when: "поза вікном АВТО", action: "бойлер ВИКЛ" },
-        { tone: "alert", when: `потужність_АКБ <= ${num(cfg.batteryShutoffW, 0)} Вт`, action: "захисна фіксація АКБ" },
-        { tone: "good", when: `потужність_АКБ >= ${num(cfg.batteryResumeW, 0)} Вт`, action: "захисну фіксацію АКБ можна зняти" },
-        { tone: "warn", when: `інший бойлер > ${num(cfg.peerActiveW, 0)} Вт`, action: "бойлер ВИКЛ" },
-        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "бойлер ВИКЛ" },
-        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "бойлер УВІМК" },
+        { tone: "warn", when: "поза вікном АВТО", action: "бойлер ВИКЛ", fields: [] },
+        { tone: "alert", when: `потужність_АКБ <= ${num(cfg.batteryShutoffW, 0)} Вт`, action: "захисна фіксація АКБ", fields: ["batteryShutoffW"] },
+        { tone: "good", when: `потужність_АКБ >= ${num(cfg.batteryResumeW, 0)} Вт`, action: "захисну фіксацію АКБ можна зняти", fields: ["batteryResumeW"] },
+        { tone: "warn", when: `інший бойлер > ${num(cfg.peerActiveW, 0)} Вт`, action: "бойлер ВИКЛ", fields: ["peerActiveW"] },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "бойлер ВИКЛ", fields: ["pvThresholdW", "gridRestoreV", "shutdownDelaySec"] },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "бойлер УВІМК", fields: ["pvThresholdW", "gridRestoreV"] },
       ],
       fixedNote: () => "Усі числові пороги цієї логіки редагуються і зберігаються на контролері.",
       invokeSave: (values, requestId) => {
@@ -3040,9 +3040,9 @@ function getLogicModalDefinition(key) {
         `поріг відновлення мережі ${num(cfg.gridRestoreV, 0)} В`,
       ],
       getSteps: (_status, cfg) => [
-        { tone: "warn", when: "поза вікном АВТО", action: "насос ВИКЛ" },
-        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "насос ВИКЛ" },
-        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "насос УВІМК" },
+        { tone: "warn", when: "поза вікном АВТО", action: "насос ВИКЛ", fields: [] },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "насос ВИКЛ", fields: ["pvThresholdW", "gridRestoreV", "shutdownDelaySec"] },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "насос УВІМК", fields: ["pvThresholdW", "gridRestoreV"] },
       ],
       fixedNote: () => "Усі числові пороги цієї логіки редагуються і зберігаються на контролері.",
       invokeSave: (values, requestId) => {
@@ -3077,12 +3077,12 @@ function getLogicModalDefinition(key) {
         `звільнення захисту АКБ: мережа > ${num(cfg.batteryReleaseGridV, 0)} В або заряд > ${num(cfg.batteryReleaseSocPct, 0)} %`,
       ],
       getSteps: (_status, cfg) => [
-        { tone: "warn", when: "поза вікном АВТО", action: "бойлер ВИКЛ" },
-        { tone: "alert", when: `потужність_АКБ <= ${num(cfg.batteryShutoffW, 0)} Вт`, action: "захисна фіксація АКБ" },
-        { tone: "good", when: `потужність_АКБ >= ${num(cfg.batteryResumeW, 0)} Вт`, action: "захисну фіксацію АКБ можна зняти" },
-        { tone: "warn", when: `інший бойлер > ${num(cfg.peerActiveW, 0)} Вт`, action: "бойлер ВИКЛ" },
-        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "бойлер ВИКЛ" },
-        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "бойлер УВІМК" },
+        { tone: "warn", when: "поза вікном АВТО", action: "бойлер ВИКЛ", fields: [] },
+        { tone: "alert", when: `потужність_АКБ <= ${num(cfg.batteryShutoffW, 0)} Вт`, action: "захисна фіксація АКБ", fields: ["batteryShutoffW"] },
+        { tone: "good", when: `потужність_АКБ >= ${num(cfg.batteryResumeW, 0)} Вт`, action: "захисну фіксацію АКБ можна зняти", fields: ["batteryResumeW"] },
+        { tone: "warn", when: `інший бойлер > ${num(cfg.peerActiveW, 0)} Вт`, action: "бойлер ВИКЛ", fields: ["peerActiveW"] },
+        { tone: "warn", when: `PV < ${num(cfg.pvThresholdW, 0)} Вт і мережа < ${num(cfg.gridRestoreV, 0)} В`, delay: `зачекати ${num(cfg.shutdownDelaySec, 0)} с`, action: "бойлер ВИКЛ", fields: ["pvThresholdW", "gridRestoreV", "shutdownDelaySec"] },
+        { tone: "good", when: `PV >= ${num(cfg.pvThresholdW, 0)} Вт або мережа >= ${num(cfg.gridRestoreV, 0)} В`, action: "бойлер УВІМК", fields: ["pvThresholdW", "gridRestoreV"] },
       ],
       fixedNote: () => "Усі числові пороги цієї логіки редагуються і зберігаються на контролері.",
       invokeSave: (values, requestId) => {
@@ -3124,20 +3124,24 @@ function buildLogicFieldMarkup(field, value, disabled) {
   `;
 }
 
-function buildLogicFlowMarkup(steps) {
+function buildLogicFlowMarkup(steps, defFields) {
   const safeSteps = Array.isArray(steps) ? steps : [];
   if (!safeSteps.length) {
-    return '<div class="logic-flow-empty">logic steps unavailable</div>';
+    return '<div class="logic-flow-empty">кроки логіки недоступні</div>';
   }
+  const fieldByKey = new Map((Array.isArray(defFields) ? defFields : []).map((f) => [f.key, f]));
 
   let markup = `
-    <div class="logic-flow-entry"><span>Початок циклу AUTO</span></div>
+    <div class="logic-flow-entry"><span>початок циклу АВТО</span></div>
     <div class="logic-flow-arrow" aria-hidden="true"><span></span></div>
     <section class="logic-flow-stage">
-      <div class="logic-flow-stage-title">Зчитати Вхідні Дані</div>
-      <div class="logic-flow-stage-body">PV потужність, напруга GRID, LOAD потужність, SOC/потужність АКБ, стан авто-вікна</div>
+      <div class="logic-flow-stage-title">зчитати вхідні дані</div>
+      <div class="logic-flow-stage-body">потужність PV, напруга мережі, потужність навантаження, заряд/потужність АКБ, стан вікна АВТО</div>
     </section>
   `;
+  // Правила перевіряються по черзі зверху вниз (як if/else if): щойно
+  // умова одного з них справджується - решта в цьому циклі не діють, тому
+  // кожна картка закінчується явним "інакше -> наступне правило".
   safeSteps.forEach((step, index) => {
     const tone = safeText(step?.tone, "warn");
     const delay = safeText(step?.delay, "");
@@ -3146,9 +3150,18 @@ function buildLogicFlowMarkup(steps) {
       : tone === "good"
         ? "правило увімкнення"
         : "правило вимкнення";
-    const nextRule = index < safeSteps.length - 1
-      ? `перейти до правила ${String(index + 2).padStart(2, "0")}`
-      : "залишити поточний стан реле";
+    const isLast = index === safeSteps.length - 1;
+    const elseText = isLast
+      ? "інакше: залишити поточний стан реле"
+      : `інакше → правило ${String(index + 2).padStart(2, "0")}`;
+    const fieldTags = (Array.isArray(step?.fields) ? step.fields : [])
+      .map((key) => fieldByKey.get(key))
+      .filter(Boolean)
+      .map(
+        (f) =>
+          `<button type="button" class="logic-flow-field-tag" data-logic-jump="${escapeHtml(f.key)}">${escapeHtml(f.label)}</button>`,
+      )
+      .join("");
     markup += `
       <div class="logic-flow-arrow" aria-hidden="true"><span></span></div>
       <section class="logic-flow-rule ${escapeHtml(tone)}">
@@ -3156,27 +3169,37 @@ function buildLogicFlowMarkup(steps) {
           <div class="logic-flow-rule-index">правило ${String(index + 1).padStart(2, "0")}</div>
           <div class="logic-flow-rule-type">${escapeHtml(toneLabel)}</div>
         </header>
-        <div class="logic-flow-decision-wrap">
-          <div class="logic-flow-decision">
-            <span>${escapeHtml(safeText(step?.when, "---"))}</span>
-          </div>
+        <div class="logic-flow-condition">
+          <span class="logic-flow-condition-badge">ЯКЩО</span>
+          <span class="logic-flow-condition-text">${escapeHtml(safeText(step?.when, "---"))}</span>
         </div>
-        <div class="logic-flow-branch-grid">
-          <div class="logic-flow-branch yes">
-            <div class="logic-flow-branch-title">ТАК</div>
-            ${delay ? `<div class="logic-flow-node-delay">${escapeHtml(delay)}</div>` : ""}
-            <div class="logic-flow-process">${escapeHtml(safeText(step?.action, "---"))}</div>
-          </div>
-          <div class="logic-flow-branch no">
-            <div class="logic-flow-branch-title">НІ</div>
-            <div class="logic-flow-next">${escapeHtml(nextRule)}</div>
-          </div>
+        <div class="logic-flow-action">
+          <span class="logic-flow-action-badge">ТО</span>
+          <span class="logic-flow-action-text">${escapeHtml(safeText(step?.action, "---"))}</span>
+          ${delay ? `<span class="logic-flow-node-delay">${escapeHtml(delay)}</span>` : ""}
         </div>
+        ${fieldTags ? `<div class="logic-flow-field-tags">${fieldTags}</div>` : ""}
+        <div class="logic-flow-else">${escapeHtml(elseText)}</div>
       </section>
     `;
   });
-  markup += '<div class="logic-flow-arrow" aria-hidden="true"><span></span></div><div class="logic-flow-exit"><span>повторювати на кожному оновленні статусу</span></div>';
+  markup += '<div class="logic-flow-arrow" aria-hidden="true"><span></span></div><div class="logic-flow-exit"><span>повторюється на кожному оновленні статусу</span></div>';
   return markup;
+}
+
+function scrollToLogicField(key) {
+  if (!key) return;
+  const input = document.querySelector(`#logicModalForm [data-logic-field="${key}"]`);
+  if (!(input instanceof HTMLElement)) return;
+  const field = input.closest(".logic-field") || input;
+  field.scrollIntoView({ behavior: "smooth", block: "center" });
+  field.classList.remove("is-highlighted");
+  void field.offsetWidth;
+  field.classList.add("is-highlighted");
+  setTimeout(() => field.classList.remove("is-highlighted"), 1600);
+  if (typeof input.focus === "function") {
+    input.focus({ preventScroll: true });
+  }
 }
 
 function formatDurationCompact(totalSec) {
@@ -3955,7 +3978,7 @@ function renderLogicModal({ force = false } = {}) {
   }
 
   if (flowEl) {
-    flowEl.innerHTML = buildLogicFlowMarkup(steps);
+    flowEl.innerHTML = buildLogicFlowMarkup(steps, def.fields);
   }
 
   const historySamples = automationHistoryItems(state.logic.historyHours);
@@ -4406,6 +4429,15 @@ function bindCardEvents() {
       event.preventDefault();
       event.stopPropagation();
       resetLogicModalForm();
+    });
+  }
+
+  const logicFlowEl = document.getElementById("logicModalFlow");
+  if (logicFlowEl) {
+    logicFlowEl.addEventListener("click", (event) => {
+      const tag = event.target.closest("[data-logic-jump]");
+      if (!tag) return;
+      scrollToLogicField(tag.getAttribute("data-logic-jump"));
     });
   }
 

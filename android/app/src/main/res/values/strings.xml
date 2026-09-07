@@ -29,4 +29,15 @@
     <string name="widget_gate_action_close">зачинити</string>
     <string name="widget_gate_action_stop">стоп</string>
     <string name="widget_gate_action_disabled">вимкнено</string>
+    <string name="widget_devices_name">Стан пристроїв</string>
+    <string name="widget_devices_description">Бойлери, насос, світло та ворота на одному екрані</string>
+    <string name="widget_devices_title">Стан пристроїв</string>
+    <string name="widget_device_boiler1">Бойлер 1</string>
+    <string name="widget_device_boiler2">Бойлер 2</string>
+    <string name="widget_device_pump">Насос</string>
+    <string name="widget_device_light">Світло</string>
+    <string name="widget_device_gate">Ворота</string>
+    <string name="widget_device_state_on">увімк.</string>
+    <string name="widget_device_state_off">вимк.</string>
+    <string name="widget_device_state_unknown">--</string>
 </resources>

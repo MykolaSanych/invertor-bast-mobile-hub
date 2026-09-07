@@ -76,7 +76,9 @@ class StatusWidgetProvider : AppWidgetProvider() {
         }
 
         fun hasActiveWidgets(context: Context): Boolean {
-            return getWidgetIds(context).isNotEmpty() || GateWidgetProvider.hasActiveWidgets(context)
+            return getWidgetIds(context).isNotEmpty() ||
+                GateWidgetProvider.hasActiveWidgets(context) ||
+                DeviceStateWidgetProvider.hasActiveWidgets(context)
         }
 
         fun updateAllWidgets(context: Context, status: UnifiedStatus?, triggerPulse: Boolean = true) {
@@ -91,6 +93,7 @@ class StatusWidgetProvider : AppWidgetProvider() {
             }
 
             GateWidgetProvider.updateAllWidgets(context, status, pulseActive)
+            DeviceStateWidgetProvider.updateAllWidgets(context, status, pulseActive)
 
             if (pulseActive) {
                 enqueueRefresh(context, delayMs = WIDGET_PULSE_CLEAR_DELAY_MS, suppressPulse = true)
