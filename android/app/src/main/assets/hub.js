@@ -1937,9 +1937,9 @@ function applyLoadTimelineHistory(payload) {
     throw new Error("некоректна дата хронології");
   }
 
+  const previousSamples = Array.isArray(state.timeline.samples) ? state.timeline.samples : [];
   const previousGarageByTs = new Map(
-    (Array.isArray(state.timeline.samples) ? state.timeline.samples : [])
-      .map((sample) => [Number(sample?.ts) || 0, !!sample?.garageBoilerOn]),
+    previousSamples.map((sample) => [Number(sample?.ts) || 0, !!sample?.garageBoilerOn]),
   );
   const samples = [];
   rows.forEach((row) => {
@@ -1957,7 +1957,16 @@ function applyLoadTimelineHistory(payload) {
     });
   });
 
-  state.timeline.samples = sanitizeTimelineSamples(samples);
+  // Прошивка віддає лише 15-хв блоки ("увімкнено хоч раз протягом вікна"),
+  // тому щойно завершений блок може лишатись позначеним "увімк." навіть
+  // якщо пристрій уже вимкнувся. recordLoadTimelineSample() тим часом додає
+  // точніші живі семпли поверх - якщо серед них є новіші за останній блок
+  // з прошивки, зберігаємо їх "хвіст", інакше цей повторний запит щохвилини
+  // стирав би той самий "зараз вимкнено", який щойно домалювала жива точка.
+  const lastFirmwareTs = samples.length ? samples[samples.length - 1].ts : dayStart;
+  const liveTail = previousSamples.filter((sample) => Number(sample?.ts) > lastFirmwareTs);
+
+  state.timeline.samples = sanitizeTimelineSamples(samples.concat(liveTail));
   state.timeline.day = dateLabel;
   state.timeline.lastTimestamp = state.timeline.samples.length
     ? state.timeline.samples[state.timeline.samples.length - 1].ts
