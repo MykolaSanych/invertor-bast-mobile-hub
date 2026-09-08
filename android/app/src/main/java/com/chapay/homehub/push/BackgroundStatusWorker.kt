@@ -26,6 +26,10 @@ class BackgroundStatusWorker(
                 emitNotifications = true,
             )
             StatusWidgetProvider.updateAllWidgets(applicationContext, status)
+            // Плануємо наступний тік ланцюжка лише при успіху - на невдачі
+            // WorkManager сам повторить спробу через Result.retry() з
+            // власним backoff, окремий таймер тут лише заважав би.
+            BackgroundMonitorScheduler.scheduleNext(applicationContext)
             Result.success()
         }.getOrElse { error ->
             Log.w(TAG, "Background poll failed: ${error.message}")

@@ -45,13 +45,14 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
         private const val BOILER_POWER_WORKING_THRESHOLD_W = 50.0
         private const val PUMP_POWER_WORKING_THRESHOLD_W = 150.0
 
-        // Віджет оновлюється у фоні не частіше ніж раз на ~15 хв (мінімум
-        // Android для періодової фонової роботи, і System може відкласти ще
-        // довше). Якщо знімок статусу старіший за цей поріг - не показуємо
-        // червону підсвітку "працює", бо на момент показу це вже могло бути
+        // BackgroundMonitorScheduler тепер оновлює віджет самопланованим
+        // ланцюжком раз на ~5 хв (замість 15-хв мінімуму PeriodicWorkRequest),
+        // але System все одно може відкласти виконання. Якщо знімок статусу
+        // старіший за цей поріг - не показуємо кольорову підсвітку
+        // "працює"/"відчинено", бо на момент показу це вже могло бути
         // неправдою; натомість "УВІМК"/"ВИМК" лишається (це стан реле, а не
         // миттєве споживання, тож застаріває не так критично).
-        private const val FRESH_STATUS_MAX_AGE_MS = 20L * 60L * 1000L
+        private const val FRESH_STATUS_MAX_AGE_MS = 10L * 60L * 1000L
 
         private val COLOR_ON = Color.parseColor("#33FF99")
         private val COLOR_OFF = Color.parseColor("#7F8FA6")
