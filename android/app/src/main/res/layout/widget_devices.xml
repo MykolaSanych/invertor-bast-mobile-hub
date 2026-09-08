@@ -29,36 +29,44 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:paddingLeft="4dp"
         android:paddingRight="4dp">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="4dp"
-            android:text="🔥"
-            android:textSize="13sp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:text="@string/widget_device_boiler1"
-            android:textColor="#B7C5D8"
-            android:textSize="9sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:text="🔥"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_device_boiler1"
+                android:textColor="#B7C5D8"
+                android:textSize="9sp" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/widgetDevBoiler1State"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginStart="19dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:text="--"
             android:textColor="#7F8FA6"
-            android:textSize="9sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -74,36 +82,44 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:paddingLeft="4dp"
         android:paddingRight="4dp">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="4dp"
-            android:text="🔥"
-            android:textSize="13sp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:text="@string/widget_device_boiler2"
-            android:textColor="#B7C5D8"
-            android:textSize="9sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:text="🔥"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_device_boiler2"
+                android:textColor="#B7C5D8"
+                android:textSize="9sp" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/widgetDevBoiler2State"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginStart="19dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:text="--"
             android:textColor="#7F8FA6"
-            android:textSize="9sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -119,36 +135,44 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:paddingLeft="4dp"
         android:paddingRight="4dp">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="4dp"
-            android:text="💧"
-            android:textSize="13sp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:text="@string/widget_device_pump"
-            android:textColor="#B7C5D8"
-            android:textSize="9sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:text="💧"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_device_pump"
+                android:textColor="#B7C5D8"
+                android:textSize="9sp" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/widgetDevPumpState"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginStart="19dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:text="--"
             android:textColor="#7F8FA6"
-            android:textSize="9sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -163,36 +187,44 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:paddingLeft="4dp"
         android:paddingRight="4dp">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="4dp"
-            android:text="💡"
-            android:textSize="13sp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:text="@string/widget_device_light"
-            android:textColor="#B7C5D8"
-            android:textSize="9sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:text="💡"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_device_light"
+                android:textColor="#B7C5D8"
+                android:textSize="9sp" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/widgetDevLightState"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginStart="19dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:text="--"
             android:textColor="#7F8FA6"
-            android:textSize="9sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -207,36 +239,44 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:paddingLeft="4dp"
         android:paddingRight="4dp">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="4dp"
-            android:text="🚪"
-            android:textSize="13sp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:text="@string/widget_device_gate"
-            android:textColor="#B7C5D8"
-            android:textSize="9sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:text="🚪"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_device_gate"
+                android:textColor="#B7C5D8"
+                android:textSize="9sp" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/widgetDevGateState"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginStart="19dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:text="--"
             android:textColor="#7F8FA6"
-            android:textSize="9sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 </LinearLayout>
