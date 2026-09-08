@@ -39,10 +39,11 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
-        // Синхронізовано з порогом "насос працює" у load_controller/hub.js:
-        // режим очікування контролера насоса споживає десятки ват, тому
-        // "робота" вважається лише вище 150 Вт.
-        private const val PUMP_POWER_ON_THRESHOLD_W = 150.0
+        // Синхронізовано з порогами "працює" у load_controller/hub.js: бойлер
+        // вважається таким, що реально гріє, вище 50 Вт, насос - вище 150 Вт
+        // (у режимі очікування його контролер сам споживає десятки ват).
+        private const val BOILER_POWER_WORKING_THRESHOLD_W = 50.0
+        private const val PUMP_POWER_WORKING_THRESHOLD_W = 150.0
 
         private val COLOR_ON = Color.parseColor("#33FF99")
         private val COLOR_OFF = Color.parseColor("#7F8FA6")
@@ -83,16 +84,32 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             val load = status?.loadController
             val garage = status?.garage
 
-            applyOnOffRow(views, R.id.widgetDevBoiler1Dot, R.id.widgetDevBoiler1State, load?.boiler1On)
-            applyOnOffRow(views, R.id.widgetDevBoiler2Dot, R.id.widgetDevBoiler2State, garage?.boiler2On)
-            applyOnOffRow(
+            applyPowerDeviceRow(
                 views,
-                R.id.widgetDevPumpDot,
-                R.id.widgetDevPumpState,
-                load?.pumpPower?.takeIf { it.isFinite() }?.let { it > PUMP_POWER_ON_THRESHOLD_W },
+                rowId = R.id.widgetDevBoiler1Row,
+                stateId = R.id.widgetDevBoiler1State,
+                on = load?.boiler1On,
+                powerW = load?.boilerPower,
+                thresholdW = BOILER_POWER_WORKING_THRESHOLD_W,
             )
-            applyOnOffRow(views, R.id.widgetDevLightDot, R.id.widgetDevLightState, garage?.garageLightOn)
-            applyGateRow(context, views, garage)
+            applyPowerDeviceRow(
+                views,
+                rowId = R.id.widgetDevBoiler2Row,
+                stateId = R.id.widgetDevBoiler2State,
+                on = garage?.boiler2On,
+                powerW = garage?.boilerPower,
+                thresholdW = BOILER_POWER_WORKING_THRESHOLD_W,
+            )
+            applyPowerDeviceRow(
+                views,
+                rowId = R.id.widgetDevPumpRow,
+                stateId = R.id.widgetDevPumpState,
+                on = load?.pumpOn,
+                powerW = load?.pumpPower,
+                thresholdW = PUMP_POWER_WORKING_THRESHOLD_W,
+            )
+            applySimpleOnOffRow(views, R.id.widgetDevLightState, garage?.garageLightOn)
+            applyGateRow(views, garage)
 
             val launchIntent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -108,25 +125,47 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             return views
         }
 
-        private fun applyOnOffRow(views: RemoteViews, dotId: Int, stateId: Int, on: Boolean?) {
-            val color = when (on) {
-                true -> COLOR_ON
-                false -> COLOR_OFF
-                null -> COLOR_UNKNOWN
-            }
-            val text = when (on) {
-                true -> "УВІМК"
-                false -> "ВИМК"
-                null -> "--"
-            }
-            views.setInt(dotId, "setTextColor", color)
-            views.setTextViewText(stateId, text)
-            views.setInt(stateId, "setTextColor", color)
+        private fun onOffColor(on: Boolean?): Int = when (on) {
+            true -> COLOR_ON
+            false -> COLOR_OFF
+            null -> COLOR_UNKNOWN
         }
 
-        private fun applyGateRow(context: Context, views: RemoteViews, garage: GarageStatus?) {
+        private fun onOffText(on: Boolean?): String = when (on) {
+            true -> "УВІМК"
+            false -> "ВИМК"
+            null -> "--"
+        }
+
+        private fun applySimpleOnOffRow(views: RemoteViews, stateId: Int, on: Boolean?) {
+            views.setTextViewText(stateId, onOffText(on))
+            views.setInt(stateId, "setTextColor", onOffColor(on))
+        }
+
+        // Реле "увімкнено" (режим дозволяє роботу) - це не те саме, що
+        // пристрій зараз реально споживає струм (бойлер догрів воду й чекає,
+        // насос стоїть). "УВІМК"/"ВИМК" завжди показує стан реле; коли
+        // потужність перевищує поріг - поле рядка додатково підсвічується
+        // червоним, як явний індикатор "зараз працює".
+        private fun applyPowerDeviceRow(
+            views: RemoteViews,
+            rowId: Int,
+            stateId: Int,
+            on: Boolean?,
+            powerW: Double?,
+            thresholdW: Double,
+        ) {
+            views.setTextViewText(stateId, onOffText(on))
+            views.setInt(stateId, "setTextColor", onOffColor(on))
+
+            val isWorking = on == true && powerW != null && powerW.isFinite() && powerW > thresholdW
+            if (isWorking) {
+                views.setInt(rowId, "setBackgroundResource", R.drawable.widget_device_row_working)
+            }
+        }
+
+        private fun applyGateRow(views: RemoteViews, garage: GarageStatus?) {
             if (garage == null) {
-                views.setInt(R.id.widgetDevGateDot, "setTextColor", COLOR_UNKNOWN)
                 views.setTextViewText(R.id.widgetDevGateState, "--")
                 views.setInt(R.id.widgetDevGateState, "setTextColor", COLOR_UNKNOWN)
                 return
@@ -134,16 +173,15 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
 
             val closedPin = garage.gateClosedPin
             val raw = garage.gateState.trim().lowercase()
-            val (textRes, color) = when {
-                closedPin == 0 -> R.string.widget_gate_state_closed to COLOR_GATE_CLOSED
-                closedPin > 0 -> R.string.widget_gate_state_open to COLOR_GATE_OPEN
-                raw.contains("open") -> R.string.widget_gate_state_open to COLOR_GATE_OPEN
-                raw.contains("close") -> R.string.widget_gate_state_closed to COLOR_GATE_CLOSED
-                raw.contains("stop") || raw.contains("move") -> R.string.widget_gate_state_moving to COLOR_GATE_MOVING
-                else -> R.string.widget_gate_state_unknown to COLOR_UNKNOWN
+            val (text, color) = when {
+                closedPin == 0 -> "зач." to COLOR_GATE_CLOSED
+                closedPin > 0 -> "відч." to COLOR_GATE_OPEN
+                raw.contains("open") -> "відч." to COLOR_GATE_OPEN
+                raw.contains("close") -> "зач." to COLOR_GATE_CLOSED
+                raw.contains("stop") || raw.contains("move") -> "рух" to COLOR_GATE_MOVING
+                else -> "--" to COLOR_UNKNOWN
             }
-            views.setInt(R.id.widgetDevGateDot, "setTextColor", color)
-            views.setTextViewText(R.id.widgetDevGateState, context.getString(textRes))
+            views.setTextViewText(R.id.widgetDevGateState, text)
             views.setInt(R.id.widgetDevGateState, "setTextColor", color)
         }
     }
