@@ -1635,12 +1635,9 @@ function setGarageLightActionButtonState({ disabled = false, on = false, reason 
       return;
     }
 
-    // Кнопка показує ДІЮ, яку виконає натискання (як і кнопка воріт), а не
-    // поточний стан - "увімкнути", коли зараз вимкнено, "вимкнути", коли
-    // зараз увімкнено.
-    btn.textContent = on ? "вимкнути світло" : "увімкнути світло";
     btn.title = reason ? `світло гаража (${reason})` : "світло гаража";
   });
+  renderGarageLightButtonText();
 }
 
 function formatCountdownClock(totalSeconds) {
@@ -1663,24 +1660,25 @@ function applyGarageLightAutoOffFromStatus(autoOffInSec) {
   state.gate.lightAutoOffAtMs = Date.now() + sec * 1000;
 }
 
-function updateGarageLightCountdownDisplay() {
-  const row = document.getElementById("garageLightAutoOffRow");
-  const el = document.getElementById("garageLightAutoOff");
-  if (!row || !el) return;
-
-  const deadline = state.gate.lightAutoOffAtMs;
-  if (!deadline) {
-    row.hidden = true;
-    return;
-  }
-  const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) {
-    row.hidden = true;
-    state.gate.lightAutoOffAtMs = null;
-    return;
-  }
-  row.hidden = false;
-  el.textContent = `${formatCountdownClock(remainingMs / 1000)} (світло після воріт)`;
+// Кнопка показує ДІЮ, яку виконає натискання (як і кнопка воріт), а не
+// поточний стан - "увімкнути", коли зараз вимкнено, "вимкнути", коли зараз
+// увімкнено. Поки активний таймер автовимкнення після воріт - замість
+// підпису показує зворотний відлік прямо на самій кнопці.
+function renderGarageLightButtonText() {
+  document.querySelectorAll("[data-garage-light-action]").forEach((btn) => {
+    if (btn.disabled) return;
+    const on = btn.classList.contains("is-on");
+    const deadline = state.gate.lightAutoOffAtMs;
+    if (on && deadline) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs > 0) {
+        btn.textContent = `вимкнути (${formatCountdownClock(remainingMs / 1000)})`;
+        return;
+      }
+      state.gate.lightAutoOffAtMs = null;
+    }
+    btn.textContent = on ? "вимкнути світло" : "увімкнути світло";
+  });
 }
 
 function readChecked(id, fallback = false) {
@@ -5547,7 +5545,7 @@ function restartSignalAgeTicker() {
   }
   state.signalAgeHandle = setInterval(() => {
     applyLiveCardStates(state.status, { flash: false });
-    updateGarageLightCountdownDisplay();
+    renderGarageLightButtonText();
   }, 1000);
 }
 
@@ -7554,13 +7552,12 @@ function renderAll() {
   const garageLightReason = garageOff ? "модуль вимкнено" : uiText(garage.garageLightReason, "вручну");
   const garageLightOn = !garageOff && !!garage.garageLightOn;
   setText("garageLightState", garageOff ? "вимкнено" : boolText(garageLightOn));
+  applyGarageLightAutoOffFromStatus(garageOff ? -1 : garage.garageLightAutoOffInSec);
   setGarageLightActionButtonState({
     disabled: garageOff,
     on: garageLightOn,
     reason: garageLightReason,
   });
-  applyGarageLightAutoOffFromStatus(garageOff ? -1 : garage.garageLightAutoOffInSec);
-  updateGarageLightCountdownDisplay();
 
   renderPowerScheme({
     inverter: inverterView,
