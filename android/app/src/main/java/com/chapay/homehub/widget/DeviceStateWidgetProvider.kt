@@ -102,6 +102,7 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
                 powerW = load?.boilerPower,
                 thresholdW = BOILER_POWER_WORKING_THRESHOLD_W,
                 isFresh = isFresh,
+                highlightRes = R.drawable.widget_device_row_working,
             )
             applyPowerDeviceRow(
                 views,
@@ -111,6 +112,7 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
                 powerW = garage?.boilerPower,
                 thresholdW = BOILER_POWER_WORKING_THRESHOLD_W,
                 isFresh = isFresh,
+                highlightRes = R.drawable.widget_device_row_working,
             )
             applyPowerDeviceRow(
                 views,
@@ -120,8 +122,15 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
                 powerW = load?.pumpPower,
                 thresholdW = PUMP_POWER_WORKING_THRESHOLD_W,
                 isFresh = isFresh,
+                highlightRes = R.drawable.widget_device_row_pump_active,
             )
-            applySimpleOnOffRow(views, R.id.widgetDevLightState, garage?.garageLightOn)
+            applySimpleOnOffRow(
+                views,
+                rowId = R.id.widgetDevLightRow,
+                stateId = R.id.widgetDevLightState,
+                on = garage?.garageLightOn,
+                highlightRes = R.drawable.widget_device_row_light_active,
+            )
             applyGateRow(views, garage)
 
             val launchIntent = Intent(context, MainActivity::class.java).apply {
@@ -150,16 +159,22 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             null -> "--"
         }
 
-        private fun applySimpleOnOffRow(views: RemoteViews, stateId: Int, on: Boolean?) {
+        // Світло - просте реле без поняття "працює" (на відміну від
+        // бойлера/насоса), тому підсвітка поля прив'язана прямо до
+        // "увімкнено", без порогу потужності й без перевірки свіжості.
+        private fun applySimpleOnOffRow(views: RemoteViews, rowId: Int, stateId: Int, on: Boolean?, highlightRes: Int) {
             views.setTextViewText(stateId, onOffText(on))
             views.setInt(stateId, "setTextColor", onOffColor(on))
+            if (on == true) {
+                views.setInt(rowId, "setBackgroundResource", highlightRes)
+            }
         }
 
         // Реле "увімкнено" (режим дозволяє роботу) - це не те саме, що
         // пристрій зараз реально споживає струм (бойлер догрів воду й чекає,
         // насос стоїть). "УВІМК"/"ВИМК" завжди показує стан реле; коли
         // потужність перевищує поріг - поле рядка додатково підсвічується
-        // червоним, як явний індикатор "зараз працює".
+        // кольором пристрою, як явний індикатор "зараз працює".
         private fun applyPowerDeviceRow(
             views: RemoteViews,
             rowId: Int,
@@ -168,13 +183,14 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             powerW: Double?,
             thresholdW: Double,
             isFresh: Boolean,
+            highlightRes: Int,
         ) {
             views.setTextViewText(stateId, onOffText(on))
             views.setInt(stateId, "setTextColor", onOffColor(on))
 
             val isWorking = isFresh && on == true && powerW != null && powerW.isFinite() && powerW > thresholdW
             if (isWorking) {
-                views.setInt(rowId, "setBackgroundResource", R.drawable.widget_device_row_working)
+                views.setInt(rowId, "setBackgroundResource", highlightRes)
             }
         }
 
@@ -187,16 +203,19 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
 
             val closedPin = garage.gateClosedPin
             val raw = garage.gateState.trim().lowercase()
-            val (text, color) = when {
-                closedPin == 0 -> "зач." to COLOR_GATE_CLOSED
-                closedPin > 0 -> "відч." to COLOR_GATE_OPEN
-                raw.contains("open") -> "відч." to COLOR_GATE_OPEN
-                raw.contains("close") -> "зач." to COLOR_GATE_CLOSED
-                raw.contains("stop") || raw.contains("move") -> "рух" to COLOR_GATE_MOVING
-                else -> "--" to COLOR_UNKNOWN
+            val (text, color, isOpen) = when {
+                closedPin == 0 -> Triple("зач.", COLOR_GATE_CLOSED, false)
+                closedPin > 0 -> Triple("відч.", COLOR_GATE_OPEN, true)
+                raw.contains("open") -> Triple("відч.", COLOR_GATE_OPEN, true)
+                raw.contains("close") -> Triple("зач.", COLOR_GATE_CLOSED, false)
+                raw.contains("stop") || raw.contains("move") -> Triple("рух", COLOR_GATE_MOVING, false)
+                else -> Triple("--", COLOR_UNKNOWN, false)
             }
             views.setTextViewText(R.id.widgetDevGateState, text)
             views.setInt(R.id.widgetDevGateState, "setTextColor", color)
+            if (isOpen) {
+                views.setInt(R.id.widgetDevGateRow, "setBackgroundResource", R.drawable.widget_device_row_gate_active)
+            }
         }
     }
 }
