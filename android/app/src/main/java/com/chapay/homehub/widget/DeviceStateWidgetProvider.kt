@@ -45,6 +45,14 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
         private const val BOILER_POWER_WORKING_THRESHOLD_W = 50.0
         private const val PUMP_POWER_WORKING_THRESHOLD_W = 150.0
 
+        // Віджет оновлюється у фоні не частіше ніж раз на ~15 хв (мінімум
+        // Android для періодової фонової роботи, і System може відкласти ще
+        // довше). Якщо знімок статусу старіший за цей поріг - не показуємо
+        // червону підсвітку "працює", бо на момент показу це вже могло бути
+        // неправдою; натомість "УВІМК"/"ВИМК" лишається (це стан реле, а не
+        // миттєве споживання, тож застаріває не так критично).
+        private const val FRESH_STATUS_MAX_AGE_MS = 20L * 60L * 1000L
+
         private val COLOR_ON = Color.parseColor("#33FF99")
         private val COLOR_OFF = Color.parseColor("#7F8FA6")
         private val COLOR_GATE_OPEN = Color.parseColor("#33FF99")
@@ -83,6 +91,8 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
 
             val load = status?.loadController
             val garage = status?.garage
+            val isFresh = status != null &&
+                (System.currentTimeMillis() - status.updatedAtMs) < FRESH_STATUS_MAX_AGE_MS
 
             applyPowerDeviceRow(
                 views,
@@ -91,6 +101,7 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
                 on = load?.boiler1On,
                 powerW = load?.boilerPower,
                 thresholdW = BOILER_POWER_WORKING_THRESHOLD_W,
+                isFresh = isFresh,
             )
             applyPowerDeviceRow(
                 views,
@@ -99,6 +110,7 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
                 on = garage?.boiler2On,
                 powerW = garage?.boilerPower,
                 thresholdW = BOILER_POWER_WORKING_THRESHOLD_W,
+                isFresh = isFresh,
             )
             applyPowerDeviceRow(
                 views,
@@ -107,6 +119,7 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
                 on = load?.pumpOn,
                 powerW = load?.pumpPower,
                 thresholdW = PUMP_POWER_WORKING_THRESHOLD_W,
+                isFresh = isFresh,
             )
             applySimpleOnOffRow(views, R.id.widgetDevLightState, garage?.garageLightOn)
             applyGateRow(views, garage)
@@ -154,11 +167,12 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             on: Boolean?,
             powerW: Double?,
             thresholdW: Double,
+            isFresh: Boolean,
         ) {
             views.setTextViewText(stateId, onOffText(on))
             views.setInt(stateId, "setTextColor", onOffColor(on))
 
-            val isWorking = on == true && powerW != null && powerW.isFinite() && powerW > thresholdW
+            val isWorking = isFresh && on == true && powerW != null && powerW.isFinite() && powerW > thresholdW
             if (isWorking) {
                 views.setInt(rowId, "setBackgroundResource", R.drawable.widget_device_row_working)
             }
