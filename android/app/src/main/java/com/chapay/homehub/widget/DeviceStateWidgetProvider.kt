@@ -160,15 +160,29 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             null -> "--"
         }
 
+        // RemoteViews не завжди перемальовує віджет "з нуля" - якщо layout
+        // той самий, Android часто застосовує лише ті дії (setInt,
+        // setTextViewText...), які реально викликані в ЦЬОМУ виклику, поверх
+        // уже намальованого віджета, а все, що не викликано, лишається як
+        // було. Тому фон рядка ОБОВ'ЯЗКОВО виставляти щоразу в обидва стани
+        // (підсвітка або прозорий) - умовний виклик лише для "увімкнути"
+        // призводив до того, що підсвітка, раз спрацювавши, більше ніколи не
+        // скидалась.
+        private fun setRowHighlight(views: RemoteViews, rowId: Int, active: Boolean, highlightRes: Int) {
+            if (active) {
+                views.setInt(rowId, "setBackgroundResource", highlightRes)
+            } else {
+                views.setInt(rowId, "setBackgroundColor", Color.TRANSPARENT)
+            }
+        }
+
         // Світло - просте реле без поняття "працює" (на відміну від
         // бойлера/насоса), тому підсвітка поля прив'язана прямо до
         // "увімкнено", без порогу потужності й без перевірки свіжості.
         private fun applySimpleOnOffRow(views: RemoteViews, rowId: Int, stateId: Int, on: Boolean?, highlightRes: Int) {
             views.setTextViewText(stateId, onOffText(on))
             views.setInt(stateId, "setTextColor", onOffColor(on))
-            if (on == true) {
-                views.setInt(rowId, "setBackgroundResource", highlightRes)
-            }
+            setRowHighlight(views, rowId, on == true, highlightRes)
         }
 
         // Реле "увімкнено" (режим дозволяє роботу) - це не те саме, що
@@ -190,15 +204,14 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             views.setInt(stateId, "setTextColor", onOffColor(on))
 
             val isWorking = isFresh && on == true && powerW != null && powerW.isFinite() && powerW > thresholdW
-            if (isWorking) {
-                views.setInt(rowId, "setBackgroundResource", highlightRes)
-            }
+            setRowHighlight(views, rowId, isWorking, highlightRes)
         }
 
         private fun applyGateRow(views: RemoteViews, garage: GarageStatus?) {
             if (garage == null) {
                 views.setTextViewText(R.id.widgetDevGateState, "--")
                 views.setInt(R.id.widgetDevGateState, "setTextColor", COLOR_UNKNOWN)
+                setRowHighlight(views, R.id.widgetDevGateRow, false, R.drawable.widget_device_row_gate_active)
                 return
             }
 
@@ -214,9 +227,7 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             }
             views.setTextViewText(R.id.widgetDevGateState, text)
             views.setInt(R.id.widgetDevGateState, "setTextColor", color)
-            if (isOpen) {
-                views.setInt(R.id.widgetDevGateRow, "setBackgroundResource", R.drawable.widget_device_row_gate_active)
-            }
+            setRowHighlight(views, R.id.widgetDevGateRow, isOpen, R.drawable.widget_device_row_gate_active)
         }
     }
 }
