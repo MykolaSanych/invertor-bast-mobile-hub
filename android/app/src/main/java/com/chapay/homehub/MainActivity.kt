@@ -870,6 +870,7 @@ private fun GarageStatus.toJson(): JSONObject = JSONObject().apply {
     put("gateClosedPin", gateClosedPin)
     put("garageLightOn", garageLightOn)
     put("garageLightReason", garageLightReason)
+    put("garageLightAutoOffInSec", garageLightAutoOffInSec)
     put("lineVoltage", lineVoltage)
     put("pvW", pvW)
     put("gridW", gridW)

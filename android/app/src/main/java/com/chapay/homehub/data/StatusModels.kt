@@ -143,6 +143,9 @@ data class GarageStatus(
     val gateClosedPin: Int,
     val garageLightOn: Boolean,
     val garageLightReason: String,
+    // Секунди до автовимкнення після 10-хв таймера "світло після воріт";
+    // -1 = цей таймер зараз неактивний.
+    val garageLightAutoOffInSec: Int,
     val lineVoltage: Double,
     val pvW: Double,
     val gridW: Double,

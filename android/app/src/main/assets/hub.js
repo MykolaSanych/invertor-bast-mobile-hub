@@ -146,6 +146,11 @@ const state = {
     lastState: "",
     lastOpenAt: "--",
     lastCloseAt: "--",
+    // Абсолютний час (мс, локальний годинник телефону), коли спрацює
+    // автовимкнення світла після відкриття воріт; null - таймер неактивний.
+    // Полічений один раз при кожному оновленні статусу з garage_light_auto_off_in_sec,
+    // а відлік на екрані йде щосекунди локально (updateGarageLightCountdown).
+    lightAutoOffAtMs: null,
   },
   locks: {
     inverterLoadOn: false,
@@ -1630,9 +1635,52 @@ function setGarageLightActionButtonState({ disabled = false, on = false, reason 
       return;
     }
 
-    btn.textContent = `світло ${on ? "УВІМК" : "ВИМК"}`;
+    // Кнопка показує ДІЮ, яку виконає натискання (як і кнопка воріт), а не
+    // поточний стан - "увімкнути", коли зараз вимкнено, "вимкнути", коли
+    // зараз увімкнено.
+    btn.textContent = on ? "вимкнути світло" : "увімкнути світло";
     btn.title = reason ? `світло гаража (${reason})` : "світло гаража";
   });
+}
+
+function formatCountdownClock(totalSeconds) {
+  const safeSec = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const minutes = Math.floor(safeSec / 60);
+  const seconds = safeSec % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+// Прошивка віддає лише "скільки секунд лишалось на момент опитування", тому
+// зберігаємо абсолютний дедлайн і відлічуємо локально щосекунди
+// (restartSignalAgeTicker вже й так тикає раз на секунду) - інакше цифри
+// стрибали б лише раз на кожен цикл опитування, а не плавно.
+function applyGarageLightAutoOffFromStatus(autoOffInSec) {
+  const sec = Number(autoOffInSec);
+  if (!Number.isFinite(sec) || sec < 0) {
+    state.gate.lightAutoOffAtMs = null;
+    return;
+  }
+  state.gate.lightAutoOffAtMs = Date.now() + sec * 1000;
+}
+
+function updateGarageLightCountdownDisplay() {
+  const row = document.getElementById("garageLightAutoOffRow");
+  const el = document.getElementById("garageLightAutoOff");
+  if (!row || !el) return;
+
+  const deadline = state.gate.lightAutoOffAtMs;
+  if (!deadline) {
+    row.hidden = true;
+    return;
+  }
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    row.hidden = true;
+    state.gate.lightAutoOffAtMs = null;
+    return;
+  }
+  row.hidden = false;
+  el.textContent = `${formatCountdownClock(remainingMs / 1000)} (світло після воріт)`;
 }
 
 function readChecked(id, fallback = false) {
@@ -5499,6 +5547,7 @@ function restartSignalAgeTicker() {
   }
   state.signalAgeHandle = setInterval(() => {
     applyLiveCardStates(state.status, { flash: false });
+    updateGarageLightCountdownDisplay();
   }, 1000);
 }
 
@@ -7510,6 +7559,8 @@ function renderAll() {
     on: garageLightOn,
     reason: garageLightReason,
   });
+  applyGarageLightAutoOffFromStatus(garageOff ? -1 : garage.garageLightAutoOffInSec);
+  updateGarageLightCountdownDisplay();
 
   renderPowerScheme({
     inverter: inverterView,

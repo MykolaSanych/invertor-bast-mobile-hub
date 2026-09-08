@@ -1185,6 +1185,7 @@ class StatusRepository(
             gateClosedPin = json.optInt("door_closed_pin", -1),
             garageLightOn = json.optBooleanSafe("garage_light_on"),
             garageLightReason = json.optStringSafeAny("manual", "garage_light_reason"),
+            garageLightAutoOffInSec = json.optInt("garage_light_auto_off_in_sec", -1),
             lineVoltage = json.optDoubleSafeAny("gridVolt"),
             pvW = json.optDoubleSafeAny("pv"),
             gridW = json.optDoubleSafeAny("ac_in", "grid"),
