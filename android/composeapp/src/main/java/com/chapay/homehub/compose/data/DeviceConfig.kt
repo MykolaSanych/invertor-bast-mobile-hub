@@ -1,0 +1,150 @@
+package com.chapay.homehub.compose.data
+
+import android.content.Context
+
+private const val DEFAULT_WEB_PASSWORD = "keP8OsYo_MbyuWMkbSuiDe8N"
+private const val LEGACY_WEB_PASSWORD = "admin"
+
+data class AppConfig(
+    val inverterBaseUrl: String = "http://192.168.1.2",
+    val inverterPassword: String = DEFAULT_WEB_PASSWORD,
+    val loadControllerBaseUrl: String = "http://192.168.1.3",
+    val loadControllerPassword: String = DEFAULT_WEB_PASSWORD,
+    val garageBaseUrl: String = "http://192.168.1.4",
+    val garagePassword: String = DEFAULT_WEB_PASSWORD,
+    val pollIntervalSec: Int = 5,
+    val inverterEnabled: Boolean = true,
+    val loadControllerEnabled: Boolean = true,
+    val garageEnabled: Boolean = true,
+    val realtimeMonitorEnabled: Boolean = false,
+    val realtimePollIntervalSec: Int = 5,
+    val graphSyncIntervalMin: Int = 15,
+    val graphSyncPerCycle: Int = 2,
+    val graphSyncRequestFetchLimit: Int = 80,
+    val notifyPvGeneration: Boolean = true,
+    val notifyGridRelay: Boolean = true,
+    val notifyGridPresence: Boolean = true,
+    val notifyGridMode: Boolean = true,
+    val notifyLoadMode: Boolean = true,
+    val notifyBoiler1Mode: Boolean = true,
+    val notifyPumpMode: Boolean = true,
+    val notifyBoiler2Mode: Boolean = true,
+    val notifyGateState: Boolean = true,
+    val notifyModuleOffline: Boolean = true,
+    val notifyPowerOverload: Boolean = true,
+    val notifyLogicUnstable: Boolean = true,
+    val interfaceMode: String = "pro",
+)
+
+object AppConfigStorage {
+    private const val PREFS = "home_hub_compose_prefs"
+    private const val K_INV_URL = "inv_url"
+    private const val K_INV_PASS = "inv_pass"
+    private const val K_LOAD_URL = "load_url"
+    private const val K_LOAD_PASS = "load_pass"
+    private const val K_GARAGE_URL = "garage_url"
+    private const val K_GARAGE_PASS = "garage_pass"
+    private const val K_POLL_SEC = "poll_sec"
+    private const val K_INV_ENABLED = "inv_enabled"
+    private const val K_LOAD_ENABLED = "load_enabled"
+    private const val K_GARAGE_ENABLED = "garage_enabled"
+    private const val K_REALTIME_ENABLED = "rt_enabled"
+    private const val K_REALTIME_SEC = "rt_sec"
+    private const val K_GRAPH_SYNC_INTERVAL_MIN = "graph_sync_interval_min"
+    private const val K_GRAPH_SYNC_PER_CYCLE = "graph_sync_per_cycle"
+    private const val K_GRAPH_SYNC_REQUEST_FETCH_LIMIT = "graph_sync_request_fetch_limit"
+    private const val K_N_PV = "n_pv"
+    private const val K_N_GRID_RELAY = "n_grid_relay"
+    private const val K_N_GRID_PRESENCE = "n_grid_presence"
+    private const val K_N_GRID_MODE = "n_grid_mode"
+    private const val K_N_LOAD_MODE = "n_load_mode"
+    private const val K_N_BOILER1 = "n_boiler1"
+    private const val K_N_PUMP = "n_pump"
+    private const val K_N_BOILER2 = "n_boiler2"
+    private const val K_N_GATE = "n_gate"
+    private const val K_N_MODULE_OFFLINE = "n_module_offline"
+    private const val K_N_POWER_OVERLOAD = "n_power_overload"
+    private const val K_N_LOGIC_UNSTABLE = "n_logic_unstable"
+    private const val K_INTERFACE_MODE = "ui_mode"
+
+    private fun normalizePassword(value: String?): String {
+        val trimmed = value?.trim()
+        return when {
+            trimmed.isNullOrEmpty() -> DEFAULT_WEB_PASSWORD
+            trimmed == LEGACY_WEB_PASSWORD -> DEFAULT_WEB_PASSWORD
+            else -> trimmed
+        }
+    }
+
+    private fun normalizeInterfaceMode(value: String?): String {
+        return "pro"
+    }
+
+    fun load(context: Context): AppConfig {
+        val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return AppConfig(
+            inverterBaseUrl = p.getString(K_INV_URL, "http://192.168.1.2") ?: "http://192.168.1.2",
+            inverterPassword = normalizePassword(p.getString(K_INV_PASS, DEFAULT_WEB_PASSWORD)),
+            loadControllerBaseUrl = p.getString(K_LOAD_URL, "http://192.168.1.3") ?: "http://192.168.1.3",
+            loadControllerPassword = normalizePassword(p.getString(K_LOAD_PASS, DEFAULT_WEB_PASSWORD)),
+            garageBaseUrl = p.getString(K_GARAGE_URL, "http://192.168.1.4") ?: "http://192.168.1.4",
+            garagePassword = normalizePassword(p.getString(K_GARAGE_PASS, DEFAULT_WEB_PASSWORD)),
+            pollIntervalSec = p.getInt(K_POLL_SEC, 5).coerceIn(2, 60),
+            inverterEnabled = p.getBoolean(K_INV_ENABLED, true),
+            loadControllerEnabled = p.getBoolean(K_LOAD_ENABLED, true),
+            garageEnabled = p.getBoolean(K_GARAGE_ENABLED, true),
+            realtimeMonitorEnabled = p.getBoolean(K_REALTIME_ENABLED, false),
+            realtimePollIntervalSec = p.getInt(K_REALTIME_SEC, 5).coerceIn(3, 60),
+            graphSyncIntervalMin = p.getInt(K_GRAPH_SYNC_INTERVAL_MIN, 15).coerceIn(2, 120),
+            graphSyncPerCycle = p.getInt(K_GRAPH_SYNC_PER_CYCLE, 2).coerceIn(1, 12),
+            graphSyncRequestFetchLimit = p.getInt(K_GRAPH_SYNC_REQUEST_FETCH_LIMIT, 80).coerceIn(1, 365),
+            notifyPvGeneration = p.getBoolean(K_N_PV, true),
+            notifyGridRelay = p.getBoolean(K_N_GRID_RELAY, true),
+            notifyGridPresence = p.getBoolean(K_N_GRID_PRESENCE, true),
+            notifyGridMode = p.getBoolean(K_N_GRID_MODE, true),
+            notifyLoadMode = p.getBoolean(K_N_LOAD_MODE, true),
+            notifyBoiler1Mode = p.getBoolean(K_N_BOILER1, true),
+            notifyPumpMode = p.getBoolean(K_N_PUMP, true),
+            notifyBoiler2Mode = p.getBoolean(K_N_BOILER2, true),
+            notifyGateState = p.getBoolean(K_N_GATE, true),
+            notifyModuleOffline = p.getBoolean(K_N_MODULE_OFFLINE, true),
+            notifyPowerOverload = p.getBoolean(K_N_POWER_OVERLOAD, true),
+            notifyLogicUnstable = p.getBoolean(K_N_LOGIC_UNSTABLE, true),
+            interfaceMode = normalizeInterfaceMode(p.getString(K_INTERFACE_MODE, "pro")),
+        )
+    }
+
+    fun save(context: Context, cfg: AppConfig) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(K_INV_URL, cfg.inverterBaseUrl.trim())
+            .putString(K_INV_PASS, cfg.inverterPassword)
+            .putString(K_LOAD_URL, cfg.loadControllerBaseUrl.trim())
+            .putString(K_LOAD_PASS, cfg.loadControllerPassword)
+            .putString(K_GARAGE_URL, cfg.garageBaseUrl.trim())
+            .putString(K_GARAGE_PASS, cfg.garagePassword)
+            .putInt(K_POLL_SEC, cfg.pollIntervalSec.coerceIn(2, 60))
+            .putBoolean(K_INV_ENABLED, cfg.inverterEnabled)
+            .putBoolean(K_LOAD_ENABLED, cfg.loadControllerEnabled)
+            .putBoolean(K_GARAGE_ENABLED, cfg.garageEnabled)
+            .putBoolean(K_REALTIME_ENABLED, cfg.realtimeMonitorEnabled)
+            .putInt(K_REALTIME_SEC, cfg.realtimePollIntervalSec.coerceIn(3, 60))
+            .putInt(K_GRAPH_SYNC_INTERVAL_MIN, cfg.graphSyncIntervalMin.coerceIn(2, 120))
+            .putInt(K_GRAPH_SYNC_PER_CYCLE, cfg.graphSyncPerCycle.coerceIn(1, 12))
+            .putInt(K_GRAPH_SYNC_REQUEST_FETCH_LIMIT, cfg.graphSyncRequestFetchLimit.coerceIn(1, 365))
+            .putBoolean(K_N_PV, cfg.notifyPvGeneration)
+            .putBoolean(K_N_GRID_RELAY, cfg.notifyGridRelay)
+            .putBoolean(K_N_GRID_PRESENCE, cfg.notifyGridPresence)
+            .putBoolean(K_N_GRID_MODE, cfg.notifyGridMode)
+            .putBoolean(K_N_LOAD_MODE, cfg.notifyLoadMode)
+            .putBoolean(K_N_BOILER1, cfg.notifyBoiler1Mode)
+            .putBoolean(K_N_PUMP, cfg.notifyPumpMode)
+            .putBoolean(K_N_BOILER2, cfg.notifyBoiler2Mode)
+            .putBoolean(K_N_GATE, cfg.notifyGateState)
+            .putBoolean(K_N_MODULE_OFFLINE, cfg.notifyModuleOffline)
+            .putBoolean(K_N_POWER_OVERLOAD, cfg.notifyPowerOverload)
+            .putBoolean(K_N_LOGIC_UNSTABLE, cfg.notifyLogicUnstable)
+            .putString(K_INTERFACE_MODE, normalizeInterfaceMode(cfg.interfaceMode))
+            .apply()
+    }
+}
