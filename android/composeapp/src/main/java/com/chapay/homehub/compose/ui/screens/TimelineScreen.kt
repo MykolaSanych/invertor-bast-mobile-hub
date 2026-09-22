@@ -10,8 +10,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -31,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import com.chapay.homehub.compose.data.AppConfig
 import com.chapay.homehub.compose.data.StatusRepository
 import com.chapay.homehub.compose.ui.components.DateNavHeader
+import com.chapay.homehub.compose.ui.components.LockLandscapeOrientation
 import com.chapay.homehub.compose.ui.components.todayIso
 import com.chapay.homehub.compose.ui.theme.AccentBoiler
 import com.chapay.homehub.compose.ui.theme.AccentGrid
@@ -51,7 +56,8 @@ private val ROW_DEFS = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TimelineScreen(config: AppConfig, repository: StatusRepository) {
+fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -> Unit) {
+    LockLandscapeOrientation()
     var date by remember { mutableStateOf(todayIso()) }
     var samples by remember { mutableStateOf<List<TimelineSample>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -72,7 +78,16 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository) {
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Хронологія") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Хронологія") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+            )
+        },
     ) { innerPadding ->
         Column(
             modifier = Modifier

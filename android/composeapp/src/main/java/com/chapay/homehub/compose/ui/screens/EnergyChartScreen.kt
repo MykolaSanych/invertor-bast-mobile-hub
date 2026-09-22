@@ -16,10 +16,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -39,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import com.chapay.homehub.compose.data.AppConfig
 import com.chapay.homehub.compose.data.StatusRepository
 import com.chapay.homehub.compose.ui.components.DateNavHeader
+import com.chapay.homehub.compose.ui.components.LockLandscapeOrientation
 import com.chapay.homehub.compose.ui.components.todayIso
 import com.chapay.homehub.compose.ui.theme.AccentBattery
 import com.chapay.homehub.compose.ui.theme.AccentGrid
@@ -52,7 +57,8 @@ private data class HourBar(val hour: Int, val pv: Double, val home: Double, val 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EnergyChartScreen(config: AppConfig, repository: StatusRepository) {
+fun EnergyChartScreen(config: AppConfig, repository: StatusRepository, onBack: () -> Unit) {
+    LockLandscapeOrientation()
     var date by remember { mutableStateOf(todayIso()) }
     var bars by remember { mutableStateOf<List<HourBar>>(emptyList()) }
     var totals by remember { mutableStateOf(Triple(0.0, 0.0, 0.0)) }
@@ -94,7 +100,16 @@ fun EnergyChartScreen(config: AppConfig, repository: StatusRepository) {
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Графік енергії") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Графік енергії") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+            )
+        },
     ) { innerPadding ->
         Column(
             modifier = Modifier

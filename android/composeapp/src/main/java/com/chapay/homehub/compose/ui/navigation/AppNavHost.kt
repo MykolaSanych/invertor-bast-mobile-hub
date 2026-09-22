@@ -57,7 +57,8 @@ fun AppNavHost(
     val uiState by viewModel.uiState.collectAsState()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val showBottomBar = BOTTOM_DESTINATIONS.any { it.route == currentRoute }
+    val showBottomBar = BOTTOM_DESTINATIONS.any { it.route == currentRoute } &&
+        currentRoute != ROUTE_TIMELINE && currentRoute != ROUTE_ENERGY
 
     Scaffold(
         bottomBar = {
@@ -121,13 +122,21 @@ fun AppNavHost(
                     SchemeScreen(uiState = uiState, onBack = { navController.popBackStack() })
                 }
                 composable(ROUTE_TIMELINE) {
-                    TimelineScreen(config = uiState.config, repository = viewModel.repository)
+                    TimelineScreen(
+                        config = uiState.config,
+                        repository = viewModel.repository,
+                        onBack = { navController.popBackStack() },
+                    )
                 }
                 composable(ROUTE_JOURNAL) {
                     JournalScreen(config = uiState.config, repository = viewModel.repository)
                 }
                 composable(ROUTE_ENERGY) {
-                    EnergyChartScreen(config = uiState.config, repository = viewModel.repository)
+                    EnergyChartScreen(
+                        config = uiState.config,
+                        repository = viewModel.repository,
+                        onBack = { navController.popBackStack() },
+                    )
                 }
             }
         }
