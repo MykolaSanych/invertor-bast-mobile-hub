@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -117,7 +116,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentPv,
                         icon = Icons.Filled.WbSunny,
-                        modifier = Modifier.aspectRatio(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         secondaryText = inverter?.let { "за добу: ${formatWatts(it.dailyPv)} Вт·год" },
                     )
                 }
@@ -128,7 +127,7 @@ fun DashboardScreen(
                         unit = "В",
                         accent = AccentGrid,
                         icon = Icons.Filled.ElectricBolt,
-                        modifier = Modifier.aspectRatio(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         secondaryText = inverter?.let { "режим: ${it.mode}" },
                         onClick = { onOpenDevice("grid") },
                     )
@@ -140,7 +139,7 @@ fun DashboardScreen(
                         unit = "%",
                         accent = AccentBattery,
                         icon = Icons.Filled.BatteryChargingFull,
-                        modifier = Modifier.aspectRatio(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         secondaryText = "потужність: ${formatWatts(pickBatteryPower(inverter, loadController, garage))} Вт",
                     )
                 }
@@ -151,7 +150,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentLoad,
                         icon = Icons.Filled.Power,
-                        modifier = Modifier.aspectRatio(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         secondaryText = inverter?.let { "режим: ${it.loadMode}" },
                         onClick = { onOpenDevice("load") },
                     )
@@ -163,7 +162,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentBoiler,
                         icon = Icons.Filled.Whatshot,
-                        modifier = Modifier.aspectRatio(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         secondaryText = loadController?.let { "режим: ${it.boiler1Mode} · ${boolTextUk(it.boiler1On)}" },
                         onClick = { onOpenDevice("boiler1") },
                     )
@@ -175,7 +174,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentPump,
                         icon = Icons.Filled.Water,
-                        modifier = Modifier.aspectRatio(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         secondaryText = loadController?.let { "режим: ${it.pumpMode} · ${boolTextUk(it.pumpOn)}" },
                         onClick = { onOpenDevice("pump") },
                     )
@@ -187,7 +186,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentBoiler,
                         icon = Icons.Filled.Whatshot,
-                        modifier = Modifier.aspectRatio(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         secondaryText = garage?.let { "режим: ${it.boiler2Mode} · ${boolTextUk(it.boiler2On)}" },
                         onClick = { onOpenDevice("boiler2") },
                     )
@@ -211,7 +210,7 @@ private fun GateCard(
     onToggleLight: () -> Unit,
 ) {
     Card(
-        modifier = Modifier.aspectRatio(1f),
+        modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = SurfaceContainer),
         shape = RoundedCornerShape(20.dp),
     ) {
