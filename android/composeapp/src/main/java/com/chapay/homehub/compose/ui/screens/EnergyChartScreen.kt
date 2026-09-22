@@ -2,7 +2,6 @@ package com.chapay.homehub.compose.ui.screens
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -129,7 +127,7 @@ fun EnergyChartScreen(config: AppConfig, repository: StatusRepository, onBack: (
                     Spacer(Modifier.height(12.dp))
                     Legend()
                     Spacer(Modifier.height(8.dp))
-                    EnergyBarChart(bars)
+                    EnergyBarChart(bars, modifier = Modifier.fillMaxWidth().weight(1f))
                 }
             }
         }
@@ -187,56 +185,63 @@ private fun LegendDot(label: String, color: androidx.compose.ui.graphics.Color) 
 }
 
 @Composable
-private fun EnergyBarChart(bars: List<HourBar>) {
+private fun EnergyBarChart(bars: List<HourBar>, modifier: Modifier = Modifier) {
     if (bars.isEmpty()) {
         Text("немає погодинних даних", color = TextMuted, modifier = Modifier.padding(16.dp))
         return
     }
     val maxValue = (bars.maxOfOrNull { maxOf(it.pv, it.home, it.grid) } ?: 1.0).coerceAtLeast(1.0)
-    val hourWidth = 34.dp
-    val chartWidth = hourWidth * bars.size
-    val chartHeightDp = 220.dp
 
     Card(
         colors = CardDefaults.cardColors(containerColor = SurfaceContainer),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier,
     ) {
-        Row(modifier = Modifier.horizontalScroll(rememberScrollState()).padding(12.dp)) {
-            Canvas(
-                modifier = Modifier
-                    .width(chartWidth)
-                    .height(chartHeightDp),
-            ) {
-                val plotHeight = size.height - 20.dp.toPx()
-                val barGroupWidth = hourWidth.toPx()
-                val barWidth = barGroupWidth / 4f
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+        ) {
+            val axisLabelHeight = 20.dp.toPx()
+            val plotHeight = size.height - axisLabelHeight
+            val barGroupWidth = size.width / bars.size
+            val barWidth = barGroupWidth / 4f
+            val gridLineColor = android.graphics.Color.parseColor("#33384A")
 
-                bars.forEachIndexed { index, bar ->
-                    val groupLeft = index * barGroupWidth
-                    listOf(bar.pv to AccentPv, bar.home to AccentBattery, bar.grid to AccentGrid)
-                        .forEachIndexed { seriesIndex, (value, color) ->
-                            val barHeight = (value / maxValue * plotHeight).toFloat().coerceAtLeast(0f)
-                            drawRect(
-                                color = color,
-                                topLeft = Offset(
-                                    groupLeft + seriesIndex * barWidth + 2f,
-                                    plotHeight - barHeight,
-                                ),
-                                size = androidx.compose.ui.geometry.Size(barWidth - 4f, barHeight),
-                            )
-                        }
-                    if (index % 3 == 0) {
-                        drawContext.canvas.nativeCanvas.drawText(
-                            "${bar.hour}",
-                            groupLeft + barGroupWidth / 2f,
-                            size.height - 4.dp.toPx(),
-                            android.graphics.Paint().apply {
-                                color = android.graphics.Color.parseColor("#9BA3B4")
-                                textSize = 9.sp.toPx()
-                                textAlign = android.graphics.Paint.Align.CENTER
-                            },
+            for (i in 0..4) {
+                val y = plotHeight * i / 4f
+                drawLine(
+                    color = androidx.compose.ui.graphics.Color(gridLineColor),
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1f,
+                )
+            }
+
+            bars.forEachIndexed { index, bar ->
+                val groupLeft = index * barGroupWidth
+                listOf(bar.pv to AccentPv, bar.home to AccentBattery, bar.grid to AccentGrid)
+                    .forEachIndexed { seriesIndex, (value, color) ->
+                        val barHeight = (value / maxValue * plotHeight).toFloat().coerceAtLeast(0f)
+                        drawRect(
+                            color = color,
+                            topLeft = Offset(
+                                groupLeft + seriesIndex * barWidth + 2f,
+                                plotHeight - barHeight,
+                            ),
+                            size = androidx.compose.ui.geometry.Size(barWidth - 4f, barHeight),
                         )
                     }
+                if (index % 2 == 0) {
+                    drawContext.canvas.nativeCanvas.drawText(
+                        "${bar.hour}",
+                        groupLeft + barGroupWidth / 2f,
+                        size.height - 2.dp.toPx(),
+                        android.graphics.Paint().apply {
+                            color = android.graphics.Color.parseColor("#9BA3B4")
+                            textSize = 11.sp.toPx()
+                            textAlign = android.graphics.Paint.Align.CENTER
+                        },
+                    )
                 }
             }
         }
