@@ -7,6 +7,7 @@ import com.chapay.homehub.compose.data.AppConfig
 import com.chapay.homehub.compose.data.AppConfigStorage
 import com.chapay.homehub.compose.data.StatusRepository
 import com.chapay.homehub.compose.data.UnifiedStatus
+import com.chapay.homehub.compose.widget.StatusWidgetProvider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,6 +69,9 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                         lastSuccessAtMs = System.currentTimeMillis(),
                     )
                 }
+                if (StatusWidgetProvider.hasActiveWidgets(getApplication())) {
+                    StatusWidgetProvider.updateAllWidgets(getApplication(), unified)
+                }
             }
             .onFailure { err ->
                 _uiState.update {
@@ -97,6 +101,18 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setBoiler2Mode(mode: String) {
         submitCommand { repository.setBoiler2Mode(_uiState.value.config, mode) }
+    }
+
+    fun setBoiler1AutoWindow(enabled: Boolean, start: String, end: String) {
+        submitCommand { repository.setBoiler1AutoWindow(_uiState.value.config, enabled, start, end) }
+    }
+
+    fun setPumpAutoWindow(enabled: Boolean, start: String, end: String) {
+        submitCommand { repository.setPumpAutoWindow(_uiState.value.config, enabled, start, end) }
+    }
+
+    fun setBoiler2AutoWindow(enabled: Boolean, start: String, end: String) {
+        submitCommand { repository.setBoiler2AutoWindow(_uiState.value.config, enabled, start, end) }
     }
 
     fun triggerGate() {

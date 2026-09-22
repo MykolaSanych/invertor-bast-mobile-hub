@@ -108,6 +108,13 @@ fun AppNavHost(
                                 "boiler2" -> viewModel.setBoiler2Mode(mode)
                             }
                         },
+                        onSetAutoWindow = { enabled, start, end ->
+                            when (key) {
+                                "boiler1" -> viewModel.setBoiler1AutoWindow(enabled, start, end)
+                                "pump" -> viewModel.setPumpAutoWindow(enabled, start, end)
+                                "boiler2" -> viewModel.setBoiler2AutoWindow(enabled, start, end)
+                            }
+                        },
                         onBack = { navController.popBackStack() },
                     )
                 }

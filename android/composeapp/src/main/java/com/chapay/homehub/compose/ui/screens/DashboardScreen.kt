@@ -4,26 +4,31 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.Garage
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Water
 import androidx.compose.material.icons.filled.Whatshot
@@ -40,12 +45,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.chapay.homehub.compose.data.GarageStatus
 import com.chapay.homehub.compose.data.InverterStatus
@@ -65,6 +73,7 @@ import com.chapay.homehub.compose.ui.theme.SurfaceContainer
 import com.chapay.homehub.compose.ui.theme.SurfaceContainerHigh
 import com.chapay.homehub.compose.ui.theme.TextMuted
 import com.chapay.homehub.compose.ui.theme.TextPrimary
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,36 +110,34 @@ fun DashboardScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 170.dp),
-                contentPadding = PaddingValues(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize(),
             ) {
-                item {
+                CardRow {
                     MetricCard(
                         title = "СОНЦЕ",
                         valueText = formatWatts(pickPvW(inverter, loadController, garage)),
                         unit = "Вт",
                         accent = AccentPv,
                         icon = Icons.Filled.WbSunny,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "напруга" to "${formatVolts(it.pvVoltage)} В" },
                             inverter?.let { "за добу" to "${formatWatts(it.dailyPv)} Вт·год" },
                             inverter?.let { "останні дані" to it.rtcTime },
                         ),
                     )
-                }
-                item {
                     MetricCard(
                         title = "МЕРЕЖА",
                         valueText = formatWatts(pickGridPowerW(inverter, loadController, garage)),
                         unit = "Вт",
                         accent = AccentGrid,
                         icon = Icons.Filled.ElectricBolt,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "режим" to it.mode },
                             inverter?.let { "напруга" to "${formatVolts(it.lineVoltage)} В" },
@@ -140,29 +147,27 @@ fun DashboardScreen(
                         onClick = { onOpenDevice("grid") },
                     )
                 }
-                item {
+                CardRow {
                     MetricCard(
                         title = "АКБ",
                         valueText = formatPercent(pickBatterySoc(inverter, loadController, garage)),
                         unit = "%",
                         accent = AccentBattery,
                         icon = Icons.Filled.BatteryChargingFull,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "напруга" to "${formatVolts(it.batteryVoltage)} В" },
                             "потужність" to "${formatWatts(pickBatteryPower(inverter, loadController, garage))} Вт",
                             inverter?.let { "температура" to "${formatVolts(it.inverterTemp)} °C" },
                         ),
                     )
-                }
-                item {
                     MetricCard(
                         title = "НАВАНТАЖЕННЯ",
                         valueText = formatWatts(pickLoadW(inverter, loadController, garage)),
                         unit = "Вт",
                         accent = AccentLoad,
                         icon = Icons.Filled.Power,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "режим" to it.loadMode },
                             inverter?.let { "напруга" to "${formatVolts(it.outputVoltage)} В" },
@@ -171,14 +176,14 @@ fun DashboardScreen(
                         onClick = { onOpenDevice("load") },
                     )
                 }
-                item {
+                CardRow {
                     MetricCard(
                         title = "БОЙЛЕР 1",
                         valueText = formatWatts(loadController?.boilerPower ?: 0.0),
                         unit = "Вт",
                         accent = AccentBoiler,
                         icon = Icons.Filled.Whatshot,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             loadController?.let { "режим" to it.boiler1Mode },
                             loadController?.let { "струм" to "${"%.2f".format(it.boilerCurrent)} А" },
@@ -187,15 +192,13 @@ fun DashboardScreen(
                         ),
                         onClick = { onOpenDevice("boiler1") },
                     )
-                }
-                item {
                     MetricCard(
                         title = "НАСОС",
                         valueText = formatWatts(loadController?.pumpPower ?: 0.0),
                         unit = "Вт",
                         accent = AccentPump,
                         icon = Icons.Filled.Water,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             loadController?.let { "режим" to it.pumpMode },
                             loadController?.let { "струм" to "${"%.2f".format(it.pumpCurrent)} А" },
@@ -205,14 +208,23 @@ fun DashboardScreen(
                         onClick = { onOpenDevice("pump") },
                     )
                 }
-                item {
+                // Не в CardRow: цей рядок містить кнопки (GateCard), чия
+                // реальна висота (мінімальна висота дотику Material3 Button)
+                // систематично недооцінюється при IntrinsicSize.Max-вимірюванні,
+                // через що картка обрізалась по нижній кнопці. Природна висота
+                // тут не заважає (картка воріт і в WebView-додатку завжди
+                // виглядала окремим, вищим блоком).
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     MetricCard(
                         title = "БОЙЛЕР 2",
                         valueText = formatWatts(garage?.boilerPower ?: 0.0),
                         unit = "Вт",
                         accent = AccentBoiler,
                         icon = Icons.Filled.Whatshot,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f),
                         details = listOfNotNull(
                             garage?.let { "режим" to it.boiler2Mode },
                             garage?.let { "струм" to "${"%.2f".format(it.boilerCurrent)} А" },
@@ -221,12 +233,11 @@ fun DashboardScreen(
                         ),
                         onClick = { onOpenDevice("boiler2") },
                     )
-                }
-                item {
                     GateCard(
                         garage = garage,
                         onTriggerGate = onTriggerGate,
                         onToggleLight = onToggleLight,
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }
@@ -234,14 +245,90 @@ fun DashboardScreen(
     }
 }
 
+/** Рядок із двох карток однакової висоти (за найвищою в парі), щоб сітка на
+ * дашборді не "стрибала" через різну кількість рядків деталей у картках. */
+@Composable
+private fun CardRow(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Max),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        content = content,
+    )
+}
+
+// Кнопка показує ДІЮ, яку виконає натискання (як door-action-btn у чинному
+// WebView-додатку), а не поточний стан - "відкрити", коли зараз зачинено,
+// "зачинити", коли зараз відчинено, "стоп" у решті випадків (рух/невідомо).
+private fun classifyGateState(garage: GarageStatus?): String {
+    if (garage == null) return "disabled"
+    val closedPin = garage.gateClosedPin
+    if (closedPin >= 0) return if (closedPin == 0) "closed" else "open"
+    val raw = garage.gateState.trim().lowercase()
+    return when {
+        raw.contains("open") -> "open"
+        raw.contains("close") -> "closed"
+        raw.contains("stop") -> "stopped"
+        raw.contains("move") -> "moving"
+        else -> "unknown"
+    }
+}
+
+private data class GateActionUi(val label: String, val icon: ImageVector)
+
+private fun gateActionUi(stateKey: String): GateActionUi = when (stateKey) {
+    "closed" -> GateActionUi("Відкрити", Icons.Filled.ArrowUpward)
+    "open" -> GateActionUi("Зачинити", Icons.Filled.ArrowDownward)
+    else -> GateActionUi("Стоп", Icons.Filled.Stop)
+}
+
+private fun formatCountdownClock(totalSeconds: Long): String {
+    val safe = totalSeconds.coerceAtLeast(0)
+    val m = safe / 60
+    val s = safe % 60
+    return "%d:%02d".format(m, s)
+}
+
 @Composable
 private fun GateCard(
     garage: GarageStatus?,
     onTriggerGate: () -> Unit,
     onToggleLight: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+    // Прошивка віддає лише "скільки секунд лишалось на момент опитування",
+    // тому запам'ятовуємо абсолютний дедлайн один раз на кожне оновлення
+    // статусу й відлічуємо локально щосекунди (як applyGarageLightAutoOffFromStatus
+    // у чинному WebView-додатку) - інакше цифри стрибали б лише раз на цикл
+    // опитування, а не плавно.
+    var lightAutoOffAtMs by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(garage?.garageLightAutoOffInSec) {
+        val sec = garage?.garageLightAutoOffInSec
+        lightAutoOffAtMs = if (sec != null && sec >= 0) System.currentTimeMillis() + sec * 1000L else null
+    }
+
+    val disabled = garage == null
+    val stateKey = classifyGateState(garage)
+    val gateAction = gateActionUi(stateKey)
+    val lightOn = garage?.garageLightOn == true
+    val remainingSec = lightAutoOffAtMs?.let { (it - now) / 1000 }
+    val lightLabel = when {
+        disabled -> "світло --"
+        lightOn && remainingSec != null && remainingSec > 0 -> "Вимкнути (${formatCountdownClock(remainingSec)})"
+        lightOn -> "Вимкнути світло"
+        else -> "Увімкнути світло"
+    }
+
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier,
         colors = CardDefaults.cardColors(containerColor = SurfaceContainer),
         shape = RoundedCornerShape(20.dp),
     ) {
@@ -264,27 +351,31 @@ private fun GateCard(
                 color = TextMuted,
             )
             Text(
-                text = "світло: ${if (garage?.garageLightOn == true) "УВІМК" else "ВИМК"}",
+                text = "світло: ${if (lightOn) "УВІМК" else "ВИМК"}",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextMuted,
             )
             Spacer(Modifier.height(12.dp))
             Button(
                 onClick = onTriggerGate,
+                enabled = !disabled,
                 colors = ButtonDefaults.buttonColors(containerColor = AccentGate),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Керувати")
+                Icon(gateAction.icon, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (disabled) "--" else gateAction.label)
             }
             Spacer(Modifier.height(6.dp))
             Button(
                 onClick = onToggleLight,
+                enabled = !disabled,
                 colors = ButtonDefaults.buttonColors(containerColor = SurfaceContainerHigh, contentColor = TextPrimary),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Filled.Lightbulb, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(if (garage?.garageLightOn == true) "Вимкнути світло" else "Увімкнути світло")
+                Text(lightLabel)
             }
         }
     }

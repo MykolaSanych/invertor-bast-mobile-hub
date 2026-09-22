@@ -1,4 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Мій дім Compose</string>
+
+    <string name="widget_status_name">Статус мого дому</string>
+    <string name="widget_status_description">Статус будинку: температура та енергетичні показники</string>
+    <string name="widget_status_title">Мій дім</string>
+    <string name="widget_status_waiting">Оновлення...</string>
+    <string name="widget_status_updated_at">Оновлено: %1$s</string>
+    <string name="widget_metric_outside_temp">ЗОВН</string>
+    <string name="widget_metric_pv_power">PV</string>
+    <string name="widget_metric_grid_power">МЕР</string>
+    <string name="widget_metric_load_power">НАВ</string>
+    <string name="widget_metric_battery_power">АКБ</string>
+    <string name="widget_metric_battery_soc">АКБ</string>
+    <string name="widget_gate_name">Ворота мого дому</string>
+    <string name="widget_gate_description">Кнопка керування воротами та індикатор стану</string>
+    <string name="widget_gate_state_open">відчинено</string>
+    <string name="widget_gate_state_closed">зачинено</string>
+    <string name="widget_gate_state_moving">рухаються</string>
+    <string name="widget_gate_state_stopped">зупинено</string>
+    <string name="widget_gate_state_unknown">невідомо</string>
+    <string name="widget_gate_state_disabled">вимкнено</string>
+    <string name="widget_gate_action_open">відчинити</string>
+    <string name="widget_gate_action_close">зачинити</string>
+    <string name="widget_gate_action_stop">стоп</string>
+    <string name="widget_gate_action_disabled">вимкнено</string>
+    <string name="widget_devices_name">Стан пристроїв</string>
+    <string name="widget_devices_description">Бойлери, насос, світло та ворота на одному екрані</string>
+    <string name="widget_devices_title">Стан пристроїв</string>
+    <string name="widget_device_boiler1">Бойлер 1</string>
+    <string name="widget_device_boiler2">Бойлер 2</string>
+    <string name="widget_device_pump">Насос</string>
+    <string name="widget_device_light">Світло</string>
+    <string name="widget_device_gate">Ворота</string>
+    <string name="widget_device_state_on">увімк.</string>
+    <string name="widget_device_state_off">вимк.</string>
+    <string name="widget_device_state_unknown">--</string>
 </resources>

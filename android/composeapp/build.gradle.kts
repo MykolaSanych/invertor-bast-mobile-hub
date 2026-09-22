@@ -51,6 +51,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20240303")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     // Потрібно лише для базового XML-стилю Theme.Material3.DayNight.NoActionBar
     // (стартова тема Activity до першого setContent) - сам UI повністю Compose.
     implementation("com.google.android.material:material:1.12.0")
