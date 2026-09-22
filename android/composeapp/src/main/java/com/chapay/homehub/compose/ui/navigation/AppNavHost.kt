@@ -10,10 +10,12 @@ import androidx.navigation.compose.rememberNavController
 import com.chapay.homehub.compose.ui.DashboardViewModel
 import com.chapay.homehub.compose.ui.screens.DashboardScreen
 import com.chapay.homehub.compose.ui.screens.DeviceControlScreen
+import com.chapay.homehub.compose.ui.screens.SchemeScreen
 import com.chapay.homehub.compose.ui.screens.SettingsScreen
 
 private const val ROUTE_DASHBOARD = "dashboard"
 private const val ROUTE_SETTINGS = "settings"
+private const val ROUTE_SCHEME = "scheme"
 private const val ROUTE_DEVICE = "device/{key}"
 
 @Composable
@@ -30,8 +32,15 @@ fun AppNavHost(
                 onRefresh = viewModel::refreshNow,
                 onOpenDevice = { key -> navController.navigate("device/$key") },
                 onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
+                onOpenScheme = { navController.navigate(ROUTE_SCHEME) },
                 onTriggerGate = viewModel::triggerGate,
                 onToggleLight = viewModel::toggleGarageLight,
+            )
+        }
+        composable(ROUTE_SCHEME) {
+            SchemeScreen(
+                uiState = uiState,
+                onBack = { navController.popBackStack() },
             )
         }
         composable(ROUTE_DEVICE) { backStackEntry ->

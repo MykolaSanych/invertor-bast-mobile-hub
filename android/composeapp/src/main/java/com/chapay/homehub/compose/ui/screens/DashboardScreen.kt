@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.Garage
@@ -46,7 +47,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.chapay.homehub.compose.data.GarageStatus
 import com.chapay.homehub.compose.data.InverterStatus
@@ -75,6 +75,7 @@ fun DashboardScreen(
     onRefresh: () -> Unit,
     onOpenDevice: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenScheme: () -> Unit,
     onTriggerGate: () -> Unit,
     onToggleLight: () -> Unit,
 ) {
@@ -88,6 +89,9 @@ fun DashboardScreen(
                 title = { Text("Мій дім") },
                 actions = {
                     ConnectionBadge(lastSuccessAtMs = uiState.lastSuccessAtMs, hasError = uiState.error != null)
+                    IconButton(onClick = onOpenScheme) {
+                        Icon(Icons.Filled.AccountTree, contentDescription = "Схема живлення")
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = "Налаштування")
                     }
@@ -103,7 +107,7 @@ fun DashboardScreen(
                 .padding(innerPadding),
         ) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 160.dp),
+                columns = GridCells.Adaptive(minSize = 170.dp),
                 contentPadding = PaddingValues(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -117,18 +121,27 @@ fun DashboardScreen(
                         accent = AccentPv,
                         icon = Icons.Filled.WbSunny,
                         modifier = Modifier.fillMaxWidth(),
-                        secondaryText = inverter?.let { "за добу: ${formatWatts(it.dailyPv)} Вт·год" },
+                        details = listOfNotNull(
+                            inverter?.let { "напруга" to "${formatVolts(it.pvVoltage)} В" },
+                            inverter?.let { "за добу" to "${formatWatts(it.dailyPv)} Вт·год" },
+                            inverter?.let { "останні дані" to it.rtcTime },
+                        ),
                     )
                 }
                 item {
                     MetricCard(
                         title = "МЕРЕЖА",
-                        valueText = formatVolts(pickLineVoltage(inverter, loadController, garage)),
-                        unit = "В",
+                        valueText = formatWatts(pickGridPowerW(inverter, loadController, garage)),
+                        unit = "Вт",
                         accent = AccentGrid,
                         icon = Icons.Filled.ElectricBolt,
                         modifier = Modifier.fillMaxWidth(),
-                        secondaryText = inverter?.let { "режим: ${it.mode}" },
+                        details = listOfNotNull(
+                            inverter?.let { "режим" to it.mode },
+                            inverter?.let { "напруга" to "${formatVolts(it.lineVoltage)} В" },
+                            inverter?.let { "частота" to "${formatVolts(it.gridFrequency)} Гц" },
+                            inverter?.let { "за добу" to "${formatWatts(it.dailyGrid)} Вт·год" },
+                        ),
                         onClick = { onOpenDevice("grid") },
                     )
                 }
@@ -140,7 +153,11 @@ fun DashboardScreen(
                         accent = AccentBattery,
                         icon = Icons.Filled.BatteryChargingFull,
                         modifier = Modifier.fillMaxWidth(),
-                        secondaryText = "потужність: ${formatWatts(pickBatteryPower(inverter, loadController, garage))} Вт",
+                        details = listOfNotNull(
+                            inverter?.let { "напруга" to "${formatVolts(it.batteryVoltage)} В" },
+                            "потужність" to "${formatWatts(pickBatteryPower(inverter, loadController, garage))} Вт",
+                            inverter?.let { "температура" to "${formatVolts(it.inverterTemp)} °C" },
+                        ),
                     )
                 }
                 item {
@@ -151,7 +168,11 @@ fun DashboardScreen(
                         accent = AccentLoad,
                         icon = Icons.Filled.Power,
                         modifier = Modifier.fillMaxWidth(),
-                        secondaryText = inverter?.let { "режим: ${it.loadMode}" },
+                        details = listOfNotNull(
+                            inverter?.let { "режим" to it.loadMode },
+                            inverter?.let { "напруга" to "${formatVolts(it.outputVoltage)} В" },
+                            inverter?.let { "за добу" to "${formatWatts(it.dailyHome)} Вт·год" },
+                        ),
                         onClick = { onOpenDevice("load") },
                     )
                 }
@@ -163,7 +184,12 @@ fun DashboardScreen(
                         accent = AccentBoiler,
                         icon = Icons.Filled.Whatshot,
                         modifier = Modifier.fillMaxWidth(),
-                        secondaryText = loadController?.let { "режим: ${it.boiler1Mode} · ${boolTextUk(it.boiler1On)}" },
+                        details = listOfNotNull(
+                            loadController?.let { "режим" to it.boiler1Mode },
+                            loadController?.let { "струм" to "${"%.2f".format(it.boilerCurrent)} А" },
+                            loadController?.let { "за добу" to "${formatWatts(it.dailyBoiler)} Вт·год" },
+                            loadController?.let { "стан" to boolTextUk(it.boiler1On) },
+                        ),
                         onClick = { onOpenDevice("boiler1") },
                     )
                 }
@@ -175,7 +201,12 @@ fun DashboardScreen(
                         accent = AccentPump,
                         icon = Icons.Filled.Water,
                         modifier = Modifier.fillMaxWidth(),
-                        secondaryText = loadController?.let { "режим: ${it.pumpMode} · ${boolTextUk(it.pumpOn)}" },
+                        details = listOfNotNull(
+                            loadController?.let { "режим" to it.pumpMode },
+                            loadController?.let { "струм" to "${"%.2f".format(it.pumpCurrent)} А" },
+                            loadController?.let { "за добу" to "${formatWatts(it.dailyPump)} Вт·год" },
+                            loadController?.let { "стан" to boolTextUk(it.pumpOn) },
+                        ),
                         onClick = { onOpenDevice("pump") },
                     )
                 }
@@ -187,7 +218,12 @@ fun DashboardScreen(
                         accent = AccentBoiler,
                         icon = Icons.Filled.Whatshot,
                         modifier = Modifier.fillMaxWidth(),
-                        secondaryText = garage?.let { "режим: ${it.boiler2Mode} · ${boolTextUk(it.boiler2On)}" },
+                        details = listOfNotNull(
+                            garage?.let { "режим" to it.boiler2Mode },
+                            garage?.let { "струм" to "${"%.2f".format(it.boilerCurrent)} А" },
+                            garage?.let { "за добу" to "${formatWatts(it.dailyBoiler)} Вт·год" },
+                            garage?.let { "стан" to boolTextUk(it.boiler2On) },
+                        ),
                         onClick = { onOpenDevice("boiler2") },
                     )
                 }
@@ -225,6 +261,17 @@ private fun GateCard(
                 text = gateStateTextUk(garage?.gateState),
                 style = MaterialTheme.typography.titleLarge,
                 color = TextPrimary,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "причина: ${gateReasonTextUk(garage?.gateReason)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted,
+            )
+            Text(
+                text = "світло: ${if (garage?.garageLightOn == true) "УВІМК" else "ВИМК"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted,
             )
             Spacer(Modifier.height(12.dp))
             Button(
@@ -289,6 +336,25 @@ private fun gateStateTextUk(raw: String?): String {
     }
 }
 
+// Прошивка досі віддає причину як внутрішній рядок ("door closed"/"door
+// open"/джерело команди на кшталт "remote trigger") - той самий пропуск є
+// і в чинному WebView-додатку (uiText() там теж не перекладає ці значення).
+// Тут - легкий локальний переклад найпоширеніших варіантів, решта показується
+// як є (краще щось зрозуміле частково, ніж порожньо).
+private fun gateReasonTextUk(raw: String?): String {
+    val v = raw?.trim() ?: return "---"
+    if (v.isEmpty() || v == "init") return "---"
+    val lower = v.lowercase()
+    return when {
+        lower == "door closed" -> "ворота зачинено"
+        lower == "door open" -> "ворота відчинено"
+        lower == "remote trigger" -> "пульт"
+        lower == "button" -> "кнопка"
+        lower == "app" || lower == "mobile hub" || lower == "compose hub" -> "застосунок"
+        else -> v
+    }
+}
+
 private fun formatWatts(value: Double?): String {
     if (value == null || value.isNaN()) return "--"
     return value.roundToInt().toString()
@@ -309,6 +375,14 @@ private fun pickPvW(inverter: InverterStatus?, load: LoadControllerStatus?, gara
 
 private fun pickLineVoltage(inverter: InverterStatus?, load: LoadControllerStatus?, garage: GarageStatus?): Double? =
     listOfNotNull(inverter?.lineVoltage, load?.lineVoltage, garage?.lineVoltage).firstOrNull { it.isFinite() }
+
+// Той самий захист, що й у чинному WebView-додатку (zeroGridPowerWhenNoVoltage):
+// без напруги мережі показник потужності - лише шум датчика, а не реальний потік.
+private fun pickGridPowerW(inverter: InverterStatus?, load: LoadControllerStatus?, garage: GarageStatus?): Double? {
+    val voltage = pickLineVoltage(inverter, load, garage) ?: return null
+    val power = listOfNotNull(inverter?.gridW, load?.gridW, garage?.gridW).firstOrNull { it.isFinite() } ?: return null
+    return if (voltage < 50.0) 0.0 else power
+}
 
 private fun pickBatterySoc(inverter: InverterStatus?, load: LoadControllerStatus?, garage: GarageStatus?): Double? =
     listOfNotNull(inverter?.batterySoc, load?.batterySoc, garage?.batterySoc).firstOrNull { it.isFinite() }

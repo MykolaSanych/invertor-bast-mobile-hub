@@ -5,6 +5,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -28,15 +30,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.chapay.homehub.compose.ui.theme.HeroNumber
+import com.chapay.homehub.compose.ui.theme.OutlineSubtle
 import com.chapay.homehub.compose.ui.theme.SurfaceContainer
 import com.chapay.homehub.compose.ui.theme.TextMuted
 import com.chapay.homehub.compose.ui.theme.TextPrimary
 
 /**
- * Картка метрики з "героєм"-цифрою. Коли [valueText] змінюється, край картки
- * робить короткий, стриманий пульс кольором [accent] - видимий, але не
- * втомливий зворотний зв'язок "дані щойно оновились" (аналог cardUpdateFlash
- * з чинного WebView-додатку, тут - через Animatable без ручного керування DOM).
+ * Картка метрики з "героєм"-цифрою і рядком деталей (мітка/значення, як у
+ * чинному WebView-додатку - напруга/частота/струм/за добу/стан тощо), щоб
+ * не втрачати інформативність порівняно з ним. Коли [valueText] змінюється,
+ * край картки робить короткий, стриманий пульс кольором [accent] - зворотний
+ * зв'язок "дані щойно оновились" (аналог cardUpdateFlash), без ручного
+ * керування DOM.
  */
 @Composable
 fun MetricCard(
@@ -46,7 +51,7 @@ fun MetricCard(
     accent: Color,
     icon: ImageVector,
     modifier: Modifier = Modifier,
-    secondaryText: String? = null,
+    details: List<Pair<String, String>> = emptyList(),
     onClick: (() -> Unit)? = null,
 ) {
     val pulse = remember { Animatable(0f) }
@@ -92,14 +97,29 @@ fun MetricCard(
                     }
                 }
             }
-            if (!secondaryText.isNullOrEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = secondaryText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            if (details.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(color = OutlineSubtle, thickness = 1.dp)
+                Spacer(Modifier.height(8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    details.forEach { (label, value) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted,
+                            )
+                            Text(
+                                text = value,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextPrimary,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
