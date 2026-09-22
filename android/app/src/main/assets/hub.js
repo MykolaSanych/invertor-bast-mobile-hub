@@ -7457,9 +7457,14 @@ function renderAll() {
   setText("pvValue", invOff ? "--" : num(inverterView.pvW, 0, "--"));
   setText("pvVoltage", invOff ? "--" : num(inverter.pvVoltage, 1));
   setText("dailyPV", invOff ? "--" : num(inverter.dailyPV, 1));
+  // inverter.lastUpdate - це час останнього ЩОГОДИННОГО збереження в
+  // історію на прошивці (saveJsonDataToFile), а не час останнього живого
+  // опитування - міг застрягати на початку години, хоча PV/мережа/АКБ
+  // оновлювались нормально щопоставки. rtcTime пристрою оновлюється на
+  // кожен успішний запит, тому чесніше показує "коли востаннє відповів".
   setText(
     "lastUpdatePV",
-    invOff ? "--:--:--" : safeText(inverter.lastUpdate, safeText(inverter.rtcTime || loadController.rtcTime || garage.rtcTime, "--:--:--")),
+    invOff ? "--:--:--" : safeText(inverter.rtcTime, safeText(loadController.rtcTime || garage.rtcTime, "--:--:--")),
   );
 
   setText("gridValue", invOff ? "--" : num(gridPowerCardW, 0, "--"));
