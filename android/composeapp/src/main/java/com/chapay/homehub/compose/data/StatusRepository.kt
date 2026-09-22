@@ -443,6 +443,27 @@ class StatusRepository(
         }
     }
 
+    // fetchLoadControllerDailyLog() вище звертається до /api/log?date=, який
+    // прошивка завжди повертає 405 (лише POST реально підтримується), і
+    // парсить кожен рядок як JSON - хоча реальний формат простий текст
+    // "HH:MM:SS [module] повідомлення" (appendLogLineImpl). Цей метод
+    // натомість читає вже перевірений робочий /api/sd/file?name=log_DATE.log
+    // (той самий файл, куди й garage пересилає свої логи).
+    suspend fun fetchLoadControllerLogLines(config: AppConfig, date: String): List<String>? = withContext(Dispatchers.IO) {
+        if (!config.loadControllerEnabled) return@withContext null
+        val requestedDate = date.trim()
+        if (requestedDate.isEmpty()) return@withContext null
+
+        val raw = fetchTextWithAuth(
+            baseUrlRaw = config.loadControllerBaseUrl,
+            password = config.loadControllerPassword,
+            path = "/api/sd/file",
+            query = mapOf("name" to "log_$requestedDate.log"),
+        ) ?: return@withContext null
+
+        raw.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+    }
+
     private fun fetchUnifiedFromMulticastDetailed(
         config: AppConfig,
         requestRefresh: Boolean = false,

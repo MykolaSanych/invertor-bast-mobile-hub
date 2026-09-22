@@ -23,7 +23,7 @@ data class DashboardUiState(
 )
 
 class DashboardViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = StatusRepository(application)
+    val repository = StatusRepository(application)
 
     private val _uiState = MutableStateFlow(DashboardUiState())
     val uiState: StateFlow<DashboardUiState> = _uiState

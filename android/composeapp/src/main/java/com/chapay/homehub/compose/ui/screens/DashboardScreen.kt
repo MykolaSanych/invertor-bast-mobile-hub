@@ -18,7 +18,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.Garage
@@ -75,7 +74,6 @@ fun DashboardScreen(
     onRefresh: () -> Unit,
     onOpenDevice: (String) -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenScheme: () -> Unit,
     onTriggerGate: () -> Unit,
     onToggleLight: () -> Unit,
 ) {
@@ -89,9 +87,6 @@ fun DashboardScreen(
                 title = { Text("Мій дім") },
                 actions = {
                     ConnectionBadge(lastSuccessAtMs = uiState.lastSuccessAtMs, hasError = uiState.error != null)
-                    IconButton(onClick = onOpenScheme) {
-                        Icon(Icons.Filled.AccountTree, contentDescription = "Схема живлення")
-                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = "Налаштування")
                     }
