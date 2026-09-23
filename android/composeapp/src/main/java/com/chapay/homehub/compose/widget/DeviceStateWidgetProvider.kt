@@ -20,10 +20,16 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
         StatusWidgetProvider.enqueueRefresh(context)
     }
 
+    // onUpdate() виявився на цьому пристрої несподівано "балакучим" -
+    // AppWidgetServiceImpl/PackageManager перевикликали його раз на ~9-10с
+    // (причина поза цим кодом - схоже на поведінку конкретного лаунчера/OEM,
+    // а не на щось, спричинене нашими запитами). Раніше тут одразу
+    // домальовувався ПОРОЖНІЙ RemoteViews (усі поля null) перед асинхронним
+    // enqueueRefresh - тобто віджет щоразу на мить "блимав" рисками, а тоді
+    // знову заповнювався. Тепер onUpdate лише плаче фонове оновлення й НЕ
+    // чіпає вже намальований віджет - останні реальні дані лишаються на
+    // екрані, поки не прийде свіжий успішний фетч.
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        if (appWidgetIds.isNotEmpty()) {
-            appWidgetManager.updateAppWidget(appWidgetIds, buildRemoteViews(context, null, pulseActive = false))
-        }
         StatusWidgetProvider.enqueueRefresh(context)
     }
 
@@ -34,7 +40,6 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
         newOptions: android.os.Bundle,
     ) {
         super.onAppWidgetOptionsChanged(context, appWidgetManager, appWidgetId, newOptions)
-        appWidgetManager.updateAppWidget(appWidgetId, buildRemoteViews(context, null, pulseActive = false))
         StatusWidgetProvider.enqueueRefresh(context)
     }
 

@@ -69,8 +69,21 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                         lastSuccessAtMs = System.currentTimeMillis(),
                     )
                 }
-                if (StatusWidgetProvider.hasActiveWidgets(getApplication())) {
-                    StatusWidgetProvider.updateAllWidgets(getApplication(), unified)
+                // fetchUnified() ніколи не кидає виняток - при мережевій
+                // помилці сама повертає порожній UnifiedStatus() (усі поля
+                // null). Без цієї перевірки транзиентна помилка одного
+                // опитування перетирала б віджет рисками поверх щойно
+                // показаних реальних даних.
+                val hasAnyData = unified.inverter != null || unified.loadController != null || unified.garage != null
+                if (hasAnyData && StatusWidgetProvider.hasActiveWidgets(getApplication())) {
+                    // triggerPulse=false: цей виклик спрацьовує на КОЖЕН цикл
+                    // живого опитування (раз на кілька секунд, поки застосунок
+                    // відкрито) - типовий пульс-ефект тут зайвий і, головне,
+                    // сам собою планує ЩЕ ОДИН незалежний мережевий запит
+                    // через 3.2с (StatusWidgetRefreshWorker), який раз у раз
+                    // "перетирав" щойно показані дані рисками при найменшій
+                    // затримці відповіді хоч одного з трьох пристроїв.
+                    StatusWidgetProvider.updateAllWidgets(getApplication(), unified, triggerPulse = false)
                 }
             }
             .onFailure { err ->

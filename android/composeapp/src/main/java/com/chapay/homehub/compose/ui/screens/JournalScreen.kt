@@ -38,6 +38,7 @@ import com.chapay.homehub.compose.ui.theme.AccentGrid
 import com.chapay.homehub.compose.ui.theme.SurfaceContainer
 import com.chapay.homehub.compose.ui.theme.TextMuted
 import com.chapay.homehub.compose.ui.theme.TextPrimary
+import kotlinx.coroutines.delay
 
 private val LOG_LINE_REGEX = Regex("""^(\d{2}:\d{2}:\d{2})\s*\[([\w-]+)]\s*(.*)$""")
 
@@ -60,11 +61,18 @@ fun JournalScreen(config: AppConfig, repository: StatusRepository) {
     var entries by remember { mutableStateOf<List<LogEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
 
+    // Та сама причина, що в TimelineScreen/EnergyChartScreen: вкладка
+    // лишається живою в пам'яті між перемиканнями нижньої навігації.
     LaunchedEffect(date, config) {
-        loading = true
-        val lines = runCatching { repository.fetchLoadControllerLogLines(config, date) }.getOrNull()
-        entries = lines?.map(::parseLogLine)?.asReversed() ?: emptyList()
-        loading = false
+        var firstLoad = true
+        while (true) {
+            if (firstLoad) loading = true
+            val lines = runCatching { repository.fetchLoadControllerLogLines(config, date) }.getOrNull()
+            entries = lines?.map(::parseLogLine)?.asReversed() ?: emptyList()
+            loading = false
+            firstLoad = false
+            delay(30_000)
+        }
     }
 
     Scaffold(

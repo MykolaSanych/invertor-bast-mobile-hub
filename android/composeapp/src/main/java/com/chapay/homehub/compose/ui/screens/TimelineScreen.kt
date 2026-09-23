@@ -44,6 +44,7 @@ import com.chapay.homehub.compose.ui.theme.AccentPv
 import com.chapay.homehub.compose.ui.theme.OutlineSubtle
 import com.chapay.homehub.compose.ui.theme.SurfaceContainer
 import com.chapay.homehub.compose.ui.theme.TextMuted
+import kotlinx.coroutines.delay
 
 private data class TimelineSample(val minute: Int, val flags: Int)
 
@@ -62,19 +63,28 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
     var samples by remember { mutableStateOf<List<TimelineSample>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
 
+    // Той самий цикл, що і в EnergyChartScreen: вкладка лишається живою в
+    // пам'яті між перемиканнями нижньої навігації (saveState/restoreState),
+    // тож одноразового ефекту не досить - інакше хронологія "замерзає" на
+    // моменті першого відкриття вкладки.
     LaunchedEffect(date, config) {
-        loading = true
-        val payload = runCatching { repository.fetchLoadControllerHistory(config, date) }.getOrNull()
-        val rows = payload?.optJSONArray("samples")
-        val parsed = mutableListOf<TimelineSample>()
-        if (rows != null) {
-            for (i in 0 until rows.length()) {
-                val row = rows.optJSONObject(i) ?: continue
-                parsed.add(TimelineSample(row.optInt("m", -1), row.optInt("f", 0)))
+        var firstLoad = true
+        while (true) {
+            if (firstLoad) loading = true
+            val payload = runCatching { repository.fetchLoadControllerHistory(config, date) }.getOrNull()
+            val rows = payload?.optJSONArray("samples")
+            val parsed = mutableListOf<TimelineSample>()
+            if (rows != null) {
+                for (i in 0 until rows.length()) {
+                    val row = rows.optJSONObject(i) ?: continue
+                    parsed.add(TimelineSample(row.optInt("m", -1), row.optInt("f", 0)))
+                }
             }
+            samples = parsed.filter { it.minute in 0..1439 }.sortedBy { it.minute }
+            loading = false
+            firstLoad = false
+            delay(30_000)
         }
-        samples = parsed.filter { it.minute in 0..1439 }.sortedBy { it.minute }
-        loading = false
     }
 
     Scaffold(

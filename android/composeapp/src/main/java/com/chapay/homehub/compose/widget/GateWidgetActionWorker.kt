@@ -9,6 +9,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.chapay.homehub.compose.data.AppConfigStorage
 import com.chapay.homehub.compose.data.StatusRepository
+import com.chapay.homehub.compose.data.UnifiedStatus
 
 class GateWidgetActionWorker(
     appContext: Context,
@@ -27,17 +28,28 @@ class GateWidgetActionWorker(
                 )
             }
             val status = repository.fetchUnified(config)
-            StatusWidgetProvider.updateAllWidgets(applicationContext, status)
+            // Див. коментар у StatusWidgetRefreshWorker: порожній
+            // (усі-null) статус не кидає виняток, лише не показуємо його,
+            // щоб не перетерти рисками вже показані реальні дані.
+            if (hasAnyModuleData(status)) {
+                StatusWidgetProvider.updateAllWidgets(applicationContext, status)
+            }
             Result.success()
         }.getOrElse { error ->
             Log.w(TAG, "Gate widget action failed: ${error.message}")
             runCatching {
                 val config = AppConfigStorage.load(applicationContext)
                 val status = repository.fetchUnified(config)
-                StatusWidgetProvider.updateAllWidgets(applicationContext, status, triggerPulse = false)
+                if (hasAnyModuleData(status)) {
+                    StatusWidgetProvider.updateAllWidgets(applicationContext, status, triggerPulse = false)
+                }
             }
             Result.success()
         }
+    }
+
+    private fun hasAnyModuleData(status: UnifiedStatus): Boolean {
+        return status.inverter != null || status.loadController != null || status.garage != null
     }
 
     companion object {

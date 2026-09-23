@@ -26,10 +26,9 @@ class StatusWidgetProvider : AppWidgetProvider() {
         enqueueRefresh(context)
     }
 
+    // Див. коментар у DeviceStateWidgetProvider.onUpdate - той самий фікс:
+    // не домальовувати порожній стан перед фоновим оновленням.
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        if (appWidgetIds.isNotEmpty()) {
-            appWidgetManager.updateAppWidget(appWidgetIds, buildRemoteViews(context, null, pulseActive = false))
-        }
         enqueueRefresh(context)
     }
 
@@ -40,7 +39,6 @@ class StatusWidgetProvider : AppWidgetProvider() {
         newOptions: android.os.Bundle,
     ) {
         super.onAppWidgetOptionsChanged(context, appWidgetManager, appWidgetId, newOptions)
-        appWidgetManager.updateAppWidget(appWidgetId, buildRemoteViews(context, null, pulseActive = false))
         enqueueRefresh(context)
     }
 

@@ -49,6 +49,7 @@ import com.chapay.homehub.compose.ui.theme.AccentPv
 import com.chapay.homehub.compose.ui.theme.SurfaceContainer
 import com.chapay.homehub.compose.ui.theme.TextMuted
 import com.chapay.homehub.compose.ui.theme.TextPrimary
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 private data class HourBar(val hour: Int, val pv: Double, val home: Double, val grid: Double)
@@ -63,38 +64,49 @@ fun EnergyChartScreen(config: AppConfig, repository: StatusRepository, onBack: (
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
 
+    // Навігація через нижні вкладки тримає цей composable живим у пам'яті
+    // (saveState/restoreState) - одноразовий LaunchedEffect(date, config) не
+    // спрацював би повторно при поверненні на вкладку тим самим днем, і
+    // графік показував би дедалі старіші дані. Тому - цикл з періодичним
+    // оновленням, поки екран відкритий; спінер лише на першому завантаженні
+    // цієї (дата, конфіг) комбінації, щоб фонові оновлення не блимали ним.
     LaunchedEffect(date, config) {
-        loading = true
-        errorText = null
-        val payload = runCatching { repository.fetchInverterDaily(config, date) }.getOrNull()
-        if (payload == null) {
-            errorText = "немає даних (модуль інвертора недоступний або дані за цю добу відсутні)"
-            bars = emptyList()
-        } else {
-            val hoursArr = payload.optJSONArray("hours")
-            val parsed = mutableListOf<HourBar>()
-            if (hoursArr != null) {
-                for (i in 0 until hoursArr.length()) {
-                    val row = hoursArr.optJSONObject(i) ?: continue
-                    parsed.add(
-                        HourBar(
-                            hour = row.optInt("hour", i),
-                            pv = row.optDouble("pv", 0.0),
-                            home = row.optDouble("home", 0.0),
-                            grid = row.optDouble("grid", 0.0),
-                        ),
-                    )
+        var firstLoad = true
+        while (true) {
+            if (firstLoad) loading = true
+            errorText = null
+            val payload = runCatching { repository.fetchInverterDaily(config, date) }.getOrNull()
+            if (payload == null) {
+                errorText = "немає даних (модуль інвертора недоступний або дані за цю добу відсутні)"
+                bars = emptyList()
+            } else {
+                val hoursArr = payload.optJSONArray("hours")
+                val parsed = mutableListOf<HourBar>()
+                if (hoursArr != null) {
+                    for (i in 0 until hoursArr.length()) {
+                        val row = hoursArr.optJSONObject(i) ?: continue
+                        parsed.add(
+                            HourBar(
+                                hour = row.optInt("hour", i),
+                                pv = row.optDouble("pv", 0.0),
+                                home = row.optDouble("home", 0.0),
+                                grid = row.optDouble("grid", 0.0),
+                            ),
+                        )
+                    }
                 }
+                bars = parsed
+                val t = payload.optJSONObject("totals")
+                totals = Triple(
+                    t?.optDouble("dailyPV", 0.0) ?: 0.0,
+                    t?.optDouble("dailyHome", 0.0) ?: 0.0,
+                    t?.optDouble("dailyGrid", 0.0) ?: 0.0,
+                )
             }
-            bars = parsed
-            val t = payload.optJSONObject("totals")
-            totals = Triple(
-                t?.optDouble("dailyPV", 0.0) ?: 0.0,
-                t?.optDouble("dailyHome", 0.0) ?: 0.0,
-                t?.optDouble("dailyGrid", 0.0) ?: 0.0,
-            )
+            loading = false
+            firstLoad = false
+            delay(30_000)
         }
-        loading = false
     }
 
     Scaffold(
