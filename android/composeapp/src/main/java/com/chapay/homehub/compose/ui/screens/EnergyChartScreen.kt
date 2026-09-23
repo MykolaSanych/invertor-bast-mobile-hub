@@ -62,11 +62,15 @@ import com.chapay.homehub.compose.ui.theme.SurfaceContainerHigh
 import com.chapay.homehub.compose.ui.theme.TextMuted
 import com.chapay.homehub.compose.ui.theme.TextPrimary
 import kotlinx.coroutines.delay
+import kotlin.math.abs
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
-private data class HourPoint(val hour: Int, val pv: Double, val home: Double, val grid: Double)
+// Точка графіка: середня потужність (Вт) за інтервал, що починається з minute.
+// Для 15-хвилинних слотів це pv_w/home_w/grid_w; для старої прошивки без слотів
+// - годинні Вт·год (числово рівні середній потужності за годину).
+private data class ChartPoint(val minute: Int, val pv: Double, val home: Double, val grid: Double)
 
 private data class Series(val label: String, val color: Color, val values: List<Double>)
 
@@ -80,7 +84,8 @@ fun EnergyChartScreen(
 ) {
     LockLandscapeOrientation()
     var date by remember { mutableStateOf(todayIso()) }
-    var points by remember { mutableStateOf<List<HourPoint>>(emptyList()) }
+    var points by remember { mutableStateOf<List<ChartPoint>>(emptyList()) }
+    var stepMinutes by remember { mutableStateOf(60) }
     var savedTotals by remember { mutableStateOf(Triple(0.0, 0.0, 0.0)) }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
@@ -99,20 +104,37 @@ fun EnergyChartScreen(
                 errorText = "немає даних (модуль інвертора недоступний або дані за цю добу відсутні)"
                 points = emptyList()
             } else {
-                val hoursArr = payload.optJSONArray("hours")
-                val parsed = mutableListOf<HourPoint>()
-                if (hoursArr != null) {
-                    for (i in 0 until hoursArr.length()) {
-                        val row = hoursArr.optJSONObject(i) ?: continue
+                val slotsArr = payload.optJSONArray("slots")
+                val parsed = mutableListOf<ChartPoint>()
+                if (slotsArr != null && slotsArr.length() > 0) {
+                    for (i in 0 until slotsArr.length()) {
+                        val row = slotsArr.optJSONObject(i) ?: continue
                         parsed.add(
-                            HourPoint(
-                                hour = row.optInt("hour", i),
-                                pv = row.optDouble("pv", 0.0),
-                                home = row.optDouble("home", 0.0),
-                                grid = row.optDouble("grid", 0.0),
+                            ChartPoint(
+                                minute = row.optInt("m", i * 15),
+                                pv = row.optDouble("pv_w", 0.0),
+                                home = row.optDouble("home_w", 0.0),
+                                grid = row.optDouble("grid_w", 0.0),
                             ),
                         )
                     }
+                    stepMinutes = 15
+                } else {
+                    val hoursArr = payload.optJSONArray("hours")
+                    if (hoursArr != null) {
+                        for (i in 0 until hoursArr.length()) {
+                            val row = hoursArr.optJSONObject(i) ?: continue
+                            parsed.add(
+                                ChartPoint(
+                                    minute = row.optInt("hour", i) * 60,
+                                    pv = row.optDouble("pv", 0.0),
+                                    home = row.optDouble("home", 0.0),
+                                    grid = row.optDouble("grid", 0.0),
+                                ),
+                            )
+                        }
+                    }
+                    stepMinutes = 60
                 }
                 points = parsed
                 val t = payload.optJSONObject("totals")
@@ -155,7 +177,7 @@ fun EnergyChartScreen(
                 .padding(horizontal = 12.dp, vertical = 4.dp),
         ) {
             DateNavHeader(date = date, onDateChange = { date = it })
-            SummaryLegendRow(shownTotals)
+            SummaryLegendRow(shownTotals, if (stepMinutes == 15) "Вт, середня за 15 хв" else "Вт, середня за годину")
             Spacer(Modifier.height(6.dp))
             when {
                 loading -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -163,7 +185,7 @@ fun EnergyChartScreen(
                 }
                 errorText != null -> Text(errorText.orEmpty(), color = TextMuted, modifier = Modifier.padding(16.dp))
                 else -> {
-                    EnergyLineChart(points, modifier = Modifier.fillMaxWidth().weight(1f))
+                    EnergyLineChart(points, stepMinutes, modifier = Modifier.fillMaxWidth().weight(1f))
                     if (unsavedHomeWh > 50.0) {
                         Text(
                             text = "В історію записано ${savedTotals.second.roundToInt()} з " +
@@ -182,7 +204,7 @@ fun EnergyChartScreen(
 
 /** Легенда і добові підсумки в одному рядку: колір-крапка + назва + значення. */
 @Composable
-private fun SummaryLegendRow(totals: Triple<Double, Double, Double>) {
+private fun SummaryLegendRow(totals: Triple<Double, Double, Double>, unitNote: String) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -191,6 +213,8 @@ private fun SummaryLegendRow(totals: Triple<Double, Double, Double>) {
         LegendItem("сонце", totals.first, AccentPv)
         LegendItem("будинок", totals.second, AccentBattery)
         LegendItem("мережа", totals.third, AccentGrid)
+        Spacer(Modifier.weight(1f))
+        Text(unitNote, style = MaterialTheme.typography.labelSmall, color = TextMuted)
     }
 }
 
@@ -217,10 +241,12 @@ private fun niceAxisMax(rawMax: Double): Double {
     return step * 4.0
 }
 
+private fun hhmm(minute: Int): String = "%d:%02d".format(minute / 60, minute % 60)
+
 @Composable
-private fun EnergyLineChart(points: List<HourPoint>, modifier: Modifier = Modifier) {
+private fun EnergyLineChart(points: List<ChartPoint>, stepMinutes: Int, modifier: Modifier = Modifier) {
     if (points.isEmpty()) {
-        Text("немає погодинних даних", color = TextMuted, modifier = modifier.padding(16.dp))
+        Text("немає даних за цю добу", color = TextMuted, modifier = modifier.padding(16.dp))
         return
     }
 
@@ -230,6 +256,8 @@ private fun EnergyLineChart(points: List<HourPoint>, modifier: Modifier = Modifi
         Series("мережа", AccentGrid, points.map { it.grid }),
     )
     val axisMax = niceAxisMax(series.maxOf { s -> s.values.maxOrNull() ?: 0.0 })
+    // Вісь X - 0..(1440 - крок), щоб останній інтервал доби лягав на правий край.
+    val spanMinutes = (1440 - stepMinutes).coerceAtLeast(1)
     var selected by remember(points) { mutableStateOf<Int?>(null) }
 
     val density = LocalDensity.current
@@ -264,14 +292,14 @@ private fun EnergyLineChart(points: List<HourPoint>, modifier: Modifier = Modifi
             modifier = Modifier
                 .fillMaxSize()
                 .padding(start = 8.dp, end = 16.dp, top = 12.dp, bottom = 8.dp)
-                .pointerInput(points) {
+                .pointerInput(points, stepMinutes) {
                     val leftPx = 44.dp.toPx()
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         fun pick(x: Float) {
                             val plotW = size.width - leftPx
-                            val step = plotW / (points.size - 1).coerceAtLeast(1)
-                            selected = ((x - leftPx) / step).roundToInt().coerceIn(0, points.size - 1)
+                            val minute = ((x - leftPx) / plotW * spanMinutes).coerceIn(0f, spanMinutes.toFloat())
+                            selected = points.indices.minByOrNull { abs(points[it].minute - minute) }
                         }
                         pick(down.position.x)
                         do {
@@ -290,10 +318,8 @@ private fun EnergyLineChart(points: List<HourPoint>, modifier: Modifier = Modifi
             val plotTop = 6.dp.toPx()
             val plotW = size.width - plotLeft
             val plotH = size.height - plotTop - bottomMargin
-            val lastIndex = (points.size - 1).coerceAtLeast(1)
-            val stepX = plotW / lastIndex
 
-            fun xAt(i: Int) = plotLeft + i * stepX
+            fun xAt(minute: Int) = plotLeft + minute.toFloat() / spanMinutes * plotW
             fun yAt(v: Double) = plotTop + plotH - (v / axisMax * plotH).toFloat().coerceIn(0f, plotH)
 
             // Сітка й підписи осі Y - тихі, не змагаються з даними.
@@ -312,45 +338,51 @@ private fun EnergyLineChart(points: List<HourPoint>, modifier: Modifier = Modifi
             }
 
             // Підписи осі X - кожні 2 години.
-            points.forEachIndexed { i, p ->
-                if (p.hour % 2 == 0) {
-                    val label = "${p.hour}"
-                    drawContext.canvas.nativeCanvas.drawText(
-                        label,
-                        xAt(i) - axisPaint.measureText(label) / 2f,
-                        size.height - 4.dp.toPx(),
-                        axisPaint,
-                    )
-                }
+            for (h in 0..22 step 2) {
+                val label = "$h"
+                drawContext.canvas.nativeCanvas.drawText(
+                    label,
+                    xAt(h * 60) - axisPaint.measureText(label) / 2f,
+                    size.height - 4.dp.toPx(),
+                    axisPaint,
+                )
             }
 
-            // Лінії: тонкі (2dp), заокруглені з'єднання, кожна серія - своїм кольором.
+            // Лінії: тонкі (2dp). Розрив, якщо між сусідніми точками пропущено
+            // інтервали - не вигадуємо значень, яких прошивка не мала.
             val lineStroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
             series.forEach { s ->
                 val path = Path()
                 s.values.forEachIndexed { i, v ->
-                    val x = xAt(i)
+                    val x = xAt(points[i].minute)
                     val y = yAt(v)
-                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                    val contiguous = i > 0 && points[i].minute - points[i - 1].minute <= stepMinutes * 3 / 2
+                    if (contiguous) path.lineTo(x, y) else path.moveTo(x, y)
                 }
                 drawPath(path, s.color, style = lineStroke)
             }
 
-            // Маркери на точках даних (діаметр >= 8dp), 2dp кільце кольору поверхні.
-            val markerR = 4.dp.toPx()
-            val ring = 2.dp.toPx()
-            series.forEach { s ->
-                s.values.forEachIndexed { i, v ->
-                    if (v > 0.0) {
-                        drawCircle(SurfaceContainer, radius = markerR + ring, center = Offset(xAt(i), yAt(v)))
-                        drawCircle(s.color, radius = markerR, center = Offset(xAt(i), yAt(v)))
+            // Маркери (діаметр >= 8dp) лише коли точок небагато, інакше зливаються.
+            if (points.size <= 30) {
+                val markerR = 4.dp.toPx()
+                val ring = 2.dp.toPx()
+                series.forEach { s ->
+                    s.values.forEachIndexed { i, v ->
+                        if (v > 0.0) {
+                            val c = Offset(xAt(points[i].minute), yAt(v))
+                            drawCircle(SurfaceContainer, radius = markerR + ring, center = c)
+                            drawCircle(s.color, radius = markerR, center = c)
+                        }
                     }
                 }
             }
 
-            // Перехрестя й підказка для вибраної години.
+            // Перехрестя й підказка для вибраної точки.
             selected?.let { idx ->
-                val x = xAt(idx)
+                val p = points[idx]
+                val x = xAt(p.minute)
+                val markerR = 4.dp.toPx()
+                val ring = 2.dp.toPx()
                 drawLine(
                     TextMuted.copy(alpha = 0.6f),
                     Offset(x, plotTop),
@@ -359,12 +391,12 @@ private fun EnergyLineChart(points: List<HourPoint>, modifier: Modifier = Modifi
                 )
                 series.forEach { s ->
                     val cy = yAt(s.values[idx])
-                    drawCircle(SurfaceContainer, radius = markerR + ring + 1.dp.toPx(), center = Offset(x, cy))
-                    drawCircle(s.color, radius = markerR + 1.dp.toPx(), center = Offset(x, cy))
+                    drawCircle(SurfaceContainer, radius = markerR + ring, center = Offset(x, cy))
+                    drawCircle(s.color, radius = markerR, center = Offset(x, cy))
                 }
 
-                val title = "${points[idx].hour}:00"
-                val rows = series.map { "${it.label}: ${it.values[idx].roundToInt()} Вт·год" }
+                val title = "${hhmm(p.minute)}-${hhmm(p.minute + stepMinutes)}"
+                val rows = series.map { "${it.label}: ${it.values[idx].roundToInt()} Вт" }
                 val pad = 8.dp.toPx()
                 val lineH = tipTextPaint.textSize * 1.35f
                 val boxW = (rows + title).maxOf { tipTextPaint.measureText(it) } + pad * 2 + 14.dp.toPx()
