@@ -17,4 +17,5 @@ dependencyResolutionManagement {
 rootProject.name = "HomeHub"
 include(":app")
 include(":composeapp")
+include(":otaflasher")
 

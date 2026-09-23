@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#12141C"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Заливка прошивок"
+        android:textColor="#F0F2F8"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="16dp"
+        android:text="Телефон має бути в тій самій Wi-Fi мережі, що й пристрої (192.168.1.x)"
+        android:textColor="#9BA3B4"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/wifiStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:padding="10dp"
+        android:background="#1E212D"
+        android:text="Перевірка Wi-Fi..."
+        android:textColor="#F0F2F8"
+        android:textSize="14sp" />
+
+    <Button
+        android:id="@+id/btnGarage"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="10dp"
+        android:backgroundTint="#8B7FE8"
+        android:padding="14dp"
+        android:text="Залити Гараж (192.168.1.4)"
+        android:textColor="#0D0F16"
+        android:textStyle="bold" />
+
+    <Button
+        android:id="@+id/btnInverter"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:backgroundTint="#5B8DEF"
+        android:padding="14dp"
+        android:text="Залити Інвертор (192.168.1.2)"
+        android:textColor="#0D0F16"
+        android:textStyle="bold" />
+
+    <ProgressBar
+        android:id="@+id/progressBar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:max="100"
+        android:progress="0"
+        android:visibility="invisible" />
+
+    <ScrollView
+        android:id="@+id/logScroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#1E212D"
+        android:padding="10dp">
+
+        <TextView
+            android:id="@+id/logText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="Готово до заливки."
+            android:textColor="#E6ECFF"
+            android:textSize="12sp" />
+    </ScrollView>
+
+</LinearLayout>
