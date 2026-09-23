@@ -139,9 +139,11 @@ fun AppNavHost(
                     JournalScreen(config = uiState.config, repository = viewModel.repository)
                 }
                 composable(ROUTE_ENERGY) {
+                    val inv = uiState.status.inverter
                     EnergyChartScreen(
                         config = uiState.config,
                         repository = viewModel.repository,
+                        liveTotals = inv?.let { Triple(it.dailyPv, it.dailyHome, it.dailyGrid) },
                         onBack = { navController.popBackStack() },
                     )
                 }
