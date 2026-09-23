@@ -11,6 +11,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private data class OtaTarget(
@@ -25,24 +26,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logText: TextView
     private lateinit var logScroll: ScrollView
     private lateinit var progressBar: ProgressBar
-    private lateinit var btnGarage: Button
-    private lateinit var btnInverter: Button
+    private lateinit var buttons: List<Button>
     private var isFlashing = false
 
     // Ті самі custom_ota_ip/custom_ota_auth, що й у platformio.ini кожного
     // пристрою.
-    private val garage = OtaTarget(
-        title = "Гараж",
-        ip = "192.168.1.4",
-        password = "npQ6bMcAzMbVayDrKTzXyzh9",
-        assetFileName = "garage_firmware.bin",
-    )
-    private val inverter = OtaTarget(
-        title = "Інвертор",
-        ip = "192.168.1.2",
-        password = "npQ6bMcAzMbVayDrKTzXyzh9",
-        assetFileName = "invertor_firmware.bin",
-    )
+    private val inverter = OtaTarget("Інвертор", "192.168.1.2", "npQ6bMcAzMbVayDrKTzXyzh9", "invertor_firmware.bin")
+    private val loadController = OtaTarget("Контролер навантаження", "192.168.1.3", "npQ6bMcAzMbVayDrKTzXyzh9", "load_controller_firmware.bin")
+    private val garage = OtaTarget("Гараж", "192.168.1.4", "npQ6bMcAzMbVayDrKTzXyzh9", "garage_firmware.bin")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,11 +43,19 @@ class MainActivity : AppCompatActivity() {
         logText = findViewById(R.id.logText)
         logScroll = findViewById(R.id.logScroll)
         progressBar = findViewById(R.id.progressBar)
-        btnGarage = findViewById(R.id.btnGarage)
-        btnInverter = findViewById(R.id.btnInverter)
 
-        btnGarage.setOnClickListener { startFlash(garage) }
-        btnInverter.setOnClickListener { startFlash(inverter) }
+        val btnAll = findViewById<Button>(R.id.btnAll)
+        val btnInverter = findViewById<Button>(R.id.btnInverter)
+        val btnLoad = findViewById<Button>(R.id.btnLoad)
+        val btnGarage = findViewById<Button>(R.id.btnGarage)
+        buttons = listOf(btnAll, btnInverter, btnLoad, btnGarage)
+
+        // "Все": спершу другорядні модулі, інвертор - останнім, щоб перезапуск
+        // головного вузла не обривав заливку решти.
+        btnAll.setOnClickListener { startFlash(listOf(loadController, garage, inverter)) }
+        btnInverter.setOnClickListener { startFlash(listOf(inverter)) }
+        btnLoad.setOnClickListener { startFlash(listOf(loadController)) }
+        btnGarage.setOnClickListener { startFlash(listOf(garage)) }
 
         updateWifiStatus()
     }
@@ -68,12 +67,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateWifiStatus() {
         val ip = currentWifiIp()
-        wifiStatusText.text = if (ip == null) {
-            "Wi-Fi не підключено. Підключись до тієї ж мережі, що й пристрої."
-        } else if (ip.startsWith("192.168.1.")) {
-            "Wi-Fi OK: телефон у мережі 192.168.1.x (адреса: $ip)"
-        } else {
-            "УВАГА: телефон у мережі $ip, а пристрої - у 192.168.1.x. Заливка, ймовірно, не спрацює."
+        wifiStatusText.text = when {
+            ip == null -> "Wi-Fi не підключено. Підключись до тієї ж мережі, що й пристрої."
+            ip.startsWith("192.168.1.") -> "Wi-Fi OK: телефон у мережі 192.168.1.x (адреса: $ip)"
+            else -> "УВАГА: телефон у мережі $ip, а пристрої - у 192.168.1.x. Заливка, ймовірно, не спрацює."
         }
     }
 
@@ -83,34 +80,50 @@ class MainActivity : AppCompatActivity() {
                 ?: return null
             @Suppress("DEPRECATION")
             val ipInt = wifiManager.connectionInfo?.ipAddress ?: 0
+            @Suppress("DEPRECATION")
             if (ipInt == 0) null else Formatter.formatIpAddress(ipInt)
         } catch (e: Exception) {
             null
         }
     }
 
-    private fun startFlash(target: OtaTarget) {
+    private fun startFlash(targets: List<OtaTarget>) {
         if (isFlashing) return
         isFlashing = true
         setButtonsEnabled(false)
         logText.text = ""
         progressBar.visibility = View.VISIBLE
-        progressBar.progress = 0
-
-        appendLog("=== Заливка: ${target.title} (${target.ip}) ===")
 
         lifecycleScope.launch {
-            val result = OtaFlasher.flash(
-                context = applicationContext,
-                espIp = target.ip,
-                password = target.password,
-                assetFileName = target.assetFileName,
-                onProgress = { msg -> runOnUiThread { appendLog(msg) } },
-                onPercent = { pct -> runOnUiThread { progressBar.progress = pct } },
-            )
-            when (result) {
-                is OtaFlasher.OtaResult.Success -> appendLog("УСПІХ: ${target.title} оновлено.")
-                is OtaFlasher.OtaResult.Failure -> appendLog("ПОМИЛКА: ${result.message}")
+            val summary = mutableListOf<String>()
+            for ((index, target) in targets.withIndex()) {
+                progressBar.progress = 0
+                appendLog("=== [${index + 1}/${targets.size}] ${target.title} (${target.ip}) ===")
+                val result = OtaFlasher.flash(
+                    context = applicationContext,
+                    espIp = target.ip,
+                    password = target.password,
+                    assetFileName = target.assetFileName,
+                    onProgress = { msg -> runOnUiThread { appendLog(msg) } },
+                    onPercent = { pct -> runOnUiThread { progressBar.progress = pct } },
+                )
+                when (result) {
+                    is OtaFlasher.OtaResult.Success -> {
+                        appendLog("УСПІХ: ${target.title} оновлено.")
+                        summary += "OK     ${target.title}"
+                    }
+                    is OtaFlasher.OtaResult.Failure -> {
+                        appendLog("ПОМИЛКА: ${result.message}")
+                        summary += "ПОМИЛКА ${target.title}"
+                    }
+                }
+                // Пристрою потрібен час перезавантажитись, перш ніж брати наступний.
+                if (index < targets.size - 1) delay(5000)
+            }
+            if (targets.size > 1) {
+                appendLog("")
+                appendLog("=== ПІДСУМОК ===")
+                summary.forEach { appendLog(it) }
             }
             isFlashing = false
             setButtonsEnabled(true)
@@ -118,8 +131,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setButtonsEnabled(enabled: Boolean) {
-        btnGarage.isEnabled = enabled
-        btnInverter.isEnabled = enabled
+        buttons.forEach { it.isEnabled = enabled }
     }
 
     private fun appendLog(line: String) {
