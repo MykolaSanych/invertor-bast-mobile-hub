@@ -1120,6 +1120,10 @@ class StatusRepository(
         val bmeTemp = json.optNullableDouble("bme_temp")
         val bmeHum = json.optNullableDouble("bme_hum")
         val bmePress = json.optNullableDouble("bme_press")
+        // Нижче порога потужність насоса - шум датчика струму: прирівнюємо до
+        // нуля (разом зі струмом), щоб картка/схема/віджет не показували "привид".
+        val pumpPowerRaw = json.optDoubleSafeAny("pump_power")
+        val pumpBelowFloor = pumpPowerRaw < PUMP_POWER_NOISE_FLOOR_W
 
         return LoadControllerStatus(
             boiler1Mode = json.optStringSafeAny("---", "mode"),
@@ -1153,8 +1157,8 @@ class StatusRepository(
             boilerCurrent = json.optDoubleSafeAny("boiler_current"),
             boilerPower = json.optDoubleSafeAny("boiler_power"),
             dailyBoiler = json.optDoubleSafeAny("daily_boiler"),
-            pumpCurrent = json.optDoubleSafeAny("pump_current"),
-            pumpPower = json.optDoubleSafeAny("pump_power"),
+            pumpCurrent = if (pumpBelowFloor) 0.0 else json.optDoubleSafeAny("pump_current"),
+            pumpPower = if (pumpBelowFloor) 0.0 else pumpPowerRaw,
             dailyPump = json.optDoubleSafeAny("daily_pump"),
             lineVoltage = json.optDoubleSafeAny("gridVolt"),
             pvW = json.optDoubleSafeAny("pv"),
@@ -1597,6 +1601,7 @@ private fun JSONObject.optStringSafeAny(fallback: String, vararg keys: String): 
     return fallback
 }
 
+private const val PUMP_POWER_NOISE_FLOOR_W = 100.0
 private const val TIME_SYNC_BROWSER_PATH = "/api/time/syncbrowser"
 private const val MULTICAST_STATUS_REQUEST_KIND_V2 = "homehub_status_request"
 

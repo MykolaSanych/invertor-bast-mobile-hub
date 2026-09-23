@@ -53,6 +53,9 @@ fun MetricCard(
     modifier: Modifier = Modifier,
     details: List<Pair<String, String>> = emptyList(),
     onClick: (() -> Unit)? = null,
+    // Колір піктограми окремо від акценту рамки: іконка може бути індикатором
+    // стану (сонце є/немає, мережа є/немає), а рамка лишається кольором картки.
+    iconTint: Color = accent,
 ) {
     val pulse = remember { Animatable(0f) }
     LaunchedEffect(valueText) {
@@ -74,7 +77,7 @@ fun MetricCard(
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+                Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(
                     text = title,

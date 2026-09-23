@@ -53,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.chapay.homehub.compose.data.GarageStatus
@@ -67,6 +68,8 @@ import com.chapay.homehub.compose.ui.theme.AccentGrid
 import com.chapay.homehub.compose.ui.theme.AccentLoad
 import com.chapay.homehub.compose.ui.theme.AccentPump
 import com.chapay.homehub.compose.ui.theme.AccentPv
+import com.chapay.homehub.compose.ui.theme.IndicatorOff
+import com.chapay.homehub.compose.ui.theme.PV_PRESENT_VOLTAGE
 import com.chapay.homehub.compose.ui.theme.StatusAlert
 import com.chapay.homehub.compose.ui.theme.StatusGood
 import com.chapay.homehub.compose.ui.theme.SurfaceContainer
@@ -124,6 +127,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentPv,
                         icon = Icons.Filled.WbSunny,
+                        iconTint = pvIndicatorColor(inverter),
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "напруга" to "${formatVolts(it.pvVoltage)} В" },
@@ -137,6 +141,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentGrid,
                         icon = Icons.Filled.ElectricBolt,
+                        iconTint = gridIndicatorColor(inverter),
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "режим" to it.mode },
@@ -244,6 +249,14 @@ fun DashboardScreen(
         }
     }
 }
+
+/** Сонце: жовте, коли напруга PV-панелей >= [PV_PRESENT_VOLTAGE], інакше чорне. */
+internal fun pvIndicatorColor(inverter: InverterStatus?): Color =
+    if ((inverter?.pvVoltage ?: 0.0) >= PV_PRESENT_VOLTAGE) AccentPv else IndicatorOff
+
+/** Блискавка мережі: синя, коли інвертор бачить напругу мережі (grid_present), інакше чорна. */
+internal fun gridIndicatorColor(inverter: InverterStatus?): Color =
+    if (inverter?.gridPresent == true) AccentGrid else IndicatorOff
 
 /** Рядок із двох карток однакової висоти (за найвищою в парі), щоб сітка на
  * дашборді не "стрибала" через різну кількість рядків деталей у картках. */

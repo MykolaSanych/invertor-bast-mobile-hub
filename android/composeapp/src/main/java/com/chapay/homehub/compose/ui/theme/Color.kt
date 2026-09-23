@@ -25,6 +25,12 @@ val AccentBoiler = Color(0xFFD97757) // бойлери - теракотовий 
 val AccentPump = Color(0xFF3FB6B0) // насос - бірюзовий (вода/рух)
 val AccentGate = Color(0xFF8B7FE8) // ворота - фіолетовий (механіка)
 
+// Піктограма-індикатор "немає" (сонця/мережі): чорна, як просив користувач.
+val IndicatorOff = Color(0xFF000000)
+
+// Напруга PV-панелей, від якої вважаємо, що сонце є (нижче - панелі "сплять").
+const val PV_PRESENT_VOLTAGE = 222.0
+
 val StatusGood = AccentBattery
 val StatusWarn = AccentPv
 val StatusAlert = AccentLoad

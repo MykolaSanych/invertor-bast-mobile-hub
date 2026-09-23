@@ -11,7 +11,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -42,6 +41,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.dp
 import com.chapay.homehub.compose.ui.DashboardUiState
 import com.chapay.homehub.compose.ui.theme.AccentBattery
@@ -64,6 +64,10 @@ private data class SchemeNode(
     val icon: ImageVector,
     val xFraction: Float,
     val yFraction: Float,
+    // Другий рядок під потужністю (напруга / SOC); порожній - не показуємо.
+    val subText: String = "",
+    // Колір піктограми, якщо вона - індикатор стану (сонце/мережа); за замовчуванням - акцент.
+    val iconTint: Color = accent,
 )
 
 private data class SchemeLink(
@@ -89,11 +93,25 @@ fun SchemeScreen(uiState: DashboardUiState, onBack: () -> Unit) {
     val boiler2W = garage?.boilerPower ?: 0.0
 
     val nodes = listOf(
-        SchemeNode("pv", "СОНЦЕ", "${pvW.roundToInt()} Вт", AccentPv, Icons.Filled.WbSunny, 0.22f, 0.09f),
-        SchemeNode("grid", "МЕРЕЖА", "${gridW.roundToInt()} Вт", AccentGrid, Icons.Filled.ElectricBolt, 0.78f, 0.09f),
+        SchemeNode(
+            "pv", "СОНЦЕ", "${pvW.roundToInt()} Вт", AccentPv, Icons.Filled.WbSunny, 0.22f, 0.09f,
+            subText = inverter?.let { "${it.pvVoltage.roundToInt()} В" } ?: "",
+            iconTint = pvIndicatorColor(inverter),
+        ),
+        SchemeNode(
+            "grid", "МЕРЕЖА", "${gridW.roundToInt()} Вт", AccentGrid, Icons.Filled.ElectricBolt, 0.78f, 0.09f,
+            subText = inverter?.let { "${it.lineVoltage.roundToInt()} В" } ?: "",
+            iconTint = gridIndicatorColor(inverter),
+        ),
         SchemeNode("inverter", "ІНВЕРТОР", "", TextPrimary, Icons.Filled.Memory, 0.5f, 0.30f),
-        SchemeNode("battery", "АКБ", "${batteryW.roundToInt()} Вт", AccentBattery, Icons.Filled.BatteryChargingFull, 0.22f, 0.51f),
-        SchemeNode("load", "БУДИНОК", "${loadW.roundToInt()} Вт", AccentLoad, Icons.Filled.Home, 0.78f, 0.51f),
+        SchemeNode(
+            "battery", "АКБ", "${batteryW.roundToInt()} Вт", AccentBattery, Icons.Filled.BatteryChargingFull, 0.22f, 0.51f,
+            subText = inverter?.let { "SOC ${it.batterySoc.roundToInt()}%" } ?: "",
+        ),
+        SchemeNode(
+            "load", "БУДИНОК", "${loadW.roundToInt()} Вт", AccentLoad, Icons.Filled.Home, 0.78f, 0.51f,
+            subText = inverter?.let { "${it.outputVoltage.roundToInt()} В" } ?: "",
+        ),
         SchemeNode("boiler1", "БОЙЛЕР 1", "${boiler1W.roundToInt()} Вт", AccentBoiler, Icons.Filled.Whatshot, 0.18f, 0.74f),
         SchemeNode("pump", "НАСОС", "${pumpW.roundToInt()} Вт", AccentPump, Icons.Filled.Water, 0.5f, 0.74f),
         SchemeNode("boiler2", "БОЙЛЕР 2", "${boiler2W.roundToInt()} Вт", AccentBoiler, Icons.Filled.Whatshot, 0.82f, 0.74f),
@@ -139,13 +157,20 @@ fun SchemeScreen(uiState: DashboardUiState, onBack: () -> Unit) {
             )
 
             nodes.forEach { node ->
+                // Центруємо картку на вузлі за її реальним розміром: висота
+                // різна (є/немає рядка напруги чи SOC), а лінії тягнуться
+                // рівно в центр вузла.
                 SchemeNodeChip(
                     node = node,
-                    modifier = Modifier
-                        .offset(
-                            x = (maxWidth * node.xFraction) - 44.dp,
-                            y = (maxHeight * node.yFraction) - 30.dp,
-                        ),
+                    modifier = Modifier.layout { measurable, c ->
+                        val p = measurable.measure(c.copy(minWidth = 0, minHeight = 0))
+                        layout(c.maxWidth, c.maxHeight) {
+                            p.place(
+                                (c.maxWidth * node.xFraction - p.width / 2f).roundToInt(),
+                                (c.maxHeight * node.yFraction - p.height / 2f).roundToInt(),
+                            )
+                        }
+                    },
                 )
             }
         }
@@ -213,7 +238,7 @@ private fun SchemeNodeChip(node: SchemeNode, modifier: Modifier = Modifier) {
             Icon(
                 imageVector = node.icon,
                 contentDescription = null,
-                tint = node.accent,
+                tint = node.iconTint,
                 modifier = Modifier
                     .size(22.dp)
                     .padding(bottom = 2.dp),
@@ -229,6 +254,14 @@ private fun SchemeNodeChip(node: SchemeNode, modifier: Modifier = Modifier) {
                     text = node.valueText,
                     style = MaterialTheme.typography.labelLarge,
                     color = TextPrimary,
+                    maxLines = 1,
+                )
+            }
+            if (node.subText.isNotEmpty()) {
+                Text(
+                    text = node.subText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted,
                     maxLines = 1,
                 )
             }
