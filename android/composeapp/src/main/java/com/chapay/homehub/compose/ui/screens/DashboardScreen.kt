@@ -53,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -92,6 +93,12 @@ fun DashboardScreen(
     val inverter = uiState.status.inverter
     val loadController = uiState.status.loadController
     val garage = uiState.status.garage
+    // Модуль, що давно не відповів (лагає зв'язок), - картки тьмяніють, дані лишаються.
+    val nowMs = System.currentTimeMillis()
+    fun isStale(atMs: Long) = atMs > 0L && nowMs - atMs > STALE_DATA_MS
+    val inverterStale = isStale(uiState.inverterAtMs)
+    val loadStale = isStale(uiState.loadAtMs)
+    val garageStale = isStale(uiState.garageAtMs)
 
     Scaffold(
         topBar = {
@@ -123,6 +130,7 @@ fun DashboardScreen(
                 CardRow {
                     MetricCard(
                         title = "СОНЦЕ",
+                        stale = inverterStale,
                         valueText = formatWatts(pickPvW(inverter, loadController, garage)),
                         unit = "Вт",
                         accent = AccentPv,
@@ -137,6 +145,7 @@ fun DashboardScreen(
                     )
                     MetricCard(
                         title = "МЕРЕЖА",
+                        stale = inverterStale,
                         valueText = formatWatts(pickGridPowerW(inverter, loadController, garage)),
                         unit = "Вт",
                         accent = AccentGrid,
@@ -155,6 +164,7 @@ fun DashboardScreen(
                 CardRow {
                     MetricCard(
                         title = "АКБ",
+                        stale = inverterStale,
                         valueText = formatPercent(pickBatterySoc(inverter, loadController, garage)),
                         unit = "%",
                         accent = AccentBattery,
@@ -168,6 +178,7 @@ fun DashboardScreen(
                     )
                     MetricCard(
                         title = "НАВАНТАЖЕННЯ",
+                        stale = inverterStale,
                         valueText = formatWatts(pickLoadW(inverter, loadController, garage)),
                         unit = "Вт",
                         accent = AccentLoad,
@@ -184,6 +195,7 @@ fun DashboardScreen(
                 CardRow {
                     MetricCard(
                         title = "БОЙЛЕР 1",
+                        stale = loadStale,
                         valueText = formatWatts(loadController?.boilerPower ?: 0.0),
                         unit = "Вт",
                         accent = AccentBoiler,
@@ -199,6 +211,7 @@ fun DashboardScreen(
                     )
                     MetricCard(
                         title = "НАСОС",
+                        stale = loadStale,
                         valueText = formatWatts(loadController?.pumpPower ?: 0.0),
                         unit = "Вт",
                         accent = AccentPump,
@@ -225,6 +238,7 @@ fun DashboardScreen(
                 ) {
                     MetricCard(
                         title = "БОЙЛЕР 2",
+                        stale = garageStale,
                         valueText = formatWatts(garage?.boilerPower ?: 0.0),
                         unit = "Вт",
                         accent = AccentBoiler,
@@ -242,13 +256,16 @@ fun DashboardScreen(
                         garage = garage,
                         onTriggerGate = onTriggerGate,
                         onToggleLight = onToggleLight,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).alpha(if (garageStale) 0.5f else 1f),
                     )
                 }
             }
         }
     }
 }
+
+/** Через скільки мс без відповіді модуля його картки вважаються застарілими (тьмяніють). */
+private const val STALE_DATA_MS = 30_000L
 
 /** Сонце: жовте, коли напруга PV-панелей >= [PV_PRESENT_VOLTAGE], інакше чорне. */
 internal fun pvIndicatorColor(inverter: InverterStatus?): Color =

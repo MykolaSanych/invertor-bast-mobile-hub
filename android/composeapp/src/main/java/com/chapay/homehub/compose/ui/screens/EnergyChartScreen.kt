@@ -95,15 +95,24 @@ fun EnergyChartScreen(
     // поверненні на той самий день - цикл з оновленням раз на 30с. Спінер -
     // лише на першому завантаженні цієї (дата, конфіг) комбінації.
     LaunchedEffect(date, config) {
+        // Нова дата/конфіг - старі точки чужої доби не показуємо.
+        points = emptyList()
+        savedTotals = Triple(0.0, 0.0, 0.0)
+        errorText = null
         var firstLoad = true
+        var lastFetchFailed = false
         while (true) {
             if (firstLoad) loading = true
-            errorText = null
             val payload = runCatching { repository.fetchInverterDaily(config, date) }.getOrNull()
+            lastFetchFailed = payload == null
             if (payload == null) {
-                errorText = "немає даних (модуль інвертора недоступний або дані за цю добу відсутні)"
-                points = emptyList()
+                // Тимчасовий збій зв'язку (лагає ZeroTier) не стирає вже показаний
+                // графік - помилка лише якщо показувати ще нічого.
+                if (points.isEmpty()) {
+                    errorText = "немає даних (модуль інвертора недоступний або дані за цю добу відсутні)"
+                }
             } else {
+                errorText = null
                 val slotsArr = payload.optJSONArray("slots")
                 val parsed = mutableListOf<ChartPoint>()
                 if (slotsArr != null && slotsArr.length() > 0) {
@@ -146,7 +155,8 @@ fun EnergyChartScreen(
             }
             loading = false
             firstLoad = false
-            delay(30_000)
+            // Коли даних ще нема - повторюємо швидко, не чекаємо 30с.
+            delay(if (lastFetchFailed && points.isEmpty()) 5_000 else 30_000)
         }
     }
 

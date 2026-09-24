@@ -64,14 +64,20 @@ fun JournalScreen(config: AppConfig, repository: StatusRepository) {
     // Та сама причина, що в TimelineScreen/EnergyChartScreen: вкладка
     // лишається живою в пам'яті між перемиканнями нижньої навігації.
     LaunchedEffect(date, config) {
+        // Нова дата/конфіг - старі рядки чужої доби не показуємо.
+        entries = emptyList()
         var firstLoad = true
         while (true) {
             if (firstLoad) loading = true
             val lines = runCatching { repository.fetchLoadControllerLogLines(config, date) }.getOrNull()
-            entries = lines?.map(::parseLogLine)?.asReversed() ?: emptyList()
+            // Тимчасовий збій зв'язку (лагає ZeroTier) не стирає вже показаний журнал.
+            if (lines != null) {
+                entries = lines.map(::parseLogLine).asReversed()
+            }
             loading = false
             firstLoad = false
-            delay(30_000)
+            // Коли даних ще нема - повторюємо швидко, не чекаємо 30с.
+            delay(if (lines == null && entries.isEmpty()) 5_000 else 30_000)
         }
     }
 

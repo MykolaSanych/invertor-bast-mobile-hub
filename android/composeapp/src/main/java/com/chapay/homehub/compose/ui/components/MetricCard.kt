@@ -2,6 +2,7 @@ package com.chapay.homehub.compose.ui.components
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -23,9 +24,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -56,6 +59,9 @@ fun MetricCard(
     // Колір піктограми окремо від акценту рамки: іконка може бути індикатором
     // стану (сонце є/немає, мережа є/немає), а рамка лишається кольором картки.
     iconTint: Color = accent,
+    // Дані модуля давно не оновлювались (зв'язок лагає) - картка тьмяніє, але
+    // лишається на місці з останніми значеннями, а не зникає.
+    stale: Boolean = false,
 ) {
     val pulse = remember { Animatable(0f) }
     LaunchedEffect(valueText) {
@@ -63,11 +69,12 @@ fun MetricCard(
         pulse.animateTo(0f, animationSpec = tween(durationMillis = 900))
     }
 
-    val cardModifier = if (onClick != null) {
+    val staleAlpha by animateFloatAsState(if (stale) 0.5f else 1f, label = "stale-alpha")
+    val cardModifier = (if (onClick != null) {
         modifier.clickable(onClick = onClick)
     } else {
         modifier
-    }
+    }).alpha(staleAlpha)
 
     Card(
         modifier = cardModifier,

@@ -14,13 +14,27 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class DashboardUiState(
+    // Лише перше завантаження і ручне оновлення (pull-to-refresh). Фонове
+    // опитування спінер не вмикає - інакше при повільному зв'язку "кільце"
+    // крутиться постійно.
     val loading: Boolean = true,
     val error: String? = null,
     val config: AppConfig = AppConfig(),
+    // "Липкий" статус: модуль, що не відповів у цьому циклі, лишає свої
+    // останні успішні дані (див. fetchOnce), а не зникає з екрана.
     val status: UnifiedStatus = UnifiedStatus(),
     val lastSuccessAtMs: Long = 0L,
+    // Коли кожен модуль востаннє відповів; за цим UI димить застарілі картки.
+    val inverterAtMs: Long = 0L,
+    val loadAtMs: Long = 0L,
+    val garageAtMs: Long = 0L,
+    // Час останньої СПРОБИ опитування - змінює стан на кожному циклі, щоб UI
+    // перераховував "застарілість" навіть коли всі запити провалюються.
+    val lastAttemptAtMs: Long = 0L,
 )
 
 class DashboardViewModel(application: Application) : AndroidViewModel(application) {
@@ -30,6 +44,9 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     val uiState: StateFlow<DashboardUiState> = _uiState
 
     private var pollingJob: Job? = null
+    // Опитування не накладаються: pull-to-refresh чи команда під час фонового
+    // циклу чекають його завершення замість паралельних дублікатів запитів.
+    private val fetchMutex = Mutex()
 
     init {
         val stored = AppConfigStorage.load(application)
@@ -39,7 +56,16 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setConfig(config: AppConfig) {
         AppConfigStorage.save(getApplication(), config)
-        _uiState.update { it.copy(config = config) }
+        // Інші адреси/вимкнені модулі - старі "липкі" дані більше не актуальні.
+        _uiState.update {
+            it.copy(
+                config = config,
+                status = UnifiedStatus(),
+                inverterAtMs = 0L,
+                loadAtMs = 0L,
+                garageAtMs = 0L,
+            )
+        }
         refreshNow()
     }
 
@@ -54,47 +80,60 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun refreshNow() {
-        viewModelScope.launch { fetchOnce() }
+        viewModelScope.launch { fetchOnce(showSpinner = true) }
     }
 
-    private suspend fun fetchOnce() {
-        _uiState.update { it.copy(loading = true, error = null) }
-        runCatching { repository.fetchUnified(_uiState.value.config) }
-            .onSuccess { unified ->
-                _uiState.update {
-                    it.copy(
-                        loading = false,
-                        error = null,
-                        status = unified,
-                        lastSuccessAtMs = System.currentTimeMillis(),
-                    )
-                }
-                // fetchUnified() ніколи не кидає виняток - при мережевій
-                // помилці сама повертає порожній UnifiedStatus() (усі поля
-                // null). Без цієї перевірки транзиентна помилка одного
-                // опитування перетирала б віджет рисками поверх щойно
-                // показаних реальних даних.
-                val hasAnyData = unified.inverter != null || unified.loadController != null || unified.garage != null
-                if (hasAnyData && StatusWidgetProvider.hasActiveWidgets(getApplication())) {
-                    // triggerPulse=false: цей виклик спрацьовує на КОЖЕН цикл
-                    // живого опитування (раз на кілька секунд, поки застосунок
-                    // відкрито) - типовий пульс-ефект тут зайвий і, головне,
-                    // сам собою планує ЩЕ ОДИН незалежний мережевий запит
-                    // через 3.2с (StatusWidgetRefreshWorker), який раз у раз
-                    // "перетирав" щойно показані дані рисками при найменшій
-                    // затримці відповіді хоч одного з трьох пристроїв.
-                    StatusWidgetProvider.updateAllWidgets(getApplication(), unified, triggerPulse = false)
-                }
+    private suspend fun fetchOnce(showSpinner: Boolean = false) {
+        if (showSpinner) _uiState.update { it.copy(loading = true) }
+        fetchMutex.withLock {
+            val config = _uiState.value.config
+            // fetchUnified() ніколи не кидає виняток - модуль, що не відповів,
+            // просто дає null у своєму полі.
+            val unified = runCatching { repository.fetchUnified(config) }.getOrNull() ?: UnifiedStatus()
+            val now = System.currentTimeMillis()
+            val hasAnyData = unified.inverter != null || unified.loadController != null || unified.garage != null
+
+            var merged: UnifiedStatus? = null
+            _uiState.update { cur ->
+                // Конфіг змінили, поки йшов запит, - результат стосується старих
+                // адрес, відкидаємо (setConfig уже запустив новий цикл).
+                if (cur.config != config) return@update cur.copy(loading = false)
+                val old = cur.status
+                val status = UnifiedStatus(
+                    inverter = unified.inverter ?: old.inverter,
+                    loadController = unified.loadController ?: old.loadController,
+                    garage = unified.garage ?: old.garage,
+                    updatedAtMs = now,
+                )
+                merged = status
+                cur.copy(
+                    loading = false,
+                    error = if (hasAnyData || !anyModuleEnabled(config)) null else "Немає відповіді від модулів",
+                    status = status,
+                    lastSuccessAtMs = if (hasAnyData) now else cur.lastSuccessAtMs,
+                    inverterAtMs = if (unified.inverter != null) now else cur.inverterAtMs,
+                    loadAtMs = if (unified.loadController != null) now else cur.loadAtMs,
+                    garageAtMs = if (unified.garage != null) now else cur.garageAtMs,
+                    lastAttemptAtMs = now,
+                )
             }
-            .onFailure { err ->
-                _uiState.update {
-                    it.copy(
-                        loading = false,
-                        error = err.message ?: "Помилка запиту",
-                    )
-                }
+
+            // Віджет оновлюємо лише коли цей цикл справді щось отримав: інакше
+            // транзиентна помилка перетирала б віджет рисками поверх щойно
+            // показаних реальних даних. Передаємо злитий (липкий) статус - щоб
+            // модуль, що мигнув, не давав у віджеті риски.
+            val toWidget = merged
+            if (hasAnyData && toWidget != null && StatusWidgetProvider.hasActiveWidgets(getApplication())) {
+                // triggerPulse=false: цей виклик спрацьовує на КОЖЕН цикл
+                // живого опитування - пульс тут зайвий і планує ще один
+                // незалежний мережевий запит через 3.2с (StatusWidgetRefreshWorker).
+                StatusWidgetProvider.updateAllWidgets(getApplication(), toWidget, triggerPulse = false)
             }
+        }
     }
+
+    private fun anyModuleEnabled(config: AppConfig) =
+        config.inverterEnabled || config.loadControllerEnabled || config.garageEnabled
 
     fun setInverterGridMode(mode: String) {
         submitCommand { repository.setInverterGridMode(_uiState.value.config, mode) }

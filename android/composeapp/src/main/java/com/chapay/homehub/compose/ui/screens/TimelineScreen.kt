@@ -68,22 +68,29 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
     // тож одноразового ефекту не досить - інакше хронологія "замерзає" на
     // моменті першого відкриття вкладки.
     LaunchedEffect(date, config) {
+        // Нова дата/конфіг - старі точки чужої доби не показуємо.
+        samples = emptyList()
         var firstLoad = true
         while (true) {
             if (firstLoad) loading = true
             val payload = runCatching { repository.fetchLoadControllerHistory(config, date) }.getOrNull()
-            val rows = payload?.optJSONArray("samples")
-            val parsed = mutableListOf<TimelineSample>()
-            if (rows != null) {
-                for (i in 0 until rows.length()) {
-                    val row = rows.optJSONObject(i) ?: continue
-                    parsed.add(TimelineSample(row.optInt("m", -1), row.optInt("f", 0)))
+            // Тимчасовий збій зв'язку (лагає ZeroTier) не стирає вже показану
+            // хронологію: оновлюємо лише коли модуль реально відповів.
+            if (payload != null) {
+                val rows = payload.optJSONArray("samples")
+                val parsed = mutableListOf<TimelineSample>()
+                if (rows != null) {
+                    for (i in 0 until rows.length()) {
+                        val row = rows.optJSONObject(i) ?: continue
+                        parsed.add(TimelineSample(row.optInt("m", -1), row.optInt("f", 0)))
+                    }
                 }
+                samples = parsed.filter { it.minute in 0..1439 }.sortedBy { it.minute }
             }
-            samples = parsed.filter { it.minute in 0..1439 }.sortedBy { it.minute }
             loading = false
             firstLoad = false
-            delay(30_000)
+            // Коли даних ще нема - повторюємо швидко, не чекаємо 30с.
+            delay(if (payload == null && samples.isEmpty()) 5_000 else 30_000)
         }
     }
 

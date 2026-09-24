@@ -3,6 +3,8 @@ package com.chapay.homehub.compose.data
 import android.content.Context
 import android.net.wifi.WifiManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
@@ -54,10 +56,28 @@ class StatusRepository(
 
     suspend fun fetchUnified(config: AppConfig): UnifiedStatus {
         return runCatching {
-            fetchUnifiedHybrid(config)
+            fetchUnifiedParallel(config)
         }.getOrElse {
             UnifiedStatus(updatedAtMs = System.currentTimeMillis())
         }
+    }
+
+    // Три модулі - це три окремі ESP32, тож опитуємо їх паралельно: час циклу
+    // дорівнює найповільнішому модулю, а не сумі (раніше - послідовно з паузою
+    // 2с між запитами, і при лагах ZeroTier цикл розтягувався на 10+ с).
+    // Multicast не слухаємо: жодна з прошивок його вже не шле, тож 2.5с
+    // очікування на кожен цикл були марними. Модуль, що не відповів, дає null у
+    // своєму полі - залишає такі поля "липкими" вже шар вище (ViewModel).
+    private suspend fun fetchUnifiedParallel(config: AppConfig): UnifiedStatus = coroutineScope {
+        val inverter = async { if (config.inverterEnabled) runCatching { fetchInverter(config) }.getOrNull() else null }
+        val load = async { if (config.loadControllerEnabled) runCatching { fetchLoadController(config) }.getOrNull() else null }
+        val garage = async { if (config.garageEnabled) runCatching { fetchGarage(config) }.getOrNull() else null }
+        UnifiedStatus(
+            inverter = inverter.await(),
+            loadController = load.await(),
+            garage = garage.await(),
+            updatedAtMs = System.currentTimeMillis(),
+        )
     }
 
     suspend fun fetchUnifiedProgressive(
@@ -1283,8 +1303,8 @@ class StatusRepository(
         val firstAttempt = fetchJsonResult(url, statusClient)
         firstAttempt.json?.let { return it }
 
-        // For polling, skip auth retries after timeout/no-response so one dead controller only
-        // blocks this module for ~2s and the app can move to the next one.
+        // For polling, skip auth retries after timeout/no-response: modules are polled in
+        // parallel, so one dead controller only delays its own card, not the others.
         if (!firstAttempt.isUnauthorized || password.isBlank()) return null
 
         authenticate(baseUrl, password, statusClient)
@@ -1618,7 +1638,8 @@ private const val MULTICAST_STATUS_REQUEST_FALLBACK_MS = 900L
 private const val MULTICAST_STATUS_REQUEST_JITTER_MIN_MS = 50L
 private const val MULTICAST_STATUS_REQUEST_JITTER_MAX_MS = 180L
 private const val CONTROLLER_REQUEST_STAGGER_MS = 2_000L
-private const val CONTROLLER_STATUS_TIMEOUT_MS = 2_000L
+// 5с: при лагах ZeroTier (втрата пакетів + повтор TCP) 2с було замало, і модулі "блимали".
+private const val CONTROLLER_STATUS_TIMEOUT_MS = 5_000L
 private const val CONTROLLER_TIME_SYNC_THROTTLE_MS = 60_000L
 
 private const val MODULE_INVERTER = "inverter"
