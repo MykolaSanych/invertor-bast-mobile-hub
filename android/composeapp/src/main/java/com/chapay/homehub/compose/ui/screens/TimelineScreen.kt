@@ -53,6 +53,7 @@ import com.chapay.homehub.compose.ui.components.ChartToolbarActions
 import com.chapay.homehub.compose.ui.components.ChartViewport
 import com.chapay.homehub.compose.ui.components.DateNavHeader
 import com.chapay.homehub.compose.ui.components.LockLandscapeOrientation
+import com.chapay.homehub.compose.ui.components.VisibilityToggle
 import com.chapay.homehub.compose.ui.components.chartGestures
 import com.chapay.homehub.compose.ui.components.rememberChartViewport
 import com.chapay.homehub.compose.ui.components.todayIso
@@ -158,9 +159,11 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
     var data by remember { mutableStateOf<TimelineData?>(null) }
     var loading by remember { mutableStateOf(true) }
     var selected by remember { mutableStateOf<TimelineInterval?>(null) }
-    // Лінія спостереження (вертикальний курсор): увімкнена - палець веде курсор,
-    // вимкнена - палець зсуває графік, а дотик обирає лінію.
-    var cursorOn by rememberSaveable { mutableStateOf(true) }
+    // Приховані рядки (біти 0..3 = бойлер, насос, мережа, сонце): "око" в підписі
+    // ховає рядок, щоб роздивитись решту.
+    var hiddenMask by rememberSaveable { mutableStateOf(0) }
+    val visibleRows = ROW_DEFS.indices.filter { (hiddenMask and (1 shl it)) == 0 }
+    // Вертикальний курсор: не наближено - веде палець, наближено - дотик.
     var cursorSec by remember { mutableStateOf<Float?>(null) }
     val viewport = rememberChartViewport(date, 0f, SECONDS_IN_DAY.toFloat(), MIN_VIEW_SECONDS)
 
@@ -206,17 +209,7 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
                     }
                 },
-                actions = {
-                    ChartToolbarActions(
-                        cursorOn = cursorOn,
-                        onCursorChange = {
-                            cursorOn = it
-                            if (!it) cursorSec = null
-                            selected = null
-                        },
-                        viewport = viewport,
-                    )
-                },
+                actions = { ChartToolbarActions(viewport) },
             )
         },
     ) { innerPadding ->
@@ -242,17 +235,28 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
                 TimelineChart(
                     data = current,
                     viewport = viewport,
+                    visibleRows = visibleRows,
                     selected = selected,
-                    cursorOn = cursorOn,
                     cursorSec = cursorSec,
-                    onCursor = { cursorSec = it },
+                    // Рух курсора скидає обрану лінію; дотик спершу ставить курсор, потім обирає.
+                    onCursor = {
+                        cursorSec = it
+                        selected = null
+                    },
                     onSelect = { selected = it },
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 )
                 Spacer(Modifier.height(4.dp))
-                InfoLine(data = current, selected = selected, cursorOn = cursorOn, cursorSec = cursorSec)
+                InfoLine(data = current, visibleRows = visibleRows, selected = selected, cursorSec = cursorSec)
                 Spacer(Modifier.height(4.dp))
-                ActiveTimeLegend(current)
+                ActiveTimeLegend(
+                    data = current,
+                    hiddenMask = hiddenMask,
+                    onToggle = { row ->
+                        hiddenMask = hiddenMask xor (1 shl row)
+                        selected = null
+                    },
+                )
             }
         }
     }
@@ -290,14 +294,21 @@ private fun distanceToInterval(tapSec: Float, interval: TimelineInterval): Float
     else -> 0f
 }
 
-/** Рядок під графіком: показання під лінією спостереження, або обрана лінія, або підказка. */
+/** Рядок під графіком: обрана лінія, або показання під курсором, або підказка. */
 @Composable
-private fun InfoLine(data: TimelineData, selected: TimelineInterval?, cursorOn: Boolean, cursorSec: Float?) {
-    if (cursorOn && cursorSec != null) {
+private fun InfoLine(data: TimelineData, visibleRows: List<Int>, selected: TimelineInterval?, cursorSec: Float?) {
+    if (selected != null) {
+        Text(
+            text = describeInterval(selected),
+            style = MaterialTheme.typography.bodySmall,
+            color = TextPrimary,
+        )
+    } else if (cursorSec != null) {
         val t = cursorSec.toInt()
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(hms(t), style = MaterialTheme.typography.labelLarge, color = TextPrimary)
-            ROW_DEFS.forEachIndexed { row, (label, color) ->
+            visibleRows.forEach { row ->
+                val (label, color) = ROW_DEFS[row]
                 val active = data.intervals.firstOrNull { it.row == row && t >= it.startSec && t <= it.endSec }
                 Spacer(Modifier.width(14.dp))
                 Box(
@@ -321,40 +332,35 @@ private fun InfoLine(data: TimelineData, selected: TimelineInterval?, cursorOn: 
         }
     } else {
         Text(
-            text = selected?.let { describeInterval(it) }
-                ?: when {
-                    data.intervals.isEmpty() -> "за цю добу ще нічого не вмикалось"
-                    cursorOn -> "проведіть по графіку - лінія спостереження покаже стан у цей час; два пальці - масштаб"
-                    else -> "торкніться лінії, щоб побачити час; перетягування - зсув, два пальці - масштаб"
-                },
+            text = if (data.intervals.isEmpty()) {
+                "за цю добу ще нічого не вмикалось"
+            } else {
+                "проведіть по графіку - курсор покаже стан у цей час; два пальці - масштаб і зсув"
+            },
             style = MaterialTheme.typography.bodySmall,
-            color = if (selected != null) TextPrimary else TextMuted,
+            color = TextMuted,
         )
     }
 }
 
-/** Активний час кожного пристрою за добу: сума тривалості всіх ліній і кількість вмикань. */
+/**
+ * Активний час кожного пристрою за добу (сума тривалості всіх ліній і кількість
+ * вмикань) разом з перемикачем видимості рядка ("око").
+ */
 @Composable
-private fun ActiveTimeLegend(data: TimelineData) {
+private fun ActiveTimeLegend(data: TimelineData, hiddenMask: Int, onToggle: (Int) -> Unit) {
     Row(modifier = Modifier.fillMaxWidth()) {
         ROW_DEFS.forEachIndexed { row, (label, color) ->
             val mine = data.intervals.filter { it.row == row }
             val totalSec = mine.sumOf { (it.endSec - it.startSec).coerceAtLeast(0) }
-            Row(
+            VisibilityToggle(
+                label = label,
+                color = color,
+                visible = (hiddenMask and (1 shl row)) == 0,
+                onToggle = { onToggle(row) },
+                detail = if (mine.isEmpty()) "не вмикався" else "${durationText(totalSec)} · ${mine.size} вкл.",
                 modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.size(9.dp).background(color, CircleShape))
-                Spacer(Modifier.width(5.dp))
-                Column {
-                    Text(label, style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                    Text(
-                        text = if (mine.isEmpty()) "не вмикався" else "${durationText(totalSec)} · ${mine.size} вкл.",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = TextPrimary,
-                    )
-                }
-            }
+            )
         }
     }
 }
@@ -369,8 +375,8 @@ private fun tickStepFor(spanSec: Float): Int =
 private fun TimelineChart(
     data: TimelineData,
     viewport: ChartViewport,
+    visibleRows: List<Int>,
     selected: TimelineInterval?,
-    cursorOn: Boolean,
     cursorSec: Float?,
     onCursor: (Float?) -> Unit,
     onSelect: (TimelineInterval?) -> Unit,
@@ -388,6 +394,7 @@ private fun TimelineChart(
     fun secAt(x: Float): Float = viewport.start + ((x - labelWidthPx) / plotWidthPx()).coerceIn(0f, 1f) * viewport.span
     // Жести живуть довше за один кадр (ключ стабільний), тож свіжі дані читаємо через State.
     val latestData by rememberUpdatedState(data)
+    val latestRows by rememberUpdatedState(visibleRows)
 
     Card(
         colors = CardDefaults.cardColors(containerColor = SurfaceContainer),
@@ -400,18 +407,21 @@ private fun TimelineChart(
                 .onSizeChanged { canvasSize = it }
                 .chartGestures(
                     key = Unit,
-                    cursorEnabled = cursorOn,
+                    dragMovesCursor = !viewport.isZoomed,
                     onCursor = { onCursor(secAt(it.x)) },
                     onPan = { dx -> viewport.panFraction(-dx / plotWidthPx()) },
                     onZoom = { cx, factor ->
                         viewport.zoomAround(((cx - labelWidthPx) / plotWidthPx()).coerceIn(0f, 1f), factor)
                     },
                     onTap = { tap ->
-                        val rowH = (canvasSize.height - axisHeightPx) / ROW_DEFS.size
-                        val row = (tap.y / rowH).toInt()
-                        if (row !in ROW_DEFS.indices) {
+                        val rows = latestRows
+                        val rowH = (canvasSize.height - axisHeightPx) / rows.size.coerceAtLeast(1)
+                        val slot = (tap.y / rowH).toInt()
+                        onCursor(secAt(tap.x))
+                        if (slot !in rows.indices) {
                             onSelect(null)
                         } else {
+                            val row = rows[slot]
                             val tapSec = secAt(tap.x)
                             // Короткі лінії (секунди) тонші за палець - беремо найближчу
                             // в межах ~14dp від дотику.
@@ -429,7 +439,7 @@ private fun TimelineChart(
             val labelWidth = labelWidthPx
             val plotWidth = size.width - labelWidth
             val plotBottom = size.height - axisHeightPx
-            val rowH = plotBottom / ROW_DEFS.size
+            val rowH = plotBottom / visibleRows.size.coerceAtLeast(1)
             val v0 = viewport.start
             val span = viewport.span
 
@@ -449,8 +459,9 @@ private fun TimelineChart(
             }
 
             // Підписи рядків - поза обрізанням, ліворуч від області графіка.
-            ROW_DEFS.forEachIndexed { rowIndex, (label, _) ->
-                val rowCenter = rowIndex * rowH + rowH / 2
+            visibleRows.forEachIndexed { slot, row ->
+                val label = ROW_DEFS[row].first
+                val rowCenter = slot * rowH + rowH / 2
                 drawContext.canvas.nativeCanvas.drawText(label, labelWidth - 6.dp.toPx(), rowCenter + 3.dp.toPx(), labelPaint)
             }
 
@@ -465,8 +476,9 @@ private fun TimelineChart(
                     tick += step
                 }
 
-                ROW_DEFS.forEachIndexed { rowIndex, (_, color) ->
-                    val rowTop = rowIndex * rowH
+                visibleRows.forEachIndexed { slot, rowIndex ->
+                    val color = ROW_DEFS[rowIndex].second
+                    val rowTop = slot * rowH
 
                     // Фон рядка.
                     drawRect(
@@ -502,7 +514,7 @@ private fun TimelineChart(
                 }
 
                 // Лінія спостереження.
-                if (cursorOn && cursorSec != null) {
+                if (cursorSec != null) {
                     val x = xFor(cursorSec)
                     drawLine(Color.White.copy(alpha = 0.85f), Offset(x, 0f), Offset(x, plotBottom), strokeWidth = 1.5.dp.toPx())
                 }

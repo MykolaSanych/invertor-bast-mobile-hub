@@ -5,6 +5,14 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -13,18 +21,24 @@ import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
-import com.chapay.homehub.compose.ui.theme.AccentPv
+import androidx.compose.ui.unit.dp
+import com.chapay.homehub.compose.ui.theme.TextPrimary
 import com.chapay.homehub.compose.ui.theme.TextMuted
 
 /**
@@ -76,24 +90,24 @@ fun rememberChartViewport(key: Any?, domainMin: Float, domainMax: Float, minSpan
 
 /**
  * Жести графіка. Два пальці - масштаб і зсув. Один палець:
- *  - курсор увімкнено ([cursorEnabled]) - веде вертикальну лінію спостереження ([onCursor]);
- *  - курсор вимкнено - зсуває графік ([onPan] у пікселях), а короткий дотик без руху
- *    віддає [onTap].
+ *  - [dragMovesCursor] (графік не наближено) - веде вертикальну лінію-курсор ([onCursor]);
+ *  - інакше (графік наближено) - зсуває його ([onPan] у пікселях), а короткий дотик
+ *    без руху віддає [onTap] (поставити курсор / обрати лінію).
  * [onZoom] отримує x центру жесту (px) і множник масштабу.
  */
 fun Modifier.chartGestures(
     key: Any?,
-    cursorEnabled: Boolean,
+    dragMovesCursor: Boolean,
     onCursor: (Offset) -> Unit,
     onPan: (Float) -> Unit,
     onZoom: (centroidX: Float, factor: Float) -> Unit,
     onTap: (Offset) -> Unit = {},
-): Modifier = pointerInput(key, cursorEnabled) {
+): Modifier = pointerInput(key, dragMovesCursor) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         var multiTouch = false
         var moved = false
-        if (cursorEnabled) onCursor(down.position)
+        if (dragMovesCursor) onCursor(down.position)
         do {
             val event = awaitPointerEvent()
             val pressed = event.changes.filter { it.pressed }
@@ -108,7 +122,7 @@ fun Modifier.chartGestures(
             } else if (pressed.size == 1 && !multiTouch) {
                 val change: PointerInputChange = pressed[0]
                 if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
-                if (cursorEnabled) {
+                if (dragMovesCursor) {
                     onCursor(change.position)
                 } else if (moved) {
                     val dx = change.position.x - change.previousPosition.x
@@ -117,24 +131,13 @@ fun Modifier.chartGestures(
                 if (change.positionChanged()) change.consume()
             }
         } while (event.changes.any { it.pressed })
-        if (!multiTouch && !moved && !cursorEnabled) onTap(down.position)
+        if (!multiTouch && !moved && !dragMovesCursor) onTap(down.position)
     }
 }
 
-/** Кнопки для TopAppBar: лінія спостереження, масштаб +/−, скидання масштабу. */
+/** Кнопки для TopAppBar: масштаб +/−, скидання масштабу. */
 @Composable
-fun ChartToolbarActions(
-    cursorOn: Boolean,
-    onCursorChange: (Boolean) -> Unit,
-    viewport: ChartViewport,
-) {
-    IconButton(onClick = { onCursorChange(!cursorOn) }) {
-        Icon(
-            imageVector = if (cursorOn) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-            contentDescription = if (cursorOn) "Вимкнути лінію спостереження" else "Увімкнути лінію спостереження",
-            tint = if (cursorOn) AccentPv else TextMuted,
-        )
-    }
+fun ChartToolbarActions(viewport: ChartViewport) {
     IconButton(onClick = { viewport.zoomCentered(1.6f) }) {
         Icon(Icons.Filled.ZoomIn, contentDescription = "Наблизити")
     }
@@ -143,5 +146,49 @@ fun ChartToolbarActions(
     }
     IconButton(onClick = { viewport.reset() }, enabled = viewport.isZoomed) {
         Icon(Icons.Filled.ZoomOutMap, contentDescription = "Весь день")
+    }
+}
+
+/**
+ * Перемикач видимості однієї лінії/рядка: "око" + підпис (+ значення). Натискання
+ * ховає або показує відповідну лінію на графіку; прихована виглядає тьмяною.
+ */
+@Composable
+fun VisibilityToggle(
+    label: String,
+    color: Color,
+    visible: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+    detail: String? = null,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = if (visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+            contentDescription = if (visible) "Сховати: $label" else "Показати: $label",
+            tint = if (visible) color else TextMuted.copy(alpha = 0.6f),
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Column {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (visible) TextPrimary else TextMuted.copy(alpha = 0.6f),
+            )
+            if (detail != null) {
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (visible) TextMuted else TextMuted.copy(alpha = 0.5f),
+                )
+            }
+        }
     }
 }

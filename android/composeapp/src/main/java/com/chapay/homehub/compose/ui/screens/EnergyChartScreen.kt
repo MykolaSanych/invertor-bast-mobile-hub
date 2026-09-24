@@ -60,6 +60,7 @@ import com.chapay.homehub.compose.ui.components.ChartToolbarActions
 import com.chapay.homehub.compose.ui.components.ChartViewport
 import com.chapay.homehub.compose.ui.components.DateNavHeader
 import com.chapay.homehub.compose.ui.components.LockLandscapeOrientation
+import com.chapay.homehub.compose.ui.components.VisibilityToggle
 import com.chapay.homehub.compose.ui.components.chartGestures
 import com.chapay.homehub.compose.ui.components.rememberChartViewport
 import com.chapay.homehub.compose.ui.components.todayIso
@@ -103,9 +104,12 @@ fun EnergyChartScreen(
     var errorText by remember { mutableStateOf<String?>(null) }
     // Вид: лінії потужності або кругова діаграма розподілу.
     var pieMode by rememberSaveable { mutableStateOf(false) }
-    // Лінія спостереження (вертикальний курсор): увімкнена - палець веде курсор,
-    // вимкнена - палець зсуває графік. Два пальці завжди масштабують.
-    var cursorOn by rememberSaveable { mutableStateOf(true) }
+    // Які лінії показувати: сонце / будинок / мережа - можна ховати окремо, щоб
+    // роздивитись одну з них.
+    var showPv by rememberSaveable { mutableStateOf(true) }
+    var showHome by rememberSaveable { mutableStateOf(true) }
+    var showGrid by rememberSaveable { mutableStateOf(true) }
+    // Вертикальний курсор із підказкою: не наближено - веде палець, наближено - дотик.
     var cursorMinute by remember { mutableStateOf<Float?>(null) }
 
     // Вкладки нижньої навігації лишаються живими в пам'яті (saveState/
@@ -201,16 +205,7 @@ fun EnergyChartScreen(
                     }
                 },
                 actions = {
-                    if (!pieMode) {
-                        ChartToolbarActions(
-                            cursorOn = cursorOn,
-                            onCursorChange = {
-                                cursorOn = it
-                                if (!it) cursorMinute = null
-                            },
-                            viewport = viewport,
-                        )
-                    }
+                    if (!pieMode) ChartToolbarActions(viewport)
                 },
             )
         },
@@ -244,7 +239,18 @@ fun EnergyChartScreen(
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 4.dp),
                 )
             } else {
-                SummaryLegendRow(shownTotals, if (stepMinutes == 15) "Вт, середня за 15 хв" else "Вт, середня за годину")
+                SummaryLegendRow(
+                    totals = shownTotals,
+                    unitNote = if (stepMinutes == 15) "Вт, середня за 15 хв" else "Вт, середня за годину",
+                    visible = listOf(showPv, showHome, showGrid),
+                    onToggle = { index ->
+                        when (index) {
+                            0 -> showPv = !showPv
+                            1 -> showHome = !showHome
+                            else -> showGrid = !showGrid
+                        }
+                    },
+                )
                 Spacer(Modifier.height(6.dp))
                 when {
                     loading -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -256,7 +262,7 @@ fun EnergyChartScreen(
                             points = points,
                             stepMinutes = stepMinutes,
                             viewport = viewport,
-                            cursorOn = cursorOn,
+                            visible = listOf(showPv, showHome, showGrid),
                             cursorMinute = cursorMinute,
                             onCursor = { cursorMinute = it },
                             modifier = Modifier.fillMaxWidth().weight(1f),
@@ -278,34 +284,27 @@ fun EnergyChartScreen(
     }
 }
 
-/** Легенда і добові підсумки в одному рядку: колір-крапка + назва + значення. */
+/**
+ * Легенда, добові підсумки й перемикачі видимості в одному рядку: "око" + назва +
+ * значення. Натискання ховає/показує відповідну лінію графіка.
+ */
 @Composable
-private fun SummaryLegendRow(totals: Triple<Double, Double, Double>, unitNote: String) {
+private fun SummaryLegendRow(
+    totals: Triple<Double, Double, Double>,
+    unitNote: String,
+    visible: List<Boolean>,
+    onToggle: (Int) -> Unit,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(20.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LegendItem("сонце", totals.first, AccentPv)
-        LegendItem("будинок", totals.second, AccentBattery)
-        LegendItem("мережа", totals.third, AccentGrid)
+        VisibilityToggle("сонце", AccentPv, visible[0], { onToggle(0) }, detail = "${totals.first.roundToInt()} Вт·год")
+        VisibilityToggle("будинок", AccentBattery, visible[1], { onToggle(1) }, detail = "${totals.second.roundToInt()} Вт·год")
+        VisibilityToggle("мережа", AccentGrid, visible[2], { onToggle(2) }, detail = "${totals.third.roundToInt()} Вт·год")
         Spacer(Modifier.weight(1f))
         Text(unitNote, style = MaterialTheme.typography.labelSmall, color = TextMuted)
-    }
-}
-
-@Composable
-private fun LegendItem(label: String, value: Double, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(10.dp).background(color, CircleShape))
-        Spacer(Modifier.width(6.dp))
-        Text(label, style = MaterialTheme.typography.labelMedium, color = TextMuted)
-        Spacer(Modifier.width(6.dp))
-        Text(
-            text = "${value.roundToInt()} Вт·год",
-            style = MaterialTheme.typography.labelLarge,
-            color = TextPrimary,
-        )
     }
 }
 
@@ -330,7 +329,7 @@ private fun EnergyLineChart(
     points: List<ChartPoint>,
     stepMinutes: Int,
     viewport: ChartViewport,
-    cursorOn: Boolean,
+    visible: List<Boolean>,
     cursorMinute: Float?,
     onCursor: (Float?) -> Unit,
     modifier: Modifier = Modifier,
@@ -344,7 +343,11 @@ private fun EnergyLineChart(
         Series("сонце", AccentPv, points.map { it.pv }),
         Series("будинок", AccentBattery, points.map { it.home }),
         Series("мережа", AccentGrid, points.map { it.grid }),
-    )
+    ).filterIndexed { i, _ -> visible.getOrElse(i) { true } }
+    if (series.isEmpty()) {
+        Text("усі лінії приховані - натисніть «око» біля назви, щоб показати", color = TextMuted, modifier = modifier.padding(16.dp))
+        return
+    }
 
     val density = LocalDensity.current
     val leftMarginPx = with(density) { 44.dp.toPx() }
@@ -388,8 +391,9 @@ private fun EnergyLineChart(
                 .onSizeChanged { canvasSize = it }
                 .chartGestures(
                     key = Unit,
-                    cursorEnabled = cursorOn,
+                    dragMovesCursor = !viewport.isZoomed,
                     onCursor = { onCursor(minuteAt(it.x)) },
+                    onTap = { onCursor(minuteAt(it.x)) },
                     onPan = { dx -> viewport.panFraction(-dx / plotWidthPx()) },
                     onZoom = { cx, factor ->
                         viewport.zoomAround(((cx - leftMarginPx) / plotWidthPx()).coerceIn(0f, 1f), factor)
@@ -477,8 +481,7 @@ private fun EnergyLineChart(
             }
 
             // Лінія спостереження й підказка для найближчої до неї точки.
-            val cursor = if (cursorOn) cursorMinute else null
-            val idx = cursor?.let { m -> points.indices.minByOrNull { abs(points[it].minute - m) } }
+            val idx = cursorMinute?.let { m -> points.indices.minByOrNull { abs(points[it].minute - m) } }
             if (idx != null) {
                 val p = points[idx]
                 val x = xAt(p.minute.toFloat())
