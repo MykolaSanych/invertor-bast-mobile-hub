@@ -462,11 +462,12 @@ private fun EnergyLineChart(
                     }
                     drawPath(path, s.color, style = lineStroke)
                 }
-
-                // Маркери (діаметр >= 8dp) лише коли видимих точок небагато, інакше зливаються.
+                // Маркери лише коли видимих точок небагато, інакше зливаються. Малі (4/3dp) -
+                // лінії лишаються головними.
+                    // Точки втричі менші за початкові (4dp/2dp): лінії лишаються головними.
                 if (visibleIdx.size <= 30) {
-                    val markerR = 4.dp.toPx()
-                    val ring = 2.dp.toPx()
+                    val markerR = (4f / 3f).dp.toPx()
+                    val ring = (2f / 3f).dp.toPx()
                     series.forEach { s ->
                         visibleIdx.forEach { i ->
                             val v = s.values[i]
@@ -486,8 +487,8 @@ private fun EnergyLineChart(
                 val p = points[idx]
                 val x = xAt(p.minute.toFloat())
                 if (x in plotLeft..size.width) {
-                    val markerR = 4.dp.toPx()
-                    val ring = 2.dp.toPx()
+                    val markerR = (4f / 3f).dp.toPx()
+                    val ring = (2f / 3f).dp.toPx()
                     drawLine(
                         TextMuted.copy(alpha = 0.6f),
                         Offset(x, plotTop),
