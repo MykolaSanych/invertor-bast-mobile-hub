@@ -1,7 +1,9 @@
 package com.chapay.homehub.compose.ui.screens
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,9 +12,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -26,20 +31,30 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chapay.homehub.compose.data.AppConfig
 import com.chapay.homehub.compose.data.StatusRepository
+import com.chapay.homehub.compose.ui.components.ChartToolbarActions
+import com.chapay.homehub.compose.ui.components.ChartViewport
 import com.chapay.homehub.compose.ui.components.DateNavHeader
 import com.chapay.homehub.compose.ui.components.LockLandscapeOrientation
+import com.chapay.homehub.compose.ui.components.chartGestures
+import com.chapay.homehub.compose.ui.components.rememberChartViewport
 import com.chapay.homehub.compose.ui.components.todayIso
 import com.chapay.homehub.compose.ui.theme.AccentBoiler
 import com.chapay.homehub.compose.ui.theme.AccentGrid
@@ -68,6 +83,9 @@ private val ROW_DEFS = listOf(
     "МЕРЕЖА" to AccentGrid,
     "СОНЦЕ" to AccentPv,
 )
+
+// Найдрібніше вікно масштабування - 1 хвилина (секундні запуски насоса видно).
+private const val MIN_VIEW_SECONDS = 60f
 
 /**
  * Події прошивки [[сек, біт, стан], ...] -> проміжки "від-до". Лінія починається
@@ -140,6 +158,11 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
     var data by remember { mutableStateOf<TimelineData?>(null) }
     var loading by remember { mutableStateOf(true) }
     var selected by remember { mutableStateOf<TimelineInterval?>(null) }
+    // Лінія спостереження (вертикальний курсор): увімкнена - палець веде курсор,
+    // вимкнена - палець зсуває графік, а дотик обирає лінію.
+    var cursorOn by rememberSaveable { mutableStateOf(true) }
+    var cursorSec by remember { mutableStateOf<Float?>(null) }
+    val viewport = rememberChartViewport(date, 0f, SECONDS_IN_DAY.toFloat(), MIN_VIEW_SECONDS)
 
     // Той самий цикл, що і в EnergyChartScreen: вкладка лишається живою в
     // пам'яті між перемиканнями нижньої навігації (saveState/restoreState),
@@ -149,6 +172,7 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
         // Нова дата/конфіг - старі лінії чужої доби не показуємо.
         data = null
         selected = null
+        cursorSec = null
         var firstLoad = true
         var timelineSeen = false
         while (true) {
@@ -182,6 +206,17 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
                     }
                 },
+                actions = {
+                    ChartToolbarActions(
+                        cursorOn = cursorOn,
+                        onCursorChange = {
+                            cursorOn = it
+                            if (!it) cursorSec = null
+                            selected = null
+                        },
+                        viewport = viewport,
+                    )
+                },
             )
         },
     ) { innerPadding ->
@@ -189,10 +224,9 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(12.dp),
+                .padding(horizontal = 12.dp, vertical = 4.dp),
         ) {
             DateNavHeader(date = date, onDateChange = { date = it })
-            Spacer(Modifier.height(8.dp))
             val current = data
             if (loading && current == null) {
                 Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -205,29 +239,20 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
                     modifier = Modifier.padding(24.dp),
                 )
             } else {
-                TimelineChart(data = current, selected = selected, onSelect = { selected = it })
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = selected?.let { describeInterval(it) }
-                        ?: if (current.intervals.isEmpty()) "за цю добу ще нічого не вмикалось" else "торкніться лінії, щоб побачити час",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (selected != null) TextPrimary else TextMuted,
+                TimelineChart(
+                    data = current,
+                    viewport = viewport,
+                    selected = selected,
+                    cursorOn = cursorOn,
+                    cursorSec = cursorSec,
+                    onCursor = { cursorSec = it },
+                    onSelect = { selected = it },
+                    modifier = Modifier.fillMaxWidth().weight(1f),
                 )
-                Spacer(Modifier.height(8.dp))
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    ROW_DEFS.forEach { (label, color) ->
-                        Row(
-                            modifier = Modifier.padding(end = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(modifier = Modifier.width(10.dp).height(10.dp)) {
-                                Canvas(Modifier.fillMaxSize()) { drawCircle(color) }
-                            }
-                            Spacer(Modifier.width(4.dp))
-                            Text(label, style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                        }
-                    }
-                }
+                Spacer(Modifier.height(4.dp))
+                InfoLine(data = current, selected = selected, cursorOn = cursorOn, cursorSec = cursorSec)
+                Spacer(Modifier.height(4.dp))
+                ActiveTimeLegend(current)
             }
         }
     }
@@ -236,6 +261,11 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
 private fun hms(sec: Int): String {
     val s = sec.coerceIn(0, SECONDS_IN_DAY)
     return "%02d:%02d:%02d".format(s / 3600 % 24, s / 60 % 60, s % 60)
+}
+
+private fun hm(sec: Int): String {
+    val s = sec.coerceIn(0, SECONDS_IN_DAY)
+    return "%02d:%02d".format(s / 3600 % 24, s / 60 % 60)
 }
 
 private fun durationText(totalSec: Int): String {
@@ -260,127 +290,222 @@ private fun distanceToInterval(tapSec: Float, interval: TimelineInterval): Float
     else -> 0f
 }
 
+/** Рядок під графіком: показання під лінією спостереження, або обрана лінія, або підказка. */
 @Composable
-private fun TimelineChart(
-    data: TimelineData,
-    selected: TimelineInterval?,
-    onSelect: (TimelineInterval?) -> Unit,
-) {
-    val rowHeight = 44.dp
-    val chartHeight = rowHeight * ROW_DEFS.size + 24.dp
-
-    androidx.compose.material3.Card(
-        colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = SurfaceContainer),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(chartHeight)
-                .padding(12.dp)
-                .pointerInput(data) {
-                    detectTapGestures { tap ->
-                        val labelWidth = 72.dp.toPx()
-                        val plotWidth = size.width - labelWidth
-                        val rowH = (size.height - 20.dp.toPx()) / ROW_DEFS.size
-                        val row = (tap.y / rowH).toInt()
-                        if (row !in ROW_DEFS.indices || plotWidth <= 0f) {
-                            onSelect(null)
-                            return@detectTapGestures
-                        }
-                        val tapSec = (tap.x - labelWidth) / plotWidth * SECONDS_IN_DAY
-                        // Короткі лінії (секунди) тонші за палець - беремо найближчу
-                        // в межах ~14dp від дотику.
-                        val tolSec = 14.dp.toPx() / plotWidth * SECONDS_IN_DAY
-                        val nearest = data.intervals
-                            .filter { it.row == row }
-                            .minByOrNull { distanceToInterval(tapSec, it) }
-                        onSelect(
-                            if (nearest != null && distanceToInterval(tapSec, nearest) <= tolSec) nearest else null,
-                        )
-                    }
-                },
-        ) {
-            val labelWidth = 72.dp.toPx()
-            val plotWidth = size.width - labelWidth
-            val plotTop = 0f
-            val rowH = (size.height - 20.dp.toPx()) / ROW_DEFS.size
-
-            fun xFor(sec: Int) = labelWidth + (sec.toFloat() / SECONDS_IN_DAY) * plotWidth
-
-            // Погодинні лінії сітки.
-            for (h in 0..24) {
-                val x = xFor(h * 3600)
-                drawLine(
-                    color = OutlineSubtle,
-                    start = Offset(x, plotTop),
-                    end = Offset(x, size.height - 20.dp.toPx()),
-                    strokeWidth = 1f,
+private fun InfoLine(data: TimelineData, selected: TimelineInterval?, cursorOn: Boolean, cursorSec: Float?) {
+    if (cursorOn && cursorSec != null) {
+        val t = cursorSec.toInt()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(hms(t), style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+            ROW_DEFS.forEachIndexed { row, (label, color) ->
+                val active = data.intervals.firstOrNull { it.row == row && t >= it.startSec && t <= it.endSec }
+                Spacer(Modifier.width(14.dp))
+                Box(
+                    Modifier
+                        .size(9.dp)
+                        .then(
+                            if (active != null) {
+                                Modifier.background(color, CircleShape)
+                            } else {
+                                Modifier.border(1.5.dp, color.copy(alpha = 0.6f), CircleShape)
+                            },
+                        ),
                 )
-                if (h % 3 == 0) {
-                    drawContext.canvas.nativeCanvas.drawText(
-                        "$h",
-                        x,
-                        size.height - 4.dp.toPx(),
-                        android.graphics.Paint().apply {
-                            color = android.graphics.Color.parseColor("#9BA3B4")
-                            textSize = 9.sp.toPx()
-                            textAlign = android.graphics.Paint.Align.CENTER
-                        },
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = if (active != null) "$label з ${hm(active.startSec)}" else "$label вимк",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (active != null) TextPrimary else TextMuted,
+                )
+            }
+        }
+    } else {
+        Text(
+            text = selected?.let { describeInterval(it) }
+                ?: when {
+                    data.intervals.isEmpty() -> "за цю добу ще нічого не вмикалось"
+                    cursorOn -> "проведіть по графіку - лінія спостереження покаже стан у цей час; два пальці - масштаб"
+                    else -> "торкніться лінії, щоб побачити час; перетягування - зсув, два пальці - масштаб"
+                },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (selected != null) TextPrimary else TextMuted,
+        )
+    }
+}
+
+/** Активний час кожного пристрою за добу: сума тривалості всіх ліній і кількість вмикань. */
+@Composable
+private fun ActiveTimeLegend(data: TimelineData) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        ROW_DEFS.forEachIndexed { row, (label, color) ->
+            val mine = data.intervals.filter { it.row == row }
+            val totalSec = mine.sumOf { (it.endSec - it.startSec).coerceAtLeast(0) }
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(9.dp).background(color, CircleShape))
+                Spacer(Modifier.width(5.dp))
+                Column {
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                    Text(
+                        text = if (mine.isEmpty()) "не вмикався" else "${durationText(totalSec)} · ${mine.size} вкл.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextPrimary,
                     )
                 }
             }
+        }
+    }
+}
 
-            ROW_DEFS.forEachIndexed { rowIndex, (label, color) ->
-                val rowTop = plotTop + rowIndex * rowH
-                val rowCenter = rowTop + rowH / 2
+// Кроки вертикальної сітки/підписів осі часу (с): вибираємо найменший, що дає <= ~10 підписів.
+private val TICK_STEPS = intArrayOf(60, 120, 300, 600, 900, 1800, 3600, 7200, 10800)
 
-                drawContext.canvas.nativeCanvas.drawText(
-                    label,
-                    labelWidth - 6.dp.toPx(),
-                    rowCenter + 3.dp.toPx(),
-                    android.graphics.Paint().apply {
-                        this.color = android.graphics.Color.parseColor("#E6ECFF")
-                        textSize = 9.sp.toPx()
-                        textAlign = android.graphics.Paint.Align.RIGHT
+private fun tickStepFor(spanSec: Float): Int =
+    TICK_STEPS.firstOrNull { spanSec / it <= 10f } ?: TICK_STEPS.last()
+
+@Composable
+private fun TimelineChart(
+    data: TimelineData,
+    viewport: ChartViewport,
+    selected: TimelineInterval?,
+    cursorOn: Boolean,
+    cursorSec: Float?,
+    onCursor: (Float?) -> Unit,
+    onSelect: (TimelineInterval?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val labelWidthPx = with(density) { 72.dp.toPx() }
+    val axisHeightPx = with(density) { 20.dp.toPx() }
+    val touchTolPx = with(density) { 14.dp.toPx() }
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+
+    // Усе, що залежить від розміру полотна, читає canvasSize у момент виклику
+    // (а не при створенні жесту), тож не застаріває після повороту/зміни розміру.
+    fun plotWidthPx() = (canvasSize.width - labelWidthPx).coerceAtLeast(1f)
+    fun secAt(x: Float): Float = viewport.start + ((x - labelWidthPx) / plotWidthPx()).coerceIn(0f, 1f) * viewport.span
+    // Жести живуть довше за один кадр (ключ стабільний), тож свіжі дані читаємо через State.
+    val latestData by rememberUpdatedState(data)
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = SurfaceContainer),
+        modifier = modifier,
+    ) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp)
+                .onSizeChanged { canvasSize = it }
+                .chartGestures(
+                    key = Unit,
+                    cursorEnabled = cursorOn,
+                    onCursor = { onCursor(secAt(it.x)) },
+                    onPan = { dx -> viewport.panFraction(-dx / plotWidthPx()) },
+                    onZoom = { cx, factor ->
+                        viewport.zoomAround(((cx - labelWidthPx) / plotWidthPx()).coerceIn(0f, 1f), factor)
                     },
-                )
+                    onTap = { tap ->
+                        val rowH = (canvasSize.height - axisHeightPx) / ROW_DEFS.size
+                        val row = (tap.y / rowH).toInt()
+                        if (row !in ROW_DEFS.indices) {
+                            onSelect(null)
+                        } else {
+                            val tapSec = secAt(tap.x)
+                            // Короткі лінії (секунди) тонші за палець - беремо найближчу
+                            // в межах ~14dp від дотику.
+                            val tolSec = touchTolPx / plotWidthPx() * viewport.span
+                            val nearest = latestData.intervals
+                                .filter { it.row == row }
+                                .minByOrNull { distanceToInterval(tapSec, it) }
+                            onSelect(
+                                if (nearest != null && distanceToInterval(tapSec, nearest) <= tolSec) nearest else null,
+                            )
+                        }
+                    },
+                ),
+        ) {
+            val labelWidth = labelWidthPx
+            val plotWidth = size.width - labelWidth
+            val plotBottom = size.height - axisHeightPx
+            val rowH = plotBottom / ROW_DEFS.size
+            val v0 = viewport.start
+            val span = viewport.span
 
-                // Фон рядка.
-                drawRect(
-                    color = color.copy(alpha = 0.06f),
-                    topLeft = Offset(labelWidth, rowTop + 4.dp.toPx()),
-                    size = Size(plotWidth, rowH - 8.dp.toPx()),
-                )
+            fun xFor(sec: Float) = labelWidth + (sec - v0) / span * plotWidth
 
-                // Лінії "від-до". Мінімальна ширина 3dp, щоб секундні запуски
-                // (на добовій шкалі це частки пікселя) були помітні.
-                data.intervals.filter { it.row == rowIndex }.forEach { interval ->
-                    val x0 = xFor(interval.startSec)
-                    val width = (xFor(interval.endSec) - x0).coerceAtLeast(3.dp.toPx())
-                    val topLeft = Offset(x0, rowTop + 6.dp.toPx())
-                    val rectSize = Size(width, rowH - 12.dp.toPx())
-                    drawRect(color = color.copy(alpha = 0.9f), topLeft = topLeft, size = rectSize)
-                    if (interval == selected) {
-                        drawRect(
-                            color = androidx.compose.ui.graphics.Color.White,
-                            topLeft = topLeft,
-                            size = rectSize,
-                            style = Stroke(width = 1.5.dp.toPx()),
-                        )
-                    }
-                }
+            val axisPaint = android.graphics.Paint().apply {
+                color = android.graphics.Color.parseColor("#9BA3B4")
+                textSize = 9.sp.toPx()
+                textAlign = android.graphics.Paint.Align.CENTER
+                isAntiAlias = true
+            }
+            val labelPaint = android.graphics.Paint().apply {
+                color = android.graphics.Color.parseColor("#E6ECFF")
+                textSize = 9.sp.toPx()
+                textAlign = android.graphics.Paint.Align.RIGHT
+                isAntiAlias = true
             }
 
-            // Сьогодні: тонка вертикаль "зараз".
-            data.nowSec?.let { now ->
-                val x = xFor(now)
-                drawLine(
-                    color = TextMuted.copy(alpha = 0.7f),
-                    start = Offset(x, plotTop),
-                    end = Offset(x, size.height - 20.dp.toPx()),
-                    strokeWidth = 1.dp.toPx(),
-                )
+            // Підписи рядків - поза обрізанням, ліворуч від області графіка.
+            ROW_DEFS.forEachIndexed { rowIndex, (label, _) ->
+                val rowCenter = rowIndex * rowH + rowH / 2
+                drawContext.canvas.nativeCanvas.drawText(label, labelWidth - 6.dp.toPx(), rowCenter + 3.dp.toPx(), labelPaint)
+            }
+
+            clipRect(left = labelWidth, top = 0f, right = size.width, bottom = size.height) {
+                // Вертикальна сітка й підписи часу - крок залежить від масштабу.
+                val step = tickStepFor(span)
+                var tick = (kotlin.math.ceil(v0 / step) * step).toInt()
+                while (tick <= v0 + span) {
+                    val x = xFor(tick.toFloat())
+                    drawLine(OutlineSubtle, Offset(x, 0f), Offset(x, plotBottom), strokeWidth = 1f)
+                    drawContext.canvas.nativeCanvas.drawText(hm(tick), x, size.height - 4.dp.toPx(), axisPaint)
+                    tick += step
+                }
+
+                ROW_DEFS.forEachIndexed { rowIndex, (_, color) ->
+                    val rowTop = rowIndex * rowH
+
+                    // Фон рядка.
+                    drawRect(
+                        color = color.copy(alpha = 0.06f),
+                        topLeft = Offset(labelWidth, rowTop + 4.dp.toPx()),
+                        size = Size(plotWidth, rowH - 8.dp.toPx()),
+                    )
+
+                    // Лінії "від-до". Мінімальна ширина 3dp, щоб секундні запуски
+                    // були помітні навіть на добовому масштабі.
+                    data.intervals.filter { it.row == rowIndex }.forEach { interval ->
+                        if (interval.endSec < v0 || interval.startSec > v0 + span) return@forEach
+                        val x0 = xFor(interval.startSec.toFloat())
+                        val width = (xFor(interval.endSec.toFloat()) - x0).coerceAtLeast(3.dp.toPx())
+                        val topLeft = Offset(x0, rowTop + 6.dp.toPx())
+                        val rectSize = Size(width, rowH - 12.dp.toPx())
+                        drawRect(color = color.copy(alpha = 0.9f), topLeft = topLeft, size = rectSize)
+                        if (interval == selected) {
+                            drawRect(
+                                color = Color.White,
+                                topLeft = topLeft,
+                                size = rectSize,
+                                style = Stroke(width = 1.5.dp.toPx()),
+                            )
+                        }
+                    }
+                }
+
+                // Сьогодні: тонка вертикаль "зараз".
+                data.nowSec?.let { now ->
+                    val x = xFor(now.toFloat())
+                    drawLine(TextMuted.copy(alpha = 0.7f), Offset(x, 0f), Offset(x, plotBottom), strokeWidth = 1.dp.toPx())
+                }
+
+                // Лінія спостереження.
+                if (cursorOn && cursorSec != null) {
+                    val x = xFor(cursorSec)
+                    drawLine(Color.White.copy(alpha = 0.85f), Offset(x, 0f), Offset(x, plotBottom), strokeWidth = 1.5.dp.toPx())
+                }
             }
         }
     }

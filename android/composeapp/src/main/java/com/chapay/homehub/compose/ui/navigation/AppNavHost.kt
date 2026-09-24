@@ -143,6 +143,7 @@ fun AppNavHost(
                     EnergyChartScreen(
                         config = uiState.config,
                         repository = viewModel.repository,
+                        status = uiState.status,
                         liveTotals = inv?.let { Triple(it.dailyPv, it.dailyHome, it.dailyGrid) },
                         onBack = { navController.popBackStack() },
                     )
