@@ -64,7 +64,7 @@ import com.chapay.homehub.compose.ui.components.VisibilityToggle
 import com.chapay.homehub.compose.ui.components.chartGestures
 import com.chapay.homehub.compose.ui.components.rememberChartViewport
 import com.chapay.homehub.compose.ui.components.todayIso
-import com.chapay.homehub.compose.ui.theme.AccentBattery
+import com.chapay.homehub.compose.ui.theme.AccentLoad
 import com.chapay.homehub.compose.ui.theme.AccentGrid
 import com.chapay.homehub.compose.ui.theme.AccentPv
 import com.chapay.homehub.compose.ui.theme.OutlineSubtle
@@ -104,7 +104,7 @@ fun EnergyChartScreen(
     var errorText by remember { mutableStateOf<String?>(null) }
     // Вид: лінії потужності або кругова діаграма розподілу.
     var pieMode by rememberSaveable { mutableStateOf(false) }
-    // Які лінії показувати: сонце / будинок / мережа - можна ховати окремо, щоб
+    // Які лінії показувати: сонце / навантаження / мережа - можна ховати окремо, щоб
     // роздивитись одну з них.
     var showPv by rememberSaveable { mutableStateOf(true) }
     var showHome by rememberSaveable { mutableStateOf(true) }
@@ -270,7 +270,7 @@ fun EnergyChartScreen(
                         if (unsavedHomeWh > 50.0) {
                             Text(
                                 text = "В історію записано ${savedTotals.second.roundToInt()} з " +
-                                    "${shownTotals.second.roundToInt()} Вт·год (будинок): решта - поточна година " +
+                                    "${shownTotals.second.roundToInt()} Вт·год (навантаження): решта - поточна година " +
                                     "або ще не записана прошивкою.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextMuted,
@@ -301,7 +301,7 @@ private fun SummaryLegendRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         VisibilityToggle("сонце", AccentPv, visible[0], { onToggle(0) }, detail = "${totals.first.roundToInt()} Вт·год")
-        VisibilityToggle("будинок", AccentBattery, visible[1], { onToggle(1) }, detail = "${totals.second.roundToInt()} Вт·год")
+        VisibilityToggle("навантаження", AccentLoad, visible[1], { onToggle(1) }, detail = "${totals.second.roundToInt()} Вт·год")
         VisibilityToggle("мережа", AccentGrid, visible[2], { onToggle(2) }, detail = "${totals.third.roundToInt()} Вт·год")
         Spacer(Modifier.weight(1f))
         Text(unitNote, style = MaterialTheme.typography.labelSmall, color = TextMuted)
@@ -341,7 +341,7 @@ private fun EnergyLineChart(
 
     val series = listOf(
         Series("сонце", AccentPv, points.map { it.pv }),
-        Series("будинок", AccentBattery, points.map { it.home }),
+        Series("навантаження", AccentLoad, points.map { it.home }),
         Series("мережа", AccentGrid, points.map { it.grid }),
     ).filterIndexed { i, _ -> visible.getOrElse(i) { true } }
     if (series.isEmpty()) {
