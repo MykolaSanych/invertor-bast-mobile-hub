@@ -2,9 +2,11 @@ package com.chapay.homehub.otaflasher
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.Bundle
 import android.text.format.Formatter
 import android.view.View
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -20,6 +22,9 @@ private data class OtaTarget(
     val password: String,
     val assetFileName: String,
 )
+
+private const val MAX_ATTEMPTS = 5
+private const val RETRY_DELAY_MS = 4000L
 
 class MainActivity : AppCompatActivity() {
     private lateinit var wifiStatusText: TextView
@@ -94,19 +99,47 @@ class MainActivity : AppCompatActivity() {
         logText.text = ""
         progressBar.visibility = View.VISIBLE
 
+        // Заливка - це ~1200 дрібних пакетів "чанк-підтвердження", і ESP32 рве
+        // з'єднання, якщо чанк не прийшов за секунду. Тому: екран не гасне і Wi-Fi
+        // без енергозбереження (LOW_LATENCY/HIGH_PERF) на час заливки.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val wifiLock = runCatching {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            else @Suppress("DEPRECATION") WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            wm.createWifiLock(mode, "otaflasher").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }.getOrNull()
+
         lifecycleScope.launch {
             val summary = mutableListOf<String>()
             for ((index, target) in targets.withIndex()) {
                 progressBar.progress = 0
                 appendLog("=== [${index + 1}/${targets.size}] ${target.title} (${target.ip}) ===")
-                val result = OtaFlasher.flash(
-                    context = applicationContext,
-                    espIp = target.ip,
-                    password = target.password,
-                    assetFileName = target.assetFileName,
-                    onProgress = { msg -> runOnUiThread { appendLog(msg) } },
-                    onPercent = { pct -> runOnUiThread { progressBar.progress = pct } },
-                )
+                // Тимчасовий обрив (Wi-Fi, тайм-аут) - не привід здаватись: після
+                // збою ESP32 сам скасовує оновлення і готовий до нової спроби.
+                var result: OtaFlasher.OtaResult = OtaFlasher.OtaResult.Failure("не запускалось")
+                for (attempt in 1..MAX_ATTEMPTS) {
+                    if (attempt > 1) {
+                        appendLog("--- спроба $attempt/$MAX_ATTEMPTS ---")
+                        progressBar.progress = 0
+                    }
+                    result = OtaFlasher.flash(
+                        context = applicationContext,
+                        espIp = target.ip,
+                        password = target.password,
+                        assetFileName = target.assetFileName,
+                        onProgress = { msg -> runOnUiThread { appendLog(msg) } },
+                        onPercent = { pct -> runOnUiThread { progressBar.progress = pct } },
+                    )
+                    val failure = result as? OtaFlasher.OtaResult.Failure ?: break
+                    if (!failure.retryable || attempt == MAX_ATTEMPTS) break
+                    appendLog("Збій: ${failure.message}")
+                    appendLog("Повтор за ${RETRY_DELAY_MS / 1000} с...")
+                    delay(RETRY_DELAY_MS)
+                }
                 when (result) {
                     is OtaFlasher.OtaResult.Success -> {
                         appendLog("УСПІХ: ${target.title} оновлено.")
@@ -125,6 +158,8 @@ class MainActivity : AppCompatActivity() {
                 appendLog("=== ПІДСУМОК ===")
                 summary.forEach { appendLog(it) }
             }
+            runCatching { wifiLock?.release() }
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             isFlashing = false
             setButtonsEnabled(true)
         }

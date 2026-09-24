@@ -41,7 +41,9 @@ object OtaFlasher {
 
     sealed class OtaResult {
         data object Success : OtaResult()
-        data class Failure(val message: String) : OtaResult()
+        // retryable=false - повтор безглуздий (невірний пароль, неочікувана відповідь);
+        // усе інше (обрив Wi-Fi, тайм-аути) - тимчасове, і MainActivity повторює спробу.
+        data class Failure(val message: String, val retryable: Boolean = true) : OtaResult()
     }
 
     suspend fun flash(
@@ -54,6 +56,7 @@ object OtaFlasher {
     ): OtaResult = withContext(Dispatchers.IO) {
         var serverSocket: ServerSocket? = null
         var socket: Socket? = null
+        var transferredPercent = -1
         try {
             val firmwareBytes = context.assets.open(assetFileName).use { it.readBytes() }
             val contentSize = firmwareBytes.size
@@ -84,7 +87,7 @@ object OtaFlasher {
                 if (inviteResponse.startsWith("AUTH")) {
                     onProgress("Потрібна автентифікація...")
                     val nonce = inviteResponse.trim().split(" ").getOrNull(1)
-                        ?: return@withContext OtaResult.Failure("Некоректна відповідь AUTH: $inviteResponse")
+                        ?: return@withContext OtaResult.Failure("Некоректна відповідь AUTH: $inviteResponse", retryable = false)
 
                     val cnonceText = "$assetFileName$contentSize$fileMd5$espIp"
                     val cnonce = md5Hex(cnonceText.toByteArray(Charsets.UTF_8))
@@ -96,11 +99,12 @@ object OtaFlasher {
                     if (authResponse != "OK") {
                         return@withContext OtaResult.Failure(
                             "Автентифікація не пройшла (невірний пароль?): ${authResponse ?: "немає відповіді"}",
+                            retryable = authResponse == null,
                         )
                     }
                     onProgress("Автентифіковано.")
                 } else {
-                    return@withContext OtaResult.Failure("Неочікувана відповідь від пристрою: $inviteResponse")
+                    return@withContext OtaResult.Failure("Неочікувана відповідь від пристрою: $inviteResponse", retryable = false)
                 }
             }
 
@@ -134,6 +138,7 @@ object OtaFlasher {
                 lastResponseHadOk = n > 0 && String(ackBuf, 0, n, Charsets.UTF_8).contains("OK")
 
                 val percent = offset * 100 / contentSize
+                transferredPercent = percent
                 if (percent != lastPercent) {
                     lastPercent = percent
                     onPercent(percent)
@@ -159,7 +164,8 @@ object OtaFlasher {
             }
             OtaResult.Failure("Пристрій не підтвердив успішне завершення заливки.")
         } catch (e: Exception) {
-            OtaResult.Failure("Помилка: ${e.message ?: e.toString()}")
+            val where = if (transferredPercent >= 0) " (обірвано на $transferredPercent%)" else ""
+            OtaResult.Failure("Помилка: ${e.message ?: e.toString()}$where")
         } finally {
             runCatching { socket?.close() }
             runCatching { serverSocket?.close() }
