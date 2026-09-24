@@ -406,6 +406,19 @@ class StatusRepository(
         )
     }
 
+    // Події зміни стану (бойлер/насос/мережа/сонце) з точністю до секунди:
+    // {"date","now":сек_доби|null,"e":[[сек,біт,стан],...]}.
+    suspend fun fetchLoadControllerTimeline(config: AppConfig, date: String = ""): JSONObject? = withContext(Dispatchers.IO) {
+        if (!config.loadControllerEnabled) return@withContext null
+        val trimmedDate = date.trim()
+        fetchJsonWithAuth(
+            baseUrlRaw = config.loadControllerBaseUrl,
+            password = config.loadControllerPassword,
+            path = "/api/timeline",
+            query = if (trimmedDate.isEmpty()) emptyMap() else mapOf("date" to trimmedDate),
+        )
+    }
+
     suspend fun fetchGarageDoorHistory(config: AppConfig): JSONObject? = withContext(Dispatchers.IO) {
         if (!config.garageEnabled) return@withContext null
         fetchJsonWithAuth(
