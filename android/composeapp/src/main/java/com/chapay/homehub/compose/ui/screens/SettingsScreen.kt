@@ -1,6 +1,7 @@
 package com.chapay.homehub.compose.ui.screens
 
 import androidx.compose.foundation.layout.Column
+import com.chapay.homehub.compose.data.StatusRepository
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,7 +40,9 @@ fun SettingsScreen(
     config: AppConfig,
     onSave: (AppConfig) -> Unit,
     onBack: () -> Unit,
+    repository: StatusRepository,
 ) {
+    var cacheStats by remember { mutableStateOf(repository.chartCacheStats()) }
     var inverterUrl by remember { mutableStateOf(config.inverterBaseUrl) }
     var inverterPass by remember { mutableStateOf(config.inverterPassword) }
     var inverterEnabled by remember { mutableStateOf(config.inverterEnabled) }
@@ -112,6 +115,26 @@ fun SettingsScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            Spacer(Modifier.height(20.dp))
+            Text("Кеш графіків на телефоні", style = MaterialTheme.typography.labelMedium, color = TextMuted)
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "${cacheStats.first} файлів, ${"%.1f".format(cacheStats.second / 1048576.0)} МБ",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                androidx.compose.material3.OutlinedButton(
+                    onClick = {
+                        repository.clearChartCache()
+                        cacheStats = repository.chartCacheStats()
+                    },
+                ) { Text("Очистити") }
+            }
 
             Spacer(Modifier.height(28.dp))
             Button(

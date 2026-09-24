@@ -123,6 +123,7 @@ fun AppNavHost(
                         config = uiState.config,
                         onSave = viewModel::setConfig,
                         onBack = { navController.popBackStack() },
+                        repository = viewModel.repository,
                     )
                 }
                 composable(ROUTE_SCHEME) {

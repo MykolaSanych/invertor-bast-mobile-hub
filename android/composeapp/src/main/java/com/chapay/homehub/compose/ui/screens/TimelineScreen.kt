@@ -176,8 +176,15 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
         data = null
         selected = null
         cursorSec = null
-        var firstLoad = true
+        // Що вже є на телефоні (закриті доби - назавжди) - показуємо одразу.
+        val cached = runCatching { repository.peekLoadControllerTimeline(config, date) }.getOrNull()
         var timelineSeen = false
+        if (cached != null) {
+            timelineSeen = true
+            data = parseTimelineEvents(cached)
+            loading = false
+        }
+        var firstLoad = cached == null
         while (true) {
             if (firstLoad) loading = true
             val payload = runCatching { repository.fetchLoadControllerTimeline(config, date) }.getOrNull()

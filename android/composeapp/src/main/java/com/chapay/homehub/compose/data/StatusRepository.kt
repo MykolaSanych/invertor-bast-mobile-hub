@@ -44,6 +44,7 @@ class StatusRepository(
         .callTimeout(90, TimeUnit.SECONDS)
         .build()
     private val appContext = context?.applicationContext
+    private val chartCache = ChartCache(appContext)
 
     private val multicastCacheLock = Any()
     private var cachedInverter: InverterStatus? = null
@@ -326,6 +327,15 @@ class StatusRepository(
     suspend fun fetchInverterDaily(config: AppConfig, date: String): JSONObject? = withContext(Dispatchers.IO) {
         val requestedDate = date.trim()
         if (requestedDate.isEmpty()) return@withContext null
+        // Минула доба не змінюється - після першого вдалого завантаження беремо з диска.
+        // Сьогодні кеш не використовуємо як "свіже" (ttl 0): він лише показується миттєво
+        // до відповіді модуля й виручає при збої зв'язку.
+        cachedJson("daily", config.inverterBaseUrl, requestedDate, PeriodKind.DAY, currentTtlMs = 0L) {
+            fetchInverterDailyNetwork(config, requestedDate)
+        }
+    }
+
+    private suspend fun fetchInverterDailyNetwork(config: AppConfig, requestedDate: String): JSONObject? = withContext(Dispatchers.IO) {
 
         val requested = fetchInverterAnalyticsJsonWithFallback(
             config = config,
@@ -367,35 +377,106 @@ class StatusRepository(
 
     // /api/monthly і /api/yearly інвертор збирає скануванням десятків/сотень файлів
     // на LittleFS - це 8-20 секунд (заміряно), тож звичайний 8-секундний таймаут
-    // тут не годиться, а повторні відкриття беремо з кешу.
+    // тут не годиться. Закриті місяці/роки беруться з диска без запитів до модуля;
+    // поточний період оновлюється не частіше ніж раз на 2 хв.
     suspend fun fetchInverterMonthly(config: AppConfig, month: String): JSONObject? = withContext(Dispatchers.IO) {
-        cachedAnalytics("monthly:$month", isCurrent = month == todayIsoDate().take(7)) {
+        cachedJson("monthly", config.inverterBaseUrl, month, PeriodKind.MONTH, currentTtlMs = CURRENT_PERIOD_TTL_MS) {
             fetchInverterHeavyJson(config, "/api/monthly", mapOf("month" to month))
         }?.takeIf { it.optString("month") == month }
     }
 
     suspend fun fetchInverterYearly(config: AppConfig, year: Int): JSONObject? = withContext(Dispatchers.IO) {
         val safeYear = year.coerceIn(2000, 2099)
-        cachedAnalytics("yearly:$safeYear", isCurrent = safeYear == Calendar.getInstance().get(Calendar.YEAR)) {
+        cachedJson("yearly", config.inverterBaseUrl, safeYear.toString(), PeriodKind.YEAR, currentTtlMs = CURRENT_PERIOD_TTL_MS) {
             fetchInverterHeavyJson(config, "/api/yearly", mapOf("year" to safeYear.toString()))
         }?.takeIf { it.optInt("current_year", safeYear) == safeYear }
     }
 
-    private val analyticsCacheLock = Any()
-    private val analyticsCache = mutableMapOf<String, Pair<Long, JSONObject>>()
+    // ---- Дисковий кеш графіків ----
 
-    // Поточний місяць/рік змінюється щодоби - кеш 2 хв; минулі періоди незмінні - 30 хв.
-    private fun cachedAnalytics(key: String, isCurrent: Boolean, load: () -> JSONObject?): JSONObject? {
-        val ttl = if (isCurrent) 2 * 60_000L else 30 * 60_000L
-        val now = System.currentTimeMillis()
-        synchronized(analyticsCacheLock) {
-            analyticsCache[key]?.let { (at, payload) -> if (now - at < ttl) return payload }
+    private enum class PeriodKind { DAY, MONTH, YEAR }
+
+    // Початок наступного періоду (локальний час) - з нього період вважається завершеним.
+    private fun periodEndMs(kind: PeriodKind, key: String): Long? {
+        val cal = Calendar.getInstance()
+        cal.clear()
+        return runCatching {
+            when (kind) {
+                PeriodKind.DAY -> {
+                    cal.set(key.substring(0, 4).toInt(), key.substring(5, 7).toInt() - 1, key.substring(8, 10).toInt())
+                    cal.add(Calendar.DAY_OF_MONTH, 1)
+                }
+                PeriodKind.MONTH -> {
+                    cal.set(key.substring(0, 4).toInt(), key.substring(5, 7).toInt() - 1, 1)
+                    cal.add(Calendar.MONTH, 1)
+                }
+                PeriodKind.YEAR -> {
+                    cal.set(key.toInt(), 0, 1)
+                    cal.add(Calendar.YEAR, 1)
+                }
+            }
+            cal.timeInMillis
+        }.getOrNull()
+    }
+
+    // Закритий = збережений щонайменше через 30 хв після кінця періоду (щоб не закешувати
+    // неповні дані, зняті одразу після півночі, поки модуль ще дописує файл доби).
+    private fun isClosedPeriod(kind: PeriodKind, key: String, savedAtMs: Long): Boolean =
+        periodEndMs(kind, key)?.let { savedAtMs >= it + CLOSED_PERIOD_GRACE_MS } ?: false
+
+    /**
+     * Кеш-обгортка: закритий період - з диска без мережі; інакше, якщо запис свіжіший за
+     * [currentTtlMs], теж з диска; інакше [load], і успіх пишеться на диск. Коли [load] не
+     * вдався (лагає зв'язок) - віддаємо застарілий запис, якщо він є, замість порожнього.
+     */
+    private suspend fun cachedJson(
+        kind: String,
+        scopeUrl: String,
+        key: String,
+        period: PeriodKind,
+        currentTtlMs: Long,
+        load: suspend () -> JSONObject?,
+    ): JSONObject? {
+        val scope = chartCache.scopeOf(scopeUrl)
+        val entry = chartCache.get(kind, scope, key)
+        if (entry != null) {
+            if (isClosedPeriod(period, key, entry.savedAtMs)) return entry.payload
+            if (System.currentTimeMillis() - entry.savedAtMs < currentTtlMs) return entry.payload
         }
         val fresh = load()
-        if (fresh != null) synchronized(analyticsCacheLock) { analyticsCache[key] = System.currentTimeMillis() to fresh }
-        // Свіжого не вийшло (збій зв'язку) - краще застарілий кеш, ніж порожньо.
-        return fresh ?: synchronized(analyticsCacheLock) { analyticsCache[key]?.second }
+        if (fresh != null) {
+            chartCache.put(kind, scope, key, fresh)
+            return fresh
+        }
+        return entry?.payload
     }
+
+    /** Що вже є на диску для цього періоду (без мережі): екран показує це миттєво, потім оновлює. */
+    suspend fun peekInverterDaily(config: AppConfig, date: String): JSONObject? = withContext(Dispatchers.IO) {
+        chartCache.get("daily", chartCache.scopeOf(config.inverterBaseUrl), date.trim())?.payload
+    }
+
+    suspend fun peekInverterMonthly(config: AppConfig, month: String): JSONObject? = withContext(Dispatchers.IO) {
+        chartCache.get("monthly", chartCache.scopeOf(config.inverterBaseUrl), month)?.payload
+    }
+
+    suspend fun peekInverterYearly(config: AppConfig, year: Int): JSONObject? = withContext(Dispatchers.IO) {
+        chartCache.get("yearly", chartCache.scopeOf(config.inverterBaseUrl), year.toString())?.payload
+    }
+
+    suspend fun peekLoadControllerTimeline(config: AppConfig, date: String): JSONObject? = withContext(Dispatchers.IO) {
+        chartCache.get("timeline", chartCache.scopeOf(config.loadControllerBaseUrl), date.trim())?.payload
+    }
+
+    suspend fun peekLoadControllerLogLines(config: AppConfig, date: String): List<String>? = withContext(Dispatchers.IO) {
+        val payload = chartCache.get("log", chartCache.scopeOf(config.loadControllerBaseUrl), date.trim())?.payload
+        payload?.optJSONArray("lines")?.let { arr -> List(arr.length()) { arr.optString(it) } }
+    }
+
+    /** (файлів, байтів) у кеші графіків. */
+    fun chartCacheStats(): Pair<Int, Long> = chartCache.stats()
+
+    fun clearChartCache(): Int = chartCache.clear()
 
     private fun fetchInverterHeavyJson(config: AppConfig, path: String, query: Map<String, String>): JSONObject? {
         if (!config.inverterEnabled) return null
@@ -427,12 +508,16 @@ class StatusRepository(
     suspend fun fetchLoadControllerTimeline(config: AppConfig, date: String = ""): JSONObject? = withContext(Dispatchers.IO) {
         if (!config.loadControllerEnabled) return@withContext null
         val trimmedDate = date.trim()
-        fetchJsonWithAuth(
-            baseUrlRaw = config.loadControllerBaseUrl,
-            password = config.loadControllerPassword,
-            path = "/api/timeline",
-            query = if (trimmedDate.isEmpty()) emptyMap() else mapOf("date" to trimmedDate),
-        )
+        val load: suspend () -> JSONObject? = {
+            fetchJsonWithAuth(
+                baseUrlRaw = config.loadControllerBaseUrl,
+                password = config.loadControllerPassword,
+                path = "/api/timeline",
+                query = if (trimmedDate.isEmpty()) emptyMap() else mapOf("date" to trimmedDate),
+            )
+        }
+        // load_controller тримає лише 30 діб подій - на телефоні закриті доби лишаються назавжди.
+        if (trimmedDate.isEmpty()) load() else cachedJson("timeline", config.loadControllerBaseUrl, trimmedDate, PeriodKind.DAY, currentTtlMs = 0L, load = load)
     }
 
     suspend fun fetchGarageDoorHistory(config: AppConfig): JSONObject? = withContext(Dispatchers.IO) {
@@ -503,14 +588,22 @@ class StatusRepository(
         val requestedDate = date.trim()
         if (requestedDate.isEmpty()) return@withContext null
 
-        val raw = fetchTextWithAuth(
-            baseUrlRaw = config.loadControllerBaseUrl,
-            password = config.loadControllerPassword,
-            path = "/api/sd/file",
-            query = mapOf("name" to "log_$requestedDate.log"),
-        ) ?: return@withContext null
+        val payload = cachedJson("log", config.loadControllerBaseUrl, requestedDate, PeriodKind.DAY, currentTtlMs = 0L) {
+            val raw = fetchTextWithAuth(
+                baseUrlRaw = config.loadControllerBaseUrl,
+                password = config.loadControllerPassword,
+                path = "/api/sd/file",
+                query = mapOf("name" to "log_$requestedDate.log"),
+            )
+            raw?.let {
+                JSONObject().put(
+                    "lines",
+                    JSONArray(it.lineSequence().map { line -> line.trim() }.filter { line -> line.isNotEmpty() }.toList()),
+                )
+            }
+        } ?: return@withContext null
 
-        raw.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        payload.optJSONArray("lines")?.let { arr -> List(arr.length()) { arr.optString(it) } }
     }
 
     private fun fetchUnifiedFromMulticastDetailed(
@@ -1651,6 +1744,10 @@ private fun JSONObject.optStringSafeAny(fallback: String, vararg keys: String): 
 }
 
 private const val PUMP_POWER_NOISE_FLOOR_W = 100.0
+// Поточний місяць/рік у кеші вважаємо свіжим 2 хв (модуль рахує їх 8-20 с).
+private const val CURRENT_PERIOD_TTL_MS = 2 * 60_000L
+// Період "закритий", коли дані зняті не раніше ніж через пів години після його кінця.
+private const val CLOSED_PERIOD_GRACE_MS = 30 * 60_000L
 private const val TIME_SYNC_BROWSER_PATH = "/api/time/syncbrowser"
 private const val MULTICAST_STATUS_REQUEST_KIND_V2 = "homehub_status_request"
 

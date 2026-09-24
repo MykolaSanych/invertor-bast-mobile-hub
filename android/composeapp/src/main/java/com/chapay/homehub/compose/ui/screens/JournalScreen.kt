@@ -66,7 +66,13 @@ fun JournalScreen(config: AppConfig, repository: StatusRepository) {
     LaunchedEffect(date, config) {
         // Нова дата/конфіг - старі рядки чужої доби не показуємо.
         entries = emptyList()
-        var firstLoad = true
+        // Що вже є на телефоні - показуємо одразу, мережа лише оновлює.
+        val cached = runCatching { repository.peekLoadControllerLogLines(config, date) }.getOrNull()
+        if (cached != null) {
+            entries = cached.map(::parseLogLine).asReversed()
+            loading = false
+        }
+        var firstLoad = cached == null
         while (true) {
             if (firstLoad) loading = true
             val lines = runCatching { repository.fetchLoadControllerLogLines(config, date) }.getOrNull()

@@ -303,7 +303,27 @@ fun EnergyChartScreen(
         savedTotals = Triple(0.0, 0.0, 0.0)
         errorText = null
         cursorX = null
-        var firstLoad = true
+        // Що вже є на телефоні - показуємо одразу, не чекаючи повільний модуль
+        // (місяць 8 с, рік ~20 с); мережа лише оновлює.
+        val cached = runCatching {
+            when (period) {
+                EnergyPeriod.DAY -> repository.peekInverterDaily(config, periodKey)
+                EnergyPeriod.MONTH -> repository.peekInverterMonthly(config, periodKey)
+                EnergyPeriod.YEAR -> repository.peekInverterYearly(config, periodKey.toIntOrNull() ?: 0)
+            }
+        }.getOrNull()
+        if (cached != null) {
+            val loaded = when (period) {
+                EnergyPeriod.DAY -> parseDay(cached)
+                EnergyPeriod.MONTH -> parseMonth(cached)
+                EnergyPeriod.YEAR -> parseYear(cached)
+            }
+            points = loaded.points
+            if (period == EnergyPeriod.DAY) stepMinutes = loaded.stepMinutes
+            savedTotals = loaded.totalsWh
+            loading = false
+        }
+        var firstLoad = cached == null
         while (true) {
             if (firstLoad) loading = true
             val payload = runCatching {
