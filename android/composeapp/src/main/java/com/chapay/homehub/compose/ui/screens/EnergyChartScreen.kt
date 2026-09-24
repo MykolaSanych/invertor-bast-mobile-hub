@@ -1,7 +1,6 @@
 package com.chapay.homehub.compose.ui.screens
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,9 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
@@ -34,7 +31,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -58,33 +54,207 @@ import com.chapay.homehub.compose.data.StatusRepository
 import com.chapay.homehub.compose.data.UnifiedStatus
 import com.chapay.homehub.compose.ui.components.ChartToolbarActions
 import com.chapay.homehub.compose.ui.components.ChartViewport
-import com.chapay.homehub.compose.ui.components.DateNavHeader
 import com.chapay.homehub.compose.ui.components.LockLandscapeOrientation
+import com.chapay.homehub.compose.ui.components.NavGranularity
+import com.chapay.homehub.compose.ui.components.PeriodNavHeader
 import com.chapay.homehub.compose.ui.components.VisibilityToggle
 import com.chapay.homehub.compose.ui.components.chartGestures
 import com.chapay.homehub.compose.ui.components.rememberChartViewport
 import com.chapay.homehub.compose.ui.components.todayIso
-import com.chapay.homehub.compose.ui.theme.AccentLoad
 import com.chapay.homehub.compose.ui.theme.AccentGrid
+import com.chapay.homehub.compose.ui.theme.AccentLoad
 import com.chapay.homehub.compose.ui.theme.AccentPv
 import com.chapay.homehub.compose.ui.theme.OutlineSubtle
 import com.chapay.homehub.compose.ui.theme.SurfaceContainer
 import com.chapay.homehub.compose.ui.theme.SurfaceContainerHigh
 import com.chapay.homehub.compose.ui.theme.TextMuted
-import com.chapay.homehub.compose.ui.theme.TextPrimary
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
-// Точка графіка: середня потужність (Вт) за інтервал, що починається з minute.
-// Для 15-хвилинних слотів це pv_w/home_w/grid_w; для старої прошивки без слотів
-// - годинні Вт·год (числово рівні середній потужності за годину).
-private data class ChartPoint(val minute: Int, val pv: Double, val home: Double, val grid: Double)
+private enum class EnergyPeriod(val label: String, val granularity: NavGranularity) {
+    DAY("Доба", NavGranularity.DAY),
+    MONTH("Місяць", NavGranularity.MONTH),
+    YEAR("Рік", NavGranularity.YEAR),
+}
+
+// Точка графіка. x - позиція на осі періоду: хвилина початку інтервалу (доба),
+// день місяця - 1 (місяць) або номер місяця - 1 (рік). Значення: середня
+// потужність, Вт (доба), або енергія, кВт·год (місяць/рік).
+private data class ChartPoint(val x: Int, val pv: Double, val home: Double, val grid: Double)
 
 private data class Series(val label: String, val color: Color, val values: List<Double>)
+
+// Що потрібно графіку від осі X залежно від періоду.
+private class XAxis(
+    val domainMax: Float,
+    val pointWidth: Float,
+    val minSpan: Float,
+    val tickSteps: IntArray,
+    val maxTicks: Float,
+    val tickLabel: (Int) -> String,
+    val pointTitle: (Int) -> String,
+    // Вісь Y - енергія в кВт·год (дробові підписи), а не потужність у Вт.
+    val energyUnits: Boolean,
+) {
+    val unit: String get() = if (energyUnits) "кВт·год" else "Вт"
+}
+
+private val MONTH_SHORT = listOf("Січ", "Лют", "Бер", "Кві", "Тра", "Чер", "Лип", "Сер", "Вер", "Жов", "Лис", "Гру")
+private val MONTH_FULL = listOf(
+    "Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень",
+    "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень",
+)
+
+// Кроки підписів осі X доби (хв).
+private val MINUTE_TICK_STEPS = intArrayOf(1, 2, 5, 10, 15, 30, 60, 120, 180)
+
+private fun hhmm(minute: Int): String = "%d:%02d".format(minute / 60, minute % 60)
+
+private fun daysIn(year: Int, month: Int): Int {
+    val cal = java.util.Calendar.getInstance()
+    cal.set(year, month - 1, 1)
+    return cal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+}
+
+private fun buildAxis(period: EnergyPeriod, stepMinutes: Int, anchor: String): XAxis = when (period) {
+    EnergyPeriod.DAY -> XAxis(
+        domainMax = (1440 - stepMinutes).coerceAtLeast(1).toFloat(),
+        pointWidth = stepMinutes.toFloat(),
+        minSpan = (stepMinutes * 2).toFloat(),
+        tickSteps = MINUTE_TICK_STEPS,
+        maxTicks = 8f,
+        tickLabel = { hhmm(it) },
+        pointTitle = { "${hhmm(it)}-${hhmm(it + stepMinutes)}" },
+        energyUnits = false,
+    )
+    EnergyPeriod.MONTH -> {
+        val year = anchor.take(4).toIntOrNull() ?: 2000
+        val month = anchor.substring(5, 7).toIntOrNull() ?: 1
+        XAxis(
+            domainMax = (daysIn(year, month) - 1).coerceAtLeast(1).toFloat(),
+            pointWidth = 1f,
+            minSpan = 4f,
+            tickSteps = intArrayOf(1, 2, 3, 5, 7),
+            maxTicks = 12f,
+            tickLabel = { (it + 1).toString() },
+            pointTitle = { "%d.%02d.%d".format(it + 1, month, year) },
+            energyUnits = true,
+        )
+    }
+    EnergyPeriod.YEAR -> XAxis(
+        domainMax = 11f,
+        pointWidth = 1f,
+        minSpan = 3f,
+        tickSteps = intArrayOf(1),
+        maxTicks = 12f,
+        tickLabel = { MONTH_SHORT.getOrElse(it) { "" } },
+        pointTitle = { "${MONTH_FULL.getOrElse(it) { "" }} ${anchor.take(4)}" },
+        energyUnits = true,
+    )
+}
+
+private class LoadedPeriod(val points: List<ChartPoint>, val stepMinutes: Int, val totalsWh: Triple<Double, Double, Double>)
+
+// /api/daily: 15-хв слоти (pv_w/home_w/grid_w) або, для старої прошивки, годинні Вт·год.
+private fun parseDay(payload: JSONObject): LoadedPeriod {
+    val slotsArr = payload.optJSONArray("slots")
+    val parsed = mutableListOf<ChartPoint>()
+    var step = 60
+    if (slotsArr != null && slotsArr.length() > 0) {
+        for (i in 0 until slotsArr.length()) {
+            val row = slotsArr.optJSONObject(i) ?: continue
+            parsed.add(
+                ChartPoint(
+                    x = row.optInt("m", i * 15),
+                    pv = row.optDouble("pv_w", 0.0),
+                    home = row.optDouble("home_w", 0.0),
+                    grid = row.optDouble("grid_w", 0.0),
+                ),
+            )
+        }
+        step = 15
+    } else {
+        val hoursArr = payload.optJSONArray("hours")
+        if (hoursArr != null) {
+            for (i in 0 until hoursArr.length()) {
+                val row = hoursArr.optJSONObject(i) ?: continue
+                parsed.add(
+                    ChartPoint(
+                        x = row.optInt("hour", i) * 60,
+                        pv = row.optDouble("pv", 0.0),
+                        home = row.optDouble("home", 0.0),
+                        grid = row.optDouble("grid", 0.0),
+                    ),
+                )
+            }
+        }
+    }
+    val t = payload.optJSONObject("totals")
+    return LoadedPeriod(
+        points = parsed,
+        stepMinutes = step,
+        totalsWh = Triple(
+            t?.optDouble("dailyPV", 0.0) ?: 0.0,
+            t?.optDouble("dailyHome", 0.0) ?: 0.0,
+            t?.optDouble("dailyGrid", 0.0) ?: 0.0,
+        ),
+    )
+}
+
+// /api/monthly: {"month","days":[{"day","pv","home","grid",...}]} у Вт·год за добу.
+// Доба без жодного виміру (усі нулі) - "немає даних", а не "нуль": точку пропускаємо,
+// щоб лінія не падала на нуль і не вигадувала споживання.
+private fun parseMonth(payload: JSONObject): LoadedPeriod {
+    val days = payload.optJSONArray("days")
+    val points = mutableListOf<ChartPoint>()
+    var pv = 0.0
+    var home = 0.0
+    var grid = 0.0
+    if (days != null) {
+        for (i in 0 until days.length()) {
+            val row = days.optJSONObject(i) ?: continue
+            val d = row.optInt("day", i + 1)
+            val p = row.optDouble("pv", 0.0)
+            val h = row.optDouble("home", 0.0)
+            val g = row.optDouble("grid", 0.0)
+            if (p == 0.0 && h == 0.0 && g == 0.0) continue
+            points.add(ChartPoint(d - 1, p / 1000.0, h / 1000.0, g / 1000.0))
+            pv += p
+            home += h
+            grid += g
+        }
+    }
+    return LoadedPeriod(points, 0, Triple(pv, home, grid))
+}
+
+// /api/yearly: масиви з 12 місячних сум (Вт·год) pv/home/grid і data_count (кількість діб з даними).
+private fun parseYear(payload: JSONObject): LoadedPeriod {
+    val pvArr = payload.optJSONArray("pv")
+    val homeArr = payload.optJSONArray("home")
+    val gridArr = payload.optJSONArray("grid")
+    val counts = payload.optJSONArray("data_count")
+    val points = mutableListOf<ChartPoint>()
+    var pv = 0.0
+    var home = 0.0
+    var grid = 0.0
+    for (i in 0 until 12) {
+        val p = pvArr?.optDouble(i, 0.0) ?: 0.0
+        val h = homeArr?.optDouble(i, 0.0) ?: 0.0
+        val g = gridArr?.optDouble(i, 0.0) ?: 0.0
+        val n = counts?.optInt(i, 0) ?: 0
+        if (n == 0 && p == 0.0 && h == 0.0 && g == 0.0) continue
+        points.add(ChartPoint(i, p / 1000.0, h / 1000.0, g / 1000.0))
+        pv += p
+        home += h
+        grid += g
+    }
+    return LoadedPeriod(points, 0, Triple(pv, home, grid))
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,104 +266,97 @@ fun EnergyChartScreen(
     onBack: () -> Unit,
 ) {
     LockLandscapeOrientation()
-    var date by remember { mutableStateOf(todayIso()) }
+    var period by rememberSaveable { mutableStateOf(EnergyPeriod.DAY) }
+    // Опорна дата "YYYY-MM-DD": для місяця/року береться її початок, тож період
+    // не губиться при перемиканні Доба/Місяць/Рік.
+    var anchor by rememberSaveable { mutableStateOf(todayIso()) }
     var points by remember { mutableStateOf<List<ChartPoint>>(emptyList()) }
     var stepMinutes by remember { mutableStateOf(60) }
+    // Підсумки завантаженого періоду, Вт·год.
     var savedTotals by remember { mutableStateOf(Triple(0.0, 0.0, 0.0)) }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
-    // Вид: лінії потужності або кругова діаграма розподілу.
+    // Вид: лінії або кругова діаграма розподілу.
     var pieMode by rememberSaveable { mutableStateOf(false) }
     // Які лінії показувати: сонце / навантаження / мережа - можна ховати окремо, щоб
     // роздивитись одну з них.
     var showPv by rememberSaveable { mutableStateOf(true) }
     var showHome by rememberSaveable { mutableStateOf(true) }
     var showGrid by rememberSaveable { mutableStateOf(true) }
-    // Вертикальний курсор із підказкою: не наближено - веде палець, наближено - дотик.
-    var cursorMinute by remember { mutableStateOf<Float?>(null) }
+    // Вертикальний курсор із підказкою (у одиницях осі X): не наближено - веде палець, наближено - дотик.
+    var cursorX by remember { mutableStateOf<Float?>(null) }
+
+    val periodKey = when (period) {
+        EnergyPeriod.DAY -> anchor
+        EnergyPeriod.MONTH -> anchor.take(7)
+        EnergyPeriod.YEAR -> anchor.take(4)
+    }
 
     // Вкладки нижньої навігації лишаються живими в пам'яті (saveState/
     // restoreState), тож одноразовий LaunchedEffect не оновлював би дані при
-    // поверненні на той самий день - цикл з оновленням раз на 30с. Спінер -
-    // лише на першому завантаженні цієї (дата, конфіг) комбінації.
-    LaunchedEffect(date, config) {
-        // Нова дата/конфіг - старі точки чужої доби не показуємо.
+    // поверненні на той самий період - цикл з оновленням (доба - 30с, місяць/рік -
+    // 2 хв: інвертор рахує їх скануванням файлів 8-20 с). Спінер - лише на першому
+    // завантаженні цього (період, конфіг).
+    LaunchedEffect(period, periodKey, config) {
+        // Новий період/конфіг - старі точки чужого періоду не показуємо.
         points = emptyList()
         savedTotals = Triple(0.0, 0.0, 0.0)
         errorText = null
-        cursorMinute = null
+        cursorX = null
         var firstLoad = true
-        var lastFetchFailed = false
         while (true) {
             if (firstLoad) loading = true
-            val payload = runCatching { repository.fetchInverterDaily(config, date) }.getOrNull()
-            lastFetchFailed = payload == null
+            val payload = runCatching {
+                when (period) {
+                    EnergyPeriod.DAY -> repository.fetchInverterDaily(config, periodKey)
+                    EnergyPeriod.MONTH -> repository.fetchInverterMonthly(config, periodKey)
+                    EnergyPeriod.YEAR -> repository.fetchInverterYearly(config, periodKey.toIntOrNull() ?: 0)
+                }
+            }.getOrNull()
             if (payload == null) {
                 // Тимчасовий збій зв'язку (лагає ZeroTier) не стирає вже показаний
                 // графік - помилка лише якщо показувати ще нічого.
                 if (points.isEmpty()) {
-                    errorText = "немає даних (модуль інвертора недоступний або дані за цю добу відсутні)"
+                    errorText = "немає даних (модуль інвертора недоступний або дані за цей період відсутні)"
                 }
             } else {
                 errorText = null
-                val slotsArr = payload.optJSONArray("slots")
-                val parsed = mutableListOf<ChartPoint>()
-                if (slotsArr != null && slotsArr.length() > 0) {
-                    for (i in 0 until slotsArr.length()) {
-                        val row = slotsArr.optJSONObject(i) ?: continue
-                        parsed.add(
-                            ChartPoint(
-                                minute = row.optInt("m", i * 15),
-                                pv = row.optDouble("pv_w", 0.0),
-                                home = row.optDouble("home_w", 0.0),
-                                grid = row.optDouble("grid_w", 0.0),
-                            ),
-                        )
-                    }
-                    stepMinutes = 15
-                } else {
-                    val hoursArr = payload.optJSONArray("hours")
-                    if (hoursArr != null) {
-                        for (i in 0 until hoursArr.length()) {
-                            val row = hoursArr.optJSONObject(i) ?: continue
-                            parsed.add(
-                                ChartPoint(
-                                    minute = row.optInt("hour", i) * 60,
-                                    pv = row.optDouble("pv", 0.0),
-                                    home = row.optDouble("home", 0.0),
-                                    grid = row.optDouble("grid", 0.0),
-                                ),
-                            )
-                        }
-                    }
-                    stepMinutes = 60
+                val loaded = when (period) {
+                    EnergyPeriod.DAY -> parseDay(payload)
+                    EnergyPeriod.MONTH -> parseMonth(payload)
+                    EnergyPeriod.YEAR -> parseYear(payload)
                 }
-                points = parsed
-                val t = payload.optJSONObject("totals")
-                savedTotals = Triple(
-                    t?.optDouble("dailyPV", 0.0) ?: 0.0,
-                    t?.optDouble("dailyHome", 0.0) ?: 0.0,
-                    t?.optDouble("dailyGrid", 0.0) ?: 0.0,
-                )
+                points = loaded.points
+                if (period == EnergyPeriod.DAY) stepMinutes = loaded.stepMinutes
+                savedTotals = loaded.totalsWh
             }
             loading = false
             firstLoad = false
-            // Коли даних ще нема - повторюємо швидко, не чекаємо 30с.
-            delay(if (lastFetchFailed && points.isEmpty()) 5_000 else 30_000)
+            // Коли даних ще нема - повторюємо швидко (для повільних місяця/року - через 15с).
+            val fast = payload == null && points.isEmpty()
+            delay(
+                when {
+                    period == EnergyPeriod.DAY -> if (fast) 5_000L else 30_000L
+                    else -> if (fast) 15_000L else 120_000L
+                },
+            )
         }
     }
 
-    val isToday = date == todayIso()
+    val isToday = anchor == todayIso()
     // Історія (/api/daily) містить лише години, які прошивка вже встигла
     // записати у файл; лічильники "за добу" з /api/status - завжди живі.
-    // Для сьогоднішнього дня в підсумках показуємо живі, щоб вони збігались із
+    // Для сьогоднішньої доби в підсумках показуємо живі, щоб вони збігались із
     // дашбордом, а розбіжність з історією виносимо в підказку під графіком.
-    val shownTotals = if (isToday && liveTotals != null) liveTotals else savedTotals
-    val unsavedHomeWh = if (isToday && liveTotals != null) liveTotals.second - savedTotals.second else 0.0
+    val dayLive = period == EnergyPeriod.DAY && isToday && liveTotals != null
+    val shownTotals = if (dayLive) liveTotals!! else savedTotals
+    val unsavedHomeWh = if (dayLive) liveTotals!!.second - savedTotals.second else 0.0
 
-    // Вісь X - 0..(1440 - крок), щоб останній інтервал доби лягав на правий край.
-    val spanMinutes = (1440 - stepMinutes).coerceAtLeast(1)
-    val viewport = rememberChartViewport(date, 0f, spanMinutes.toFloat(), (stepMinutes * 2).toFloat())
+    val axis = buildAxis(period, stepMinutes, anchor)
+    val viewport = rememberChartViewport(period to periodKey, 0f, axis.domainMax, axis.minSpan)
+
+    fun totalText(wh: Double) =
+        if (period == EnergyPeriod.DAY) "${wh.roundToInt()} Вт·год" else "%.1f кВт·год".format(wh / 1000.0)
 
     Scaffold(
         topBar = {
@@ -217,31 +380,56 @@ fun EnergyChartScreen(
                 .padding(horizontal = 12.dp, vertical = 4.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                DateNavHeader(date = date, onDateChange = { date = it }, modifier = Modifier.weight(1f))
+                PeriodNavHeader(
+                    anchor = anchor,
+                    granularity = period.granularity,
+                    onChange = { anchor = it },
+                    modifier = Modifier.weight(1f),
+                )
+                SingleChoiceSegmentedButtonRow {
+                    EnergyPeriod.entries.forEachIndexed { index, item ->
+                        SegmentedButton(
+                            selected = period == item,
+                            onClick = { period = item },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = EnergyPeriod.entries.size),
+                        ) { Text(item.label, maxLines = 1) }
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
                 SingleChoiceSegmentedButtonRow {
                     SegmentedButton(
                         selected = !pieMode,
                         onClick = { pieMode = false },
                         shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    ) { Text("Лінії") }
+                    ) { Text("Лінії", maxLines = 1) }
                     SegmentedButton(
                         selected = pieMode,
                         onClick = { pieMode = true },
                         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    ) { Text("Діаграма") }
+                    ) { Text("Діаграма", maxLines = 1) }
                 }
             }
             if (pieMode) {
                 EnergyPieSection(
                     status = status,
                     savedTotals = savedTotals,
-                    isToday = isToday,
+                    isToday = period == EnergyPeriod.DAY && isToday,
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 4.dp),
+                    dayMode = period == EnergyPeriod.DAY,
+                    periodLabel = when (period) {
+                        EnergyPeriod.DAY -> "За добу"
+                        EnergyPeriod.MONTH -> "За місяць"
+                        EnergyPeriod.YEAR -> "За рік"
+                    },
                 )
             } else {
                 SummaryLegendRow(
-                    totals = shownTotals,
-                    unitNote = if (stepMinutes == 15) "Вт, середня за 15 хв" else "Вт, середня за годину",
+                    totals = listOf(totalText(shownTotals.first), totalText(shownTotals.second), totalText(shownTotals.third)),
+                    unitNote = when (period) {
+                        EnergyPeriod.DAY -> if (stepMinutes == 15) "Вт, середня за 15 хв" else "Вт, середня за годину"
+                        EnergyPeriod.MONTH -> "кВт·год за добу"
+                        EnergyPeriod.YEAR -> "кВт·год за місяць"
+                    },
                     visible = listOf(showPv, showHome, showGrid),
                     onToggle = { index ->
                         when (index) {
@@ -260,11 +448,16 @@ fun EnergyChartScreen(
                     else -> {
                         EnergyLineChart(
                             points = points,
-                            stepMinutes = stepMinutes,
+                            axis = axis,
                             viewport = viewport,
                             visible = listOf(showPv, showHome, showGrid),
-                            cursorMinute = cursorMinute,
-                            onCursor = { cursorMinute = it },
+                            cursorX = cursorX,
+                            onCursor = { cursorX = it },
+                            emptyText = when (period) {
+                                EnergyPeriod.DAY -> "немає даних за цю добу"
+                                EnergyPeriod.MONTH -> "немає даних за цей місяць"
+                                EnergyPeriod.YEAR -> "немає даних за цей рік"
+                            },
                             modifier = Modifier.fillMaxWidth().weight(1f),
                         )
                         if (unsavedHomeWh > 50.0) {
@@ -285,12 +478,12 @@ fun EnergyChartScreen(
 }
 
 /**
- * Легенда, добові підсумки й перемикачі видимості в одному рядку: "око" + назва +
+ * Легенда, підсумки періоду й перемикачі видимості в одному рядку: "око" + назва +
  * значення. Натискання ховає/показує відповідну лінію графіка.
  */
 @Composable
 private fun SummaryLegendRow(
-    totals: Triple<Double, Double, Double>,
+    totals: List<String>,
     unitNote: String,
     visible: List<Boolean>,
     onToggle: (Int) -> Unit,
@@ -300,9 +493,9 @@ private fun SummaryLegendRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        VisibilityToggle("сонце", AccentPv, visible[0], { onToggle(0) }, detail = "${totals.first.roundToInt()} Вт·год")
-        VisibilityToggle("навантаження", AccentLoad, visible[1], { onToggle(1) }, detail = "${totals.second.roundToInt()} Вт·год")
-        VisibilityToggle("мережа", AccentGrid, visible[2], { onToggle(2) }, detail = "${totals.third.roundToInt()} Вт·год")
+        VisibilityToggle("сонце", AccentPv, visible[0], { onToggle(0) }, detail = totals[0])
+        VisibilityToggle("навантаження", AccentLoad, visible[1], { onToggle(1) }, detail = totals[1])
+        VisibilityToggle("мережа", AccentGrid, visible[2], { onToggle(2) }, detail = totals[2])
         Spacer(Modifier.weight(1f))
         Text(unitNote, style = MaterialTheme.typography.labelSmall, color = TextMuted)
     }
@@ -316,26 +509,19 @@ private fun niceAxisMax(rawMax: Double): Double {
     return step * 4.0
 }
 
-private fun hhmm(minute: Int): String = "%d:%02d".format(minute / 60, minute % 60)
-
-// Кроки підписів осі X (хв): найменший, що дає <= ~8 підписів у видимому вікні.
-private val MINUTE_TICK_STEPS = intArrayOf(1, 2, 5, 10, 15, 30, 60, 120, 180)
-
-private fun minuteTickStep(spanMinutes: Float): Int =
-    MINUTE_TICK_STEPS.firstOrNull { spanMinutes / it <= 8f } ?: MINUTE_TICK_STEPS.last()
-
 @Composable
 private fun EnergyLineChart(
     points: List<ChartPoint>,
-    stepMinutes: Int,
+    axis: XAxis,
     viewport: ChartViewport,
     visible: List<Boolean>,
-    cursorMinute: Float?,
+    cursorX: Float?,
     onCursor: (Float?) -> Unit,
+    emptyText: String,
     modifier: Modifier = Modifier,
 ) {
     if (points.isEmpty()) {
-        Text("немає даних за цю добу", color = TextMuted, modifier = modifier.padding(16.dp))
+        Text(emptyText, color = TextMuted, modifier = modifier.padding(16.dp))
         return
     }
 
@@ -354,8 +540,8 @@ private fun EnergyLineChart(
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     // Розмір полотна читаємо в момент виклику (жести живуть довше за кадр).
     fun plotWidthPx() = (canvasSize.width - leftMarginPx).coerceAtLeast(1f)
-    fun minuteAt(x: Float): Float =
-        viewport.start + ((x - leftMarginPx) / plotWidthPx()).coerceIn(0f, 1f) * viewport.span
+    fun xValueAt(px: Float): Float =
+        viewport.start + ((px - leftMarginPx) / plotWidthPx()).coerceIn(0f, 1f) * viewport.span
 
     val axisPaint = remember(density) {
         android.graphics.Paint().apply {
@@ -392,8 +578,8 @@ private fun EnergyLineChart(
                 .chartGestures(
                     key = Unit,
                     dragMovesCursor = !viewport.isZoomed,
-                    onCursor = { onCursor(minuteAt(it.x)) },
-                    onTap = { onCursor(minuteAt(it.x)) },
+                    onCursor = { onCursor(xValueAt(it.x)) },
+                    onTap = { onCursor(xValueAt(it.x)) },
                     onPan = { dx -> viewport.panFraction(-dx / plotWidthPx()) },
                     onZoom = { cx, factor ->
                         viewport.zoomAround(((cx - leftMarginPx) / plotWidthPx()).coerceIn(0f, 1f), factor)
@@ -411,11 +597,11 @@ private fun EnergyLineChart(
             // Вісь Y підганяється під видиме вікно (з сусідніми точками, щоб лінії
             // на краях не обрізались), тож при наближенні дрібні значення читаються.
             val visibleIdx = points.indices.filter {
-                points[it].minute + stepMinutes >= v0 && points[it].minute <= v0 + vSpan
+                points[it].x + axis.pointWidth >= v0 && points[it].x <= v0 + vSpan
             }.ifEmpty { points.indices.toList() }
             val axisMax = niceAxisMax(series.maxOf { s -> visibleIdx.maxOfOrNull { s.values[it] } ?: 0.0 })
 
-            fun xAt(minute: Float) = plotLeft + (minute - v0) / vSpan * plotW
+            fun xAt(x: Float) = plotLeft + (x - v0) / vSpan * plotW
             fun yAt(v: Double) = plotTop + plotH - (v / axisMax * plotH).toFloat().coerceIn(0f, plotH)
 
             // Сітка й підписи осі Y - тихі, не змагаються з даними.
@@ -424,7 +610,7 @@ private fun EnergyLineChart(
                 val value = axisMax * i / 4.0
                 val y = yAt(value)
                 drawLine(OutlineSubtle, Offset(plotLeft, y), Offset(size.width, y), strokeWidth = gridStroke)
-                val label = value.roundToInt().toString()
+                val label = if (axis.energyUnits && axisMax < 20.0) "%.1f".format(value) else value.roundToInt().toString()
                 drawContext.canvas.nativeCanvas.drawText(
                     label,
                     plotLeft - 6.dp.toPx() - axisPaint.measureText(label),
@@ -435,11 +621,11 @@ private fun EnergyLineChart(
 
             clipRect(left = plotLeft, top = 0f, right = size.width, bottom = size.height) {
                 // Підписи осі X - крок залежить від масштабу.
-                val step = minuteTickStep(vSpan)
+                val step = axis.tickSteps.firstOrNull { vSpan / it <= axis.maxTicks } ?: axis.tickSteps.last()
                 var tick = (ceil(v0 / step) * step).toInt()
                 while (tick <= v0 + vSpan) {
                     val x = xAt(tick.toFloat())
-                    val label = hhmm(tick)
+                    val label = axis.tickLabel(tick)
                     drawContext.canvas.nativeCanvas.drawText(
                         label,
                         x - axisPaint.measureText(label) / 2f,
@@ -455,13 +641,14 @@ private fun EnergyLineChart(
                 series.forEach { s ->
                     val path = Path()
                     s.values.forEachIndexed { i, v ->
-                        val x = xAt(points[i].minute.toFloat())
+                        val x = xAt(points[i].x.toFloat())
                         val y = yAt(v)
-                        val contiguous = i > 0 && points[i].minute - points[i - 1].minute <= stepMinutes * 3 / 2
+                        val contiguous = i > 0 && points[i].x - points[i - 1].x <= axis.pointWidth * 3 / 2
                         if (contiguous) path.lineTo(x, y) else path.moveTo(x, y)
                     }
                     drawPath(path, s.color, style = lineStroke)
                 }
+
                 // Маркери лише коли видимих точок небагато, інакше зливаються. Малі (4/3dp) -
                 // лінії лишаються головними.
                 if (visibleIdx.size <= 30) {
@@ -471,7 +658,7 @@ private fun EnergyLineChart(
                         visibleIdx.forEach { i ->
                             val v = s.values[i]
                             if (v > 0.0) {
-                                val c = Offset(xAt(points[i].minute.toFloat()), yAt(v))
+                                val c = Offset(xAt(points[i].x.toFloat()), yAt(v))
                                 drawCircle(SurfaceContainer, radius = markerR + ring, center = c)
                                 drawCircle(s.color, radius = markerR, center = c)
                             }
@@ -481,10 +668,10 @@ private fun EnergyLineChart(
             }
 
             // Лінія спостереження й підказка для найближчої до неї точки.
-            val idx = cursorMinute?.let { m -> points.indices.minByOrNull { abs(points[it].minute - m) } }
+            val idx = cursorX?.let { cx -> points.indices.minByOrNull { abs(points[it].x - cx) } }
             if (idx != null) {
                 val p = points[idx]
-                val x = xAt(p.minute.toFloat())
+                val x = xAt(p.x.toFloat())
                 if (x in plotLeft..size.width) {
                     val markerR = (4f / 3f).dp.toPx()
                     val ring = (2f / 3f).dp.toPx()
@@ -500,8 +687,12 @@ private fun EnergyLineChart(
                         drawCircle(s.color, radius = markerR, center = Offset(x, cy))
                     }
 
-                    val title = "${hhmm(p.minute)}-${hhmm(p.minute + stepMinutes)}"
-                    val rows = series.map { "${it.label}: ${it.values[idx].roundToInt()} Вт" }
+                    val title = axis.pointTitle(p.x)
+                    val rows = series.map {
+                        val v = it.values[idx]
+                        val text = if (axis.energyUnits) "%.1f".format(v) else v.roundToInt().toString()
+                        "${it.label}: $text ${axis.unit}"
+                    }
                     val pad = 8.dp.toPx()
                     val lineH = tipTextPaint.textSize * 1.35f
                     val boxW = (rows + title).maxOf { tipTextPaint.measureText(it) } + pad * 2 + 14.dp.toPx()

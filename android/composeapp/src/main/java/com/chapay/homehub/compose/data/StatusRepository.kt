@@ -37,6 +37,12 @@ class StatusRepository(
         .readTimeout(CONTROLLER_STATUS_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .writeTimeout(CONTROLLER_STATUS_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .build()
+    // Для повільних аналітичних запитів (місяць/рік): інвертор скидає відповідь лише
+    // після сканування файлів.
+    private val slowClient = client.newBuilder()
+        .readTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(90, TimeUnit.SECONDS)
+        .build()
     private val appContext = context?.applicationContext
 
     private val multicastCacheLock = Any()
@@ -359,40 +365,50 @@ class StatusRepository(
         wrappedObject?.optJSONArray("dates")
     }
 
+    // /api/monthly і /api/yearly інвертор збирає скануванням десятків/сотень файлів
+    // на LittleFS - це 8-20 секунд (заміряно), тож звичайний 8-секундний таймаут
+    // тут не годиться, а повторні відкриття беремо з кешу.
     suspend fun fetchInverterMonthly(config: AppConfig, month: String): JSONObject? = withContext(Dispatchers.IO) {
-        val requested = fetchInverterAnalyticsJsonWithFallback(
-            config = config,
-            path = "/api/monthly",
-            query = mapOf("month" to month),
-        )
-        if (looksLikeMonthlyAnalyticsPayload(requested)) return@withContext requested
-
-        val current = fetchInverterAnalyticsJsonWithFallback(
-            config = config,
-            path = "/api/monthly",
-        )
-        if (looksLikeMonthlyAnalyticsPayload(current)) return@withContext current
-
-        requested ?: current
+        cachedAnalytics("monthly:$month", isCurrent = month == todayIsoDate().take(7)) {
+            fetchInverterHeavyJson(config, "/api/monthly", mapOf("month" to month))
+        }?.takeIf { it.optString("month") == month }
     }
 
-    suspend fun fetchInverterYearly(config: AppConfig): JSONObject? = withContext(Dispatchers.IO) {
-        val year = Calendar.getInstance().get(Calendar.YEAR).coerceIn(2000, 2099)
+    suspend fun fetchInverterYearly(config: AppConfig, year: Int): JSONObject? = withContext(Dispatchers.IO) {
+        val safeYear = year.coerceIn(2000, 2099)
+        cachedAnalytics("yearly:$safeYear", isCurrent = safeYear == Calendar.getInstance().get(Calendar.YEAR)) {
+            fetchInverterHeavyJson(config, "/api/yearly", mapOf("year" to safeYear.toString()))
+        }?.takeIf { it.optInt("current_year", safeYear) == safeYear }
+    }
 
-        val requested = fetchInverterAnalyticsJsonWithFallback(
-            config = config,
-            path = "/api/yearly",
-            query = mapOf("year" to year.toString()),
-        )
-        if (looksLikeYearlyAnalyticsPayload(requested)) return@withContext requested
+    private val analyticsCacheLock = Any()
+    private val analyticsCache = mutableMapOf<String, Pair<Long, JSONObject>>()
 
-        val fallback = fetchInverterAnalyticsJsonWithFallback(
-            config = config,
-            path = "/api/yearly",
-        )
-        if (looksLikeYearlyAnalyticsPayload(fallback)) return@withContext fallback
+    // Поточний місяць/рік змінюється щодоби - кеш 2 хв; минулі періоди незмінні - 30 хв.
+    private fun cachedAnalytics(key: String, isCurrent: Boolean, load: () -> JSONObject?): JSONObject? {
+        val ttl = if (isCurrent) 2 * 60_000L else 30 * 60_000L
+        val now = System.currentTimeMillis()
+        synchronized(analyticsCacheLock) {
+            analyticsCache[key]?.let { (at, payload) -> if (now - at < ttl) return payload }
+        }
+        val fresh = load()
+        if (fresh != null) synchronized(analyticsCacheLock) { analyticsCache[key] = System.currentTimeMillis() to fresh }
+        // Свіжого не вийшло (збій зв'язку) - краще застарілий кеш, ніж порожньо.
+        return fresh ?: synchronized(analyticsCacheLock) { analyticsCache[key]?.second }
+    }
 
-        requested ?: fallback
+    private fun fetchInverterHeavyJson(config: AppConfig, path: String, query: Map<String, String>): JSONObject? {
+        if (!config.inverterEnabled) return null
+        val baseUrl = normalizeBaseUrl(config.inverterBaseUrl)
+        if (baseUrl.isEmpty()) return null
+        val url = buildUrl(baseUrl, path, query) ?: return null
+
+        val first = fetchJsonResult(url, slowClient)
+        first.json?.let { return it }
+        if (!first.isUnauthorized || config.inverterPassword.isBlank()) return null
+
+        authenticate(baseUrl, config.inverterPassword)
+        return fetchJsonResult(url, slowClient).json
     }
 
     suspend fun fetchLoadControllerHistory(config: AppConfig, date: String = ""): JSONObject? = withContext(Dispatchers.IO) {

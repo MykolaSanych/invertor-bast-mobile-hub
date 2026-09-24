@@ -73,7 +73,8 @@ private fun formatAmount(value: Double, perDay: Boolean): String {
  *    яку рахуємо різницею: загальне навантаження мінус виміряні бойлери й насос.
  * Період: "За добу" (Вт·год, лічильники модулів) або "Зараз" (миттєва потужність, Вт).
  * Розбивка по споживачах є лише для сьогодні - лічильники бойлерів/насоса модулі
- * за минулі доби не зберігають; джерела за минулу добу беруться з історії інвертора.
+ * за минулі доби не зберігають; джерела за минулу добу, місяць чи рік беруться з
+ * історії інвертора (savedTotals, Вт·год).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,6 +83,9 @@ fun EnergyPieSection(
     savedTotals: Triple<Double, Double, Double>,
     isToday: Boolean,
     modifier: Modifier = Modifier,
+    // Доба (є режим "Зараз") чи місяць/рік (лише підсумки за період із історії інвертора).
+    dayMode: Boolean = true,
+    periodLabel: String = "За добу",
 ) {
     var consumers by rememberSaveable { mutableStateOf(false) }
     var live by rememberSaveable { mutableStateOf(false) }
@@ -137,18 +141,21 @@ fun EnergyPieSection(
             FilterChip(selected = !consumers, onClick = { consumers = false }, label = { Text("Джерела") })
             FilterChip(selected = consumers, onClick = { consumers = true }, label = { Text("Споживачі") })
             Spacer(Modifier.width(16.dp))
-            FilterChip(selected = perDay, onClick = { live = false }, label = { Text("За добу") })
-            FilterChip(
-                selected = !perDay,
-                onClick = { live = true },
-                enabled = isToday,
-                label = { Text("Зараз") },
-            )
+            FilterChip(selected = perDay, onClick = { live = false }, label = { Text(periodLabel) })
+            if (dayMode) {
+                FilterChip(
+                    selected = !perDay,
+                    onClick = { live = true },
+                    enabled = isToday,
+                    label = { Text("Зараз") },
+                )
+            }
         }
 
         if (slices == null) {
             Text(
-                text = "Розбивка по споживачах доступна лише за сьогодні: бойлери й насос не зберігають добові лічильники за минулі дні.",
+                text = "Розбивка по споживачах (бойлери, насос, будинок) доступна лише за сьогодні: " +
+                    "модулі не зберігають їхні лічильники за минулі дні, місяці й роки.",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextMuted,
                 modifier = Modifier.padding(16.dp),
