@@ -93,6 +93,9 @@ private data class Series(val label: String, val color: Color, val values: List<
 private class XAxis(
     val domainMax: Float,
     val pointWidth: Float,
+    // Найбільша прогалина (в одиницях осі), яку лінія перекриває пунктиром: пропущені
+    // точки - збій запису/зв'язку, а не справжній розрив. Більші прогалини - розрив.
+    val maxBridge: Float,
     val minSpan: Float,
     val tickSteps: IntArray,
     val maxTicks: Float,
@@ -125,6 +128,7 @@ private fun buildAxis(period: EnergyPeriod, stepMinutes: Int, anchor: String): X
     EnergyPeriod.DAY -> XAxis(
         domainMax = (1440 - stepMinutes).coerceAtLeast(1).toFloat(),
         pointWidth = stepMinutes.toFloat(),
+        maxBridge = stepMinutes * 6f,
         minSpan = (stepMinutes * 2).toFloat(),
         tickSteps = MINUTE_TICK_STEPS,
         maxTicks = 8f,
@@ -138,6 +142,7 @@ private fun buildAxis(period: EnergyPeriod, stepMinutes: Int, anchor: String): X
         XAxis(
             domainMax = (daysIn(year, month) - 1).coerceAtLeast(1).toFloat(),
             pointWidth = 1f,
+            maxBridge = 3f,
             minSpan = 4f,
             tickSteps = intArrayOf(1, 2, 3, 5, 7),
             maxTicks = 12f,
@@ -149,6 +154,7 @@ private fun buildAxis(period: EnergyPeriod, stepMinutes: Int, anchor: String): X
     EnergyPeriod.YEAR -> XAxis(
         domainMax = 11f,
         pointWidth = 1f,
+        maxBridge = 1f,
         minSpan = 3f,
         tickSteps = intArrayOf(1),
         maxTicks = 12f,
@@ -655,18 +661,36 @@ private fun EnergyLineChart(
                     tick += step
                 }
 
-                // Лінії: тонкі (2dp). Розрив, якщо між сусідніми точками пропущено
-                // інтервали - не вигадуємо значень, яких прошивка не мала.
+                // Лінії: тонкі (2dp). Сусідні точки з'єднуємо суцільно; коротку прогалину
+                // (збій запису/зв'язку - до axis.maxBridge) перекриваємо пунктиром, щоб
+                // лінія не "рвалась", але було видно, що там даних немає; довшу - розрив.
                 val lineStroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                val bridgeStroke = Stroke(
+                    width = 1.5.dp.toPx(),
+                    cap = StrokeCap.Butt,
+                    pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+                        floatArrayOf(6.dp.toPx(), 5.dp.toPx()),
+                    ),
+                )
                 series.forEach { s ->
-                    val path = Path()
+                    val solid = Path()
+                    val bridge = Path()
                     s.values.forEachIndexed { i, v ->
                         val x = xAt(points[i].x.toFloat())
                         val y = yAt(v)
-                        val contiguous = i > 0 && points[i].x - points[i - 1].x <= axis.pointWidth * 3 / 2
-                        if (contiguous) path.lineTo(x, y) else path.moveTo(x, y)
+                        val gap = if (i > 0) points[i].x - points[i - 1].x else Int.MAX_VALUE
+                        when {
+                            i > 0 && gap <= axis.pointWidth * 3 / 2 -> solid.lineTo(x, y)
+                            i > 0 && gap <= axis.maxBridge -> {
+                                bridge.moveTo(xAt(points[i - 1].x.toFloat()), yAt(s.values[i - 1]))
+                                bridge.lineTo(x, y)
+                                solid.moveTo(x, y)
+                            }
+                            else -> solid.moveTo(x, y)
+                        }
                     }
-                    drawPath(path, s.color, style = lineStroke)
+                    drawPath(solid, s.color, style = lineStroke)
+                    drawPath(bridge, s.color.copy(alpha = 0.55f), style = bridgeStroke)
                 }
 
                 // Маркери лише коли видимих точок небагато, інакше зливаються. Малі (4/3dp) -
