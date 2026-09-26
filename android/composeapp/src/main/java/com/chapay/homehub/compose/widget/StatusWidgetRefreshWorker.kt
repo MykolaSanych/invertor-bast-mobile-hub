@@ -34,15 +34,19 @@ class StatusWidgetRefreshWorker(
 
         return runCatching {
             val config = AppConfigStorage.load(applicationContext)
-            val status = repository.fetchUnified(config)
-            // fetchUnified() ніколи не кидає виняток - при мережевій помилці
-            // вона сама повертає порожній UnifiedStatus() (усі поля null).
-            // На цьому пристрої фонові запити з Worker-а (на відміну від
-            // живого опитування, поки застосунок відкрито) регулярно
-            // блокуються агресивним керуванням батареєю/мережею OEM - без
-            // цієї перевірки такий "порожній успіх" перетирав на віджеті
-            // щойно показані реальні дані рисками. Пропускаємо оновлення
-            // замість цього - нехай лишаються останні реальні дані.
+            val fresh = repository.fetchUnified(config)
+            // fetchUnified() ніколи не кидає виняток - при мережевій помилці вона сама
+            // повертає порожній UnifiedStatus() (усі поля null). Кожен запуск Worker-а
+            // створює НОВИЙ StatusRepository (без пам'яті про минулий запуск), а три
+            // модулі опитуються незалежно - тож окремий модуль, що не встиг відповісти
+            // (фонові запити регулярно підрізає агресивне керування батареєю/мережею
+            // OEM), давав тут null для СЕБЕ, навіть коли решта відповіли. Раніше це
+            // одразу летіло в рендер - рядки САМЕ ЦЬОГО модуля (бойлер/насос/світло/
+            // ворота) миттю падали на "--", хоча реальні дані про нього мали лише
+            // хвилину. mergeWithLastGoodAutoStatus долатує лише відсутній модуль
+            // останнім дійсним знімком САМЕ ЙОГО - це і є фікс "стан на секунду й
+            // знову прочерки".
+            val status = StatusWidgetProvider.mergeWithLastGoodAutoStatus(fresh)
             if (!hasAnyModuleData(status)) {
                 Log.w(TAG, "Widget refresh returned empty status (likely network/background restriction); skipping render")
                 return@runCatching Result.retry()

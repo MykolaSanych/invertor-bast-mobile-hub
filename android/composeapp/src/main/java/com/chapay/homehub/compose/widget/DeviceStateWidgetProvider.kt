@@ -29,9 +29,11 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
     // знову заповнювався. Тепер onUpdate лише плаче фонове оновлення й НЕ
     // чіпає вже намальований віджет - останні реальні дані лишаються на
     // екрані, поки не прийде свіжий успішний фетч. Сам StatusWidgetRefreshWorker
-    // додатково не частіше ніж раз на 20с реально ходить у мережу й пульсує
-    // рамку лише на РЕАЛЬНУ зміну даних (див. StatusWidgetProvider/Worker) -
-    // разом ці два фікси й прибирають "постійне блимання".
+    // додатково не частіше ніж раз на 20с реально ходить у мережу, пульсує
+    // рамку лише на РЕАЛЬНУ зміну даних і тримає для кожного модуля останній
+    // ДІЙСНИЙ знімок (щоб один-єдиний невдалий фоновий запит до одного з трьох
+    // модулів не скидав саме його рядки в "--", поки решта віджета оновлена) -
+    // див. StatusWidgetProvider/StatusWidgetRefreshWorker.
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         StatusWidgetProvider.enqueueRefresh(context)
     }
@@ -61,8 +63,8 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
 
         // Приглушена, "преміальна" палітра - та сама, що й у самому застосунку
         // (ui/theme/Color.kt): AccentBoiler/AccentPump тощо, а не неонові
-        // кольори старої версії віджета.
-        private val COLOR_OFF = Color.parseColor("#5C6B85") // TextMuted, притлумлений
+        // кольори старої версії віджета. Увесь стан несе лише колір тексту.
+        private val COLOR_OFF = Color.parseColor("#7F8FA6")
         private val COLOR_IDLE_ON = Color.parseColor("#B7C5D8") // реле увімкнено, але не працює
         private val COLOR_BOILER_WORKING = Color.parseColor("#D97757") // AccentBoiler
         private val COLOR_PUMP_WORKING = Color.parseColor("#3FB6B0") // AccentPump
@@ -108,7 +110,6 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
 
             applyPowerDeviceRow(
                 views,
-                dotId = R.id.widgetDevBoiler1Dot,
                 stateId = R.id.widgetDevBoiler1State,
                 on = load?.boiler1On,
                 powerW = load?.boilerPower,
@@ -118,7 +119,6 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             )
             applyPowerDeviceRow(
                 views,
-                dotId = R.id.widgetDevBoiler2Dot,
                 stateId = R.id.widgetDevBoiler2State,
                 on = garage?.boiler2On,
                 powerW = garage?.boilerPower,
@@ -128,7 +128,6 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             )
             applyPowerDeviceRow(
                 views,
-                dotId = R.id.widgetDevPumpDot,
                 stateId = R.id.widgetDevPumpState,
                 on = load?.pumpOn,
                 powerW = load?.pumpPower,
@@ -138,7 +137,6 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             )
             applySimpleOnOffRow(
                 views,
-                dotId = R.id.widgetDevLightDot,
                 stateId = R.id.widgetDevLightState,
                 on = garage?.garageLightOn,
                 onColor = COLOR_LIGHT_ON,
@@ -159,22 +157,13 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             return views
         }
 
-        // Кольорова крапка + текст разом несуть увесь стан (раніше стан ще й
-        // підсвічував увесь рядок великим напівпрозорим прямокутником - тепер
-        // цього немає: тонше й спокійніше, менше "блимає" оком навіть коли
-        // дані реально змінюються щохвилини).
-        private fun applyDot(views: RemoteViews, dotId: Int, color: Int) {
-            views.setInt(dotId, "setColorFilter", color)
-        }
-
         // Реле "увімкнено" (режим дозволяє роботу) - це не те саме, що
         // пристрій зараз реально споживає струм (бойлер догрів воду й чекає,
         // насос стоїть). "УВІМК"/"ВИМК" завжди показує стан реле; лише коли
-        // потужність перевищує поріг - і крапка, і текст переходять на
-        // яскравий колір пристрою (сигнал "зараз реально працює").
+        // потужність перевищує поріг - текст переходить на яскравий колір
+        // пристрою (сигнал "зараз реально працює").
         private fun applyPowerDeviceRow(
             views: RemoteViews,
-            dotId: Int,
             stateId: Int,
             on: Boolean?,
             powerW: Double?,
@@ -191,12 +180,11 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
                 else -> COLOR_UNKNOWN
             }
             views.setInt(stateId, "setTextColor", color)
-            applyDot(views, dotId, color)
         }
 
         // Світло - просте реле без поняття "працює", тому в нього лише два
         // стани: увімкнено (теплий золотий) або вимкнено (приглушений сірий).
-        private fun applySimpleOnOffRow(views: RemoteViews, dotId: Int, stateId: Int, on: Boolean?, onColor: Int) {
+        private fun applySimpleOnOffRow(views: RemoteViews, stateId: Int, on: Boolean?, onColor: Int) {
             views.setTextViewText(stateId, onOffText(on))
             val color = when (on) {
                 true -> onColor
@@ -204,7 +192,6 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
                 null -> COLOR_UNKNOWN
             }
             views.setInt(stateId, "setTextColor", color)
-            applyDot(views, dotId, color)
         }
 
         private fun onOffText(on: Boolean?): String = when (on) {
@@ -217,7 +204,6 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             if (garage == null) {
                 views.setTextViewText(R.id.widgetDevGateState, "--")
                 views.setInt(R.id.widgetDevGateState, "setTextColor", COLOR_UNKNOWN)
-                applyDot(views, R.id.widgetDevGateDot, COLOR_UNKNOWN)
                 return
             }
 
@@ -233,7 +219,6 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             }
             views.setTextViewText(R.id.widgetDevGateState, text)
             views.setInt(R.id.widgetDevGateState, "setTextColor", color)
-            applyDot(views, R.id.widgetDevGateDot, color)
         }
     }
 }

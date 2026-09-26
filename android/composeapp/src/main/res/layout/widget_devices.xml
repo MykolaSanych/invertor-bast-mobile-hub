@@ -1,29 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Тонший, однорядковий на пристрій список (раніше кожен пристрій займав два рядки:
-     іконка+назва, а під ними окремим рядком стан). Стан тепер - кольорова крапка +
-     коротке слово в тому самому рядку, що й іконка з назвою. -->
+     іконка+назва, а під ними окремим рядком стан) - стан тепер лише коротким кольоровим
+     словом у тому самому рядку, що й іконка з назвою. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widgetDevicesRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_devices_background"
     android:orientation="vertical"
-    android:paddingLeft="10dp"
-    android:paddingTop="7dp"
-    android:paddingRight="10dp"
-    android:paddingBottom="7dp">
+    android:paddingLeft="8dp"
+    android:paddingTop="8dp"
+    android:paddingRight="8dp"
+    android:paddingBottom="8dp">
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="3dp"
+        android:layout_marginBottom="4dp"
         android:ellipsize="end"
         android:letterSpacing="0.06"
         android:maxLines="1"
         android:text="@string/widget_devices_title"
         android:textAllCaps="true"
-        android:textColor="#8000D4FF"
-        android:textSize="8sp"
+        android:textColor="#00D4FF"
+        android:textSize="9sp"
         android:textStyle="bold" />
 
     <LinearLayout
@@ -37,9 +37,9 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="5dp"
+            android:layout_marginEnd="4dp"
             android:text="🔥"
-            android:textSize="11sp" />
+            android:textSize="13sp" />
 
         <TextView
             android:layout_width="0dp"
@@ -48,15 +48,8 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="@string/widget_device_boiler1"
-            android:textColor="#8FA0B8"
-            android:textSize="9.5sp" />
-
-        <ImageView
-            android:id="@+id/widgetDevBoiler1Dot"
-            android:layout_width="6dp"
-            android:layout_height="6dp"
-            android:layout_marginEnd="5dp"
-            android:src="@drawable/widget_status_dot" />
+            android:textColor="#B7C5D8"
+            android:textSize="9sp" />
 
         <TextView
             android:id="@+id/widgetDevBoiler1State"
@@ -64,9 +57,10 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
+            android:layout_marginStart="6dp"
             android:text="--"
             android:textColor="#7F8FA6"
-            android:textSize="9.5sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -88,9 +82,9 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="5dp"
+            android:layout_marginEnd="4dp"
             android:text="🔥"
-            android:textSize="11sp" />
+            android:textSize="13sp" />
 
         <TextView
             android:layout_width="0dp"
@@ -99,15 +93,8 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="@string/widget_device_boiler2"
-            android:textColor="#8FA0B8"
-            android:textSize="9.5sp" />
-
-        <ImageView
-            android:id="@+id/widgetDevBoiler2Dot"
-            android:layout_width="6dp"
-            android:layout_height="6dp"
-            android:layout_marginEnd="5dp"
-            android:src="@drawable/widget_status_dot" />
+            android:textColor="#B7C5D8"
+            android:textSize="9sp" />
 
         <TextView
             android:id="@+id/widgetDevBoiler2State"
@@ -115,9 +102,10 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
+            android:layout_marginStart="6dp"
             android:text="--"
             android:textColor="#7F8FA6"
-            android:textSize="9.5sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -139,9 +127,9 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="5dp"
+            android:layout_marginEnd="4dp"
             android:text="💧"
-            android:textSize="11sp" />
+            android:textSize="13sp" />
 
         <TextView
             android:layout_width="0dp"
@@ -150,15 +138,8 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="@string/widget_device_pump"
-            android:textColor="#8FA0B8"
-            android:textSize="9.5sp" />
-
-        <ImageView
-            android:id="@+id/widgetDevPumpDot"
-            android:layout_width="6dp"
-            android:layout_height="6dp"
-            android:layout_marginEnd="5dp"
-            android:src="@drawable/widget_status_dot" />
+            android:textColor="#B7C5D8"
+            android:textSize="9sp" />
 
         <TextView
             android:id="@+id/widgetDevPumpState"
@@ -166,9 +147,10 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
+            android:layout_marginStart="6dp"
             android:text="--"
             android:textColor="#7F8FA6"
-            android:textSize="9.5sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -190,9 +172,9 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="5dp"
+            android:layout_marginEnd="4dp"
             android:text="💡"
-            android:textSize="11sp" />
+            android:textSize="13sp" />
 
         <TextView
             android:layout_width="0dp"
@@ -201,15 +183,8 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="@string/widget_device_light"
-            android:textColor="#8FA0B8"
-            android:textSize="9.5sp" />
-
-        <ImageView
-            android:id="@+id/widgetDevLightDot"
-            android:layout_width="6dp"
-            android:layout_height="6dp"
-            android:layout_marginEnd="5dp"
-            android:src="@drawable/widget_status_dot" />
+            android:textColor="#B7C5D8"
+            android:textSize="9sp" />
 
         <TextView
             android:id="@+id/widgetDevLightState"
@@ -217,9 +192,10 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
+            android:layout_marginStart="6dp"
             android:text="--"
             android:textColor="#7F8FA6"
-            android:textSize="9.5sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -241,9 +217,9 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="5dp"
+            android:layout_marginEnd="4dp"
             android:text="🚪"
-            android:textSize="11sp" />
+            android:textSize="13sp" />
 
         <TextView
             android:layout_width="0dp"
@@ -252,15 +228,8 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="@string/widget_device_gate"
-            android:textColor="#8FA0B8"
-            android:textSize="9.5sp" />
-
-        <ImageView
-            android:id="@+id/widgetDevGateDot"
-            android:layout_width="6dp"
-            android:layout_height="6dp"
-            android:layout_marginEnd="5dp"
-            android:src="@drawable/widget_status_dot" />
+            android:textColor="#B7C5D8"
+            android:textSize="9sp" />
 
         <TextView
             android:id="@+id/widgetDevGateState"
@@ -268,9 +237,10 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
+            android:layout_marginStart="6dp"
             android:text="--"
             android:textColor="#7F8FA6"
-            android:textSize="9.5sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 </LinearLayout>

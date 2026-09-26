@@ -79,6 +79,34 @@ class StatusWidgetProvider : AppWidgetProvider() {
                 DeviceStateWidgetProvider.hasActiveWidgets(context)
         }
 
+        // Останній ДІЙСНИЙ знімок кожного модуля, показаний фоновим воркером - лише для
+        // нього (StatusWidgetRefreshWorker створює НОВИЙ StatusRepository на кожен
+        // запуск, тобто без цієї пам'яті кожен запуск "забуває", що показував минулого
+        // разу). Це справжня причина, чому окремі рядки віджета (бойлер/насос/світло/
+        // ворота) на мить показували реальний стан, а тоді знову падали на "--": фоновий
+        // фетч опитує три модулі незалежно, і коли рівно ОДИН з них не встиг відповісти
+        // (а на цьому пристрої фонові запити регулярно підрізає OEM-керування батареєю/
+        // мережею - див. коментар у Worker), його поле status.* просто ставало null, і
+        // рядки, що залежать саме від нього, миттю "порожніли" - хоча реальних даних
+        // цей модуль хвилини тому давав достатньо. mergeWithLastGoodAutoStatus "долатує"
+        // відсутній модуль останнім дійсним знімком САМЕ ЦЬОГО модуля, а не всього
+        // статусу цілком - точно як робить живий застосунок (DashboardViewModel) зі
+        // своїм окремим "липким" станом.
+        @Volatile
+        private var lastGoodAutoStatus: UnifiedStatus? = null
+
+        internal fun mergeWithLastGoodAutoStatus(fresh: UnifiedStatus): UnifiedStatus {
+            val last = lastGoodAutoStatus
+            val merged = UnifiedStatus(
+                inverter = fresh.inverter ?: last?.inverter,
+                loadController = fresh.loadController ?: last?.loadController,
+                garage = fresh.garage ?: last?.garage,
+                updatedAtMs = fresh.updatedAtMs,
+            )
+            lastGoodAutoStatus = merged
+            return merged
+        }
+
         // Останній "відбиток" показаних значень - лише для авто-фонових оновлень
         // (StatusWidgetRefreshWorker), щоб пульс-підсвітка спрацьовувала на РЕАЛЬНУ
         // зміну даних, а не на кожен успішний фоновий запит (OS/лаунчер на цьому
