@@ -212,48 +212,74 @@ private fun parseDay(payload: JSONObject): LoadedPeriod {
     )
 }
 
-// /api/monthly: {"month","days":[{"day","pv","home","grid",...}]} у Вт·год за добу.
-// Доба без жодного виміру (усі нулі) - "немає даних", а не "нуль": точку пропускаємо,
-// щоб лінія не падала на нуль і не вигадувала споживання.
-private fun parseMonth(payload: JSONObject): LoadedPeriod {
-    val days = payload.optJSONArray("days")
+// /api/monthly: {"month","days":[{"day","pv","home","grid",...}]} у Вт·год за добу, плюс
+// архів на телефоні (закриті доби, які модуль міг уже видалити зі своєї пам'яті). Для доби
+// беремо архів, а якщо його немає - те, що віддав модуль. Доба без жодного виміру (усі
+// нулі) - "немає даних", а не "нуль": точку пропускаємо.
+private fun parseMonth(
+    payload: JSONObject?,
+    archive: Map<String, Triple<Double, Double, Double>>,
+    month: String,
+): LoadedPeriod {
+    val perDay = sortedMapOf<Int, Triple<Double, Double, Double>>()
+    val days = payload?.optJSONArray("days")
+    if (days != null) {
+        for (i in 0 until days.length()) {
+            val row = days.optJSONObject(i) ?: continue
+            perDay[row.optInt("day", i + 1)] = Triple(row.optDouble("pv", 0.0), row.optDouble("home", 0.0), row.optDouble("grid", 0.0))
+        }
+    }
+    archive.forEach { (date, t) ->
+        if (date.startsWith(month) && date.length == 10) perDay[date.substring(8, 10).toIntOrNull() ?: return@forEach] = t
+    }
     val points = mutableListOf<ChartPoint>()
     var pv = 0.0
     var home = 0.0
     var grid = 0.0
-    if (days != null) {
-        for (i in 0 until days.length()) {
-            val row = days.optJSONObject(i) ?: continue
-            val d = row.optInt("day", i + 1)
-            val p = row.optDouble("pv", 0.0)
-            val h = row.optDouble("home", 0.0)
-            val g = row.optDouble("grid", 0.0)
-            if (p == 0.0 && h == 0.0 && g == 0.0) continue
-            points.add(ChartPoint(d - 1, p / 1000.0, h / 1000.0, g / 1000.0))
-            pv += p
-            home += h
-            grid += g
-        }
+    perDay.forEach { (d, t) ->
+        if (t.first == 0.0 && t.second == 0.0 && t.third == 0.0) return@forEach
+        points.add(ChartPoint(d - 1, t.first / 1000.0, t.second / 1000.0, t.third / 1000.0))
+        pv += t.first
+        home += t.second
+        grid += t.third
     }
     return LoadedPeriod(points, 0, Triple(pv, home, grid))
 }
 
-// /api/yearly: масиви з 12 місячних сум (Вт·год) pv/home/grid і data_count (кількість діб з даними).
-private fun parseYear(payload: JSONObject): LoadedPeriod {
-    val pvArr = payload.optJSONArray("pv")
-    val homeArr = payload.optJSONArray("home")
-    val gridArr = payload.optJSONArray("grid")
-    val counts = payload.optJSONArray("data_count")
+// /api/yearly: масиви з 12 місячних сум (Вт·год) і data_count (доби з даними), плюс архів на
+// телефоні. Для місяця беремо те джерело, що покриває більше діб: після чистки модуль має
+// менше днів у старих місяцях, ніж архів.
+private fun parseYear(
+    payload: JSONObject?,
+    archive: Map<String, Triple<Double, Double, Double>>,
+    year: String,
+): LoadedPeriod {
+    val pvArr = payload?.optJSONArray("pv")
+    val homeArr = payload?.optJSONArray("home")
+    val gridArr = payload?.optJSONArray("grid")
+    val counts = payload?.optJSONArray("data_count")
     val points = mutableListOf<ChartPoint>()
     var pv = 0.0
     var home = 0.0
     var grid = 0.0
     for (i in 0 until 12) {
-        val p = pvArr?.optDouble(i, 0.0) ?: 0.0
-        val h = homeArr?.optDouble(i, 0.0) ?: 0.0
-        val g = gridArr?.optDouble(i, 0.0) ?: 0.0
-        val n = counts?.optInt(i, 0) ?: 0
-        if (n == 0 && p == 0.0 && h == 0.0 && g == 0.0) continue
+        val prefix = "%s-%02d".format(year, i + 1)
+        val archiveDays = archive.filterKeys { it.startsWith(prefix) }.values
+            .filter { it.first != 0.0 || it.second != 0.0 || it.third != 0.0 }
+        val deviceCount = counts?.optInt(i, 0) ?: 0
+        val p: Double
+        val h: Double
+        val g: Double
+        if (archiveDays.isNotEmpty() && archiveDays.size >= deviceCount) {
+            p = archiveDays.sumOf { it.first }
+            h = archiveDays.sumOf { it.second }
+            g = archiveDays.sumOf { it.third }
+        } else {
+            p = pvArr?.optDouble(i, 0.0) ?: 0.0
+            h = homeArr?.optDouble(i, 0.0) ?: 0.0
+            g = gridArr?.optDouble(i, 0.0) ?: 0.0
+            if (deviceCount == 0 && p == 0.0 && h == 0.0 && g == 0.0) continue
+        }
         points.add(ChartPoint(i, p / 1000.0, h / 1000.0, g / 1000.0))
         pv += p
         home += h
@@ -309,7 +335,28 @@ fun EnergyChartScreen(
         savedTotals = Triple(0.0, 0.0, 0.0)
         errorText = null
         cursorX = null
-        // Що вже є на телефоні - показуємо одразу, не чекаючи повільний модуль
+
+        // Розбір відповіді модуля разом з архівом на телефоні (для місяця/року).
+        suspend fun buildLoaded(payload: JSONObject?): LoadedPeriod? {
+            val archive = if (period == EnergyPeriod.DAY) {
+                emptyMap()
+            } else {
+                runCatching { repository.archivedDailyTotals(config) }.getOrDefault(emptyMap())
+            }
+            return when (period) {
+                EnergyPeriod.DAY -> payload?.let { parseDay(it) }
+                EnergyPeriod.MONTH -> parseMonth(payload, archive, periodKey).takeIf { payload != null || it.points.isNotEmpty() }
+                EnergyPeriod.YEAR -> parseYear(payload, archive, periodKey).takeIf { payload != null || it.points.isNotEmpty() }
+            }
+        }
+
+        fun show(loaded: LoadedPeriod) {
+            points = loaded.points
+            if (period == EnergyPeriod.DAY) stepMinutes = loaded.stepMinutes
+            savedTotals = loaded.totalsWh
+        }
+
+        // Що вже є на телефоні (кеш + архів) - показуємо одразу, не чекаючи повільний модуль
         // (місяць 8 с, рік ~20 с); мережа лише оновлює.
         val cached = runCatching {
             when (period) {
@@ -318,18 +365,12 @@ fun EnergyChartScreen(
                 EnergyPeriod.YEAR -> repository.peekInverterYearly(config, periodKey.toIntOrNull() ?: 0)
             }
         }.getOrNull()
-        if (cached != null) {
-            val loaded = when (period) {
-                EnergyPeriod.DAY -> parseDay(cached)
-                EnergyPeriod.MONTH -> parseMonth(cached)
-                EnergyPeriod.YEAR -> parseYear(cached)
-            }
-            points = loaded.points
-            if (period == EnergyPeriod.DAY) stepMinutes = loaded.stepMinutes
-            savedTotals = loaded.totalsWh
+        val first = buildLoaded(cached)
+        if (first != null) {
+            show(first)
             loading = false
         }
-        var firstLoad = cached == null
+        var firstLoad = first == null
         while (true) {
             if (firstLoad) loading = true
             val payload = runCatching {
@@ -339,7 +380,8 @@ fun EnergyChartScreen(
                     EnergyPeriod.YEAR -> repository.fetchInverterYearly(config, periodKey.toIntOrNull() ?: 0)
                 }
             }.getOrNull()
-            if (payload == null) {
+            val loaded = buildLoaded(payload)
+            if (loaded == null) {
                 // Тимчасовий збій зв'язку (лагає ZeroTier) не стирає вже показаний
                 // графік - помилка лише якщо показувати ще нічого.
                 if (points.isEmpty()) {
@@ -347,19 +389,12 @@ fun EnergyChartScreen(
                 }
             } else {
                 errorText = null
-                val loaded = when (period) {
-                    EnergyPeriod.DAY -> parseDay(payload)
-                    EnergyPeriod.MONTH -> parseMonth(payload)
-                    EnergyPeriod.YEAR -> parseYear(payload)
-                }
-                points = loaded.points
-                if (period == EnergyPeriod.DAY) stepMinutes = loaded.stepMinutes
-                savedTotals = loaded.totalsWh
+                show(loaded)
             }
             loading = false
             firstLoad = false
             // Коли даних ще нема - повторюємо швидко (для повільних місяця/року - через 15с).
-            val fast = payload == null && points.isEmpty()
+            val fast = loaded == null && points.isEmpty()
             delay(
                 when {
                     period == EnergyPeriod.DAY -> if (fast) 5_000L else 30_000L

@@ -10,7 +10,9 @@ import java.io.File
  * - і чим довша історія, тим гірше, тому закриті періоди (минулі доби/місяці/роки) ми
  * зберігаємо на телефоні й більше з мережі не тягнемо. Файл на запис: `{"t":мс,"p":{...}}`.
  *
- * Обмеження розміру: понад [MAX_TOTAL_BYTES] найстаріші (за часом зміни) видаляються.
+ * Це ще й АРХІВ історії: закриті періоди на телефоні лишаються назавжди, автоматично нічого
+ * не видаляється (модулі чистять свої найстаріші доби лише після підтвердження, що телефон
+ * їх зберіг). Видалити можна тільки вручну в Налаштуваннях, із підтвердженням.
  */
 class ChartCache(context: Context?) {
     class Entry(val payload: JSONObject, val savedAtMs: Long)
@@ -47,7 +49,6 @@ class ChartCache(context: Context?) {
                     file.delete()
                     tmp.renameTo(file)
                 }
-                trim()
             }
         }
     }
@@ -63,19 +64,10 @@ class ChartCache(context: Context?) {
         return synchronized(lock) { files.count { it.delete() } }
     }
 
-    private fun trim() {
-        val files = dir?.listFiles { f -> f.isFile && f.name.endsWith(".json") } ?: return
-        var total = files.sumOf { it.length() }
-        if (total <= MAX_TOTAL_BYTES) return
-        for (f in files.sortedBy { it.lastModified() }) {
-            if (total <= TRIM_TARGET_BYTES) break
-            total -= f.length()
-            f.delete()
-        }
-    }
-
-    private companion object {
-        const val MAX_TOTAL_BYTES = 30L * 1024 * 1024
-        const val TRIM_TARGET_BYTES = 24L * 1024 * 1024
+    /** Ключі (дати/періоди) усіх записів цього виду й адреси модуля. */
+    fun listKeys(kind: String, scope: String): List<String> {
+        val prefix = "${kind}_${scope}_"
+        val files = dir?.listFiles { f -> f.isFile && f.name.startsWith(prefix) && f.name.endsWith(".json") } ?: return emptyList()
+        return files.map { it.name.removePrefix(prefix).removeSuffix(".json") }
     }
 }

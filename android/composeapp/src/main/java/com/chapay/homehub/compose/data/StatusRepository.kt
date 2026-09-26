@@ -473,10 +473,122 @@ class StatusRepository(
         payload?.optJSONArray("lines")?.let { arr -> List(arr.length()) { arr.optString(it) } }
     }
 
+    // ---- Архів історії на телефоні ----
+
+    /** Підсумки закритих діб з архіву на телефоні: дата -> (сонце, навантаження, мережа) у Вт·год. */
+    suspend fun archivedDailyTotals(config: AppConfig): Map<String, Triple<Double, Double, Double>> = withContext(Dispatchers.IO) {
+        val scope = chartCache.scopeOf(config.inverterBaseUrl)
+        chartCache.listKeys("daily", scope).mapNotNull { date ->
+            val entry = chartCache.get("daily", scope, date) ?: return@mapNotNull null
+            if (!isClosedPeriod(PeriodKind.DAY, date, entry.savedAtMs)) return@mapNotNull null
+            val t = entry.payload.optJSONObject("totals") ?: return@mapNotNull null
+            date to Triple(t.optDouble("dailyPV", 0.0), t.optDouble("dailyHome", 0.0), t.optDouble("dailyGrid", 0.0))
+        }.toMap()
+    }
+
+    class ArchiveSyncResult(val fetchedDays: Int, val ackedUpTo: String?, val note: String)
+
+    // Дати, для яких лог-файлу на load_controller немає: не питаємо повторно за одну сесію.
+    private val archiveMissingLogDates = mutableSetOf<String>()
+
+    /**
+     * Зберігає на телефоні всі закриті доби, яких там ще нема (інвертор: усі, що він має;
+     * load_controller: хронологія й журнал за останні 35 діб), а потім повідомляє інвертору
+     * дату, до якої архів повний (POST /api/archive/ack) - лише після цього він може
+     * прибрати ці доби зі своєї пам'яті. Запити йдуть послідовно з паузами, щоб не
+     * навантажувати ESP32. Викликається з ViewModel періодично, поки застосунок відкрито.
+     */
+    suspend fun syncHistoryArchive(config: AppConfig): ArchiveSyncResult = withContext(Dispatchers.IO) {
+        var fetched = 0
+        var ackedUpTo: String? = null
+        val notes = mutableListOf<String>()
+        val today = todayIsoDate()
+
+        if (config.inverterEnabled) {
+            val scope = chartCache.scopeOf(config.inverterBaseUrl)
+            val datesRaw = fetchInverterHeavyText(config, "/api/dates")
+            val datesArr = datesRaw?.let { runCatching { JSONArray(it) }.getOrNull() }
+            if (datesArr == null) {
+                notes += "інвертор: список діб недоступний"
+            } else {
+                val dates = (0 until datesArr.length())
+                    .mapNotNull { i -> datesArr.optJSONObject(i)?.optString("date")?.takeIf { it.length == 10 } }
+                    .filter { it < today }
+                    .sorted()
+                var prefixComplete = true
+                var lastComplete: String? = null
+                for (date in dates) {
+                    var entry = chartCache.get("daily", scope, date)
+                    if (entry == null || !isClosedPeriod(PeriodKind.DAY, date, entry.savedAtMs)) {
+                        fetchInverterDaily(config, date)
+                        fetched++
+                        delay(700)
+                        entry = chartCache.get("daily", scope, date)
+                    }
+                    val closed = entry != null && isClosedPeriod(PeriodKind.DAY, date, entry.savedAtMs)
+                    if (!closed) prefixComplete = false
+                    if (prefixComplete) lastComplete = date
+                    if (fetched >= 40) break // не більше 40 запитів за прохід
+                }
+                if (lastComplete != null) {
+                    val ok = postForm(
+                        baseUrlRaw = config.inverterBaseUrl,
+                        password = config.inverterPassword,
+                        path = "/api/archive/ack",
+                        formPairs = listOf("date" to lastComplete),
+                        syncTimeFirst = false,
+                    )
+                    if (ok) ackedUpTo = lastComplete else notes += "інвертор: підтвердження не прийнято (стара прошивка?)"
+                }
+            }
+        }
+
+        if (config.loadControllerEnabled) {
+            val scope = chartCache.scopeOf(config.loadControllerBaseUrl)
+            val cal = Calendar.getInstance()
+            var requests = 0
+            for (back in 1..35) {
+                if (requests >= 40) break
+                cal.timeInMillis = System.currentTimeMillis()
+                cal.add(Calendar.DAY_OF_MONTH, -back)
+                val date = "%04d-%02d-%02d".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH))
+                val tl = chartCache.get("timeline", scope, date)
+                if (tl == null || !isClosedPeriod(PeriodKind.DAY, date, tl.savedAtMs)) {
+                    fetchLoadControllerTimeline(config, date)
+                    requests++
+                    delay(400)
+                }
+                val lg = chartCache.get("log", scope, date)
+                if ((lg == null || !isClosedPeriod(PeriodKind.DAY, date, lg.savedAtMs)) && date !in archiveMissingLogDates) {
+                    val lines = fetchLoadControllerLogLines(config, date)
+                    if (lines == null) archiveMissingLogDates += date
+                    requests++
+                    delay(400)
+                }
+            }
+        }
+        ArchiveSyncResult(fetched, ackedUpTo, notes.joinToString("; "))
+    }
+
     /** (файлів, байтів) у кеші графіків. */
     fun chartCacheStats(): Pair<Int, Long> = chartCache.stats()
 
     fun clearChartCache(): Int = chartCache.clear()
+
+    private fun fetchInverterHeavyText(config: AppConfig, path: String): String? {
+        if (!config.inverterEnabled) return null
+        val baseUrl = normalizeBaseUrl(config.inverterBaseUrl)
+        if (baseUrl.isEmpty()) return null
+        val url = buildUrl(baseUrl, path, emptyMap()) ?: return null
+
+        val first = fetchTextResult(url, slowClient)
+        first.text?.let { return it }
+        if (first.httpCode != 401 && first.httpCode != 403) return null
+        if (config.inverterPassword.isBlank()) return null
+
+        authenticate(baseUrl, config.inverterPassword)
+        return fetchTextResult(url, slowClient).text
+    }
 
     private fun fetchInverterHeavyJson(config: AppConfig, path: String, query: Map<String, String>): JSONObject? {
         if (!config.inverterEnabled) return null

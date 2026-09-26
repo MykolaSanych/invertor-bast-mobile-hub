@@ -52,6 +52,23 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         val stored = AppConfigStorage.load(application)
         _uiState.update { it.copy(config = stored) }
         startPolling()
+        startArchiveSync()
+    }
+
+    // Архів історії на телефоні: після запуску (з паузою, щоб не заважати першому
+    // завантаженню) і далі раз на 30 хв підтягуємо закриті доби, яких ще нема, та
+    // повідомляємо інвертору, що вони збережені - лише тоді він чистить свою пам'ять.
+    private var archiveJob: Job? = null
+
+    private fun startArchiveSync() {
+        archiveJob?.cancel()
+        archiveJob = viewModelScope.launch {
+            delay(45_000L)
+            while (true) {
+                runCatching { repository.syncHistoryArchive(_uiState.value.config) }
+                delay(30 * 60_000L)
+            }
+        }
     }
 
     fun setConfig(config: AppConfig) {
@@ -199,6 +216,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     override fun onCleared() {
         pollingJob?.cancel()
+        archiveJob?.cancel()
         super.onCleared()
     }
 }

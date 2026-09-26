@@ -43,6 +43,7 @@ fun SettingsScreen(
     repository: StatusRepository,
 ) {
     var cacheStats by remember { mutableStateOf(repository.chartCacheStats()) }
+    var confirmClear by remember { mutableStateOf(false) }
     var inverterUrl by remember { mutableStateOf(config.inverterBaseUrl) }
     var inverterPass by remember { mutableStateOf(config.inverterPassword) }
     var inverterEnabled by remember { mutableStateOf(config.inverterEnabled) }
@@ -117,7 +118,13 @@ fun SettingsScreen(
             )
 
             Spacer(Modifier.height(20.dp))
-            Text("Кеш графіків на телефоні", style = MaterialTheme.typography.labelMedium, color = TextMuted)
+            Text("Архів історії на телефоні", style = MaterialTheme.typography.labelMedium, color = TextMuted)
+            Text(
+                "Закриті доби зберігаються тут назавжди й самі не видаляються. Інвертор чистить свої " +
+                    "найстаріші доби лише після того, як телефон їх зберіг.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted,
+            )
             Spacer(Modifier.height(6.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -128,12 +135,29 @@ fun SettingsScreen(
                     text = "${cacheStats.first} файлів, ${"%.1f".format(cacheStats.second / 1048576.0)} МБ",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                androidx.compose.material3.OutlinedButton(
-                    onClick = {
-                        repository.clearChartCache()
-                        cacheStats = repository.chartCacheStats()
+                androidx.compose.material3.OutlinedButton(onClick = { confirmClear = true }) { Text("Очистити") }
+            }
+            if (confirmClear) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { confirmClear = false },
+                    title = { Text("Видалити архів історії?") },
+                    text = {
+                        Text(
+                            "Буде видалено все, що збережено на телефоні (${cacheStats.first} файлів). Доби, яких уже " +
+                                "нема на інверторі, відновити буде неможливо.",
+                        )
                     },
-                ) { Text("Очистити") }
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            repository.clearChartCache()
+                            cacheStats = repository.chartCacheStats()
+                            confirmClear = false
+                        }) { Text("Видалити") }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(onClick = { confirmClear = false }) { Text("Скасувати") }
+                    },
+                )
             }
 
             Spacer(Modifier.height(28.dp))
