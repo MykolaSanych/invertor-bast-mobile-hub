@@ -62,6 +62,8 @@ fun MetricCard(
     // Дані модуля давно не оновлювались (зв'язок лагає) - картка тьмяніє, але
     // лишається на місці з останніми значеннями, а не зникає.
     stale: Boolean = false,
+    // Іде запит, після якого відкриється екран деталей: біля назви крутиться індикатор.
+    busy: Boolean = false,
 ) {
     val pulse = remember { Animatable(0f) }
     LaunchedEffect(valueText) {
@@ -91,6 +93,14 @@ fun MetricCard(
                     style = MaterialTheme.typography.labelMedium,
                     color = TextMuted,
                 )
+                if (busy) {
+                    Spacer(Modifier.width(8.dp))
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 2.dp,
+                        color = accent,
+                    )
+                }
             }
             Spacer(Modifier.height(10.dp))
             AnimatedContent(targetState = valueText, label = "metric-value") { text ->

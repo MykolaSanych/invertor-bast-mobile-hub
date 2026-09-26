@@ -89,6 +89,8 @@ fun DashboardScreen(
     onOpenSettings: () -> Unit,
     onTriggerGate: () -> Unit,
     onToggleLight: () -> Unit,
+    onOpenInverterSettings: () -> Unit = {},
+    inverterSettingsLoading: Boolean = false,
 ) {
     val inverter = uiState.status.inverter
     val loadController = uiState.status.loadController
@@ -136,6 +138,8 @@ fun DashboardScreen(
                         accent = AccentPv,
                         icon = Icons.Filled.WbSunny,
                         iconTint = pvIndicatorColor(inverter),
+                        busy = inverterSettingsLoading,
+                        onClick = onOpenInverterSettings,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "напруга" to "${formatVolts(it.pvVoltage)} В" },

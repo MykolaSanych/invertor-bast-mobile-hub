@@ -37,6 +37,17 @@ data class DashboardUiState(
     val lastAttemptAtMs: Long = 0L,
 )
 
+/** Стан екрана режимів інвертора. */
+data class InverterSettingsUiState(
+    // Іде читання (і на плитці "Сонце" крутиться індикатор до відкриття екрана).
+    val loading: Boolean = false,
+    // Іде запис нового режиму.
+    val busy: Boolean = false,
+    val settings: com.chapay.homehub.compose.data.InverterSettings? = null,
+    val message: String? = null,
+    val error: String? = null,
+)
+
 class DashboardViewModel(application: Application) : AndroidViewModel(application) {
     val repository = StatusRepository(application)
 
@@ -44,6 +55,42 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     val uiState: StateFlow<DashboardUiState> = _uiState
 
     private var pollingJob: Job? = null
+
+    private val _inverterSettings = MutableStateFlow(InverterSettingsUiState())
+    val inverterSettings: StateFlow<InverterSettingsUiState> = _inverterSettings
+
+    /** Читає режим і пріоритети інвертора; викликається при натисканні на плитку, до відкриття екрана. */
+    suspend fun loadInverterSettings() {
+        _inverterSettings.update { it.copy(loading = true, error = null, message = null) }
+        val settings = runCatching { repository.fetchInverterSettings(_uiState.value.config) }.getOrNull()
+        _inverterSettings.update {
+            it.copy(
+                loading = false,
+                settings = settings ?: it.settings,
+                error = if (settings == null) "Інвертор не відповів на запит режимів (або прошивка застаріла)" else null,
+            )
+        }
+    }
+
+    fun setInverterOutputPriority(value: Int) = applyInverterPriority(output = value, charger = null, label = "Пріоритет виходу змінено")
+
+    fun setInverterChargerPriority(value: Int) = applyInverterPriority(output = null, charger = value, label = "Пріоритет зарядки змінено")
+
+    private fun applyInverterPriority(output: Int?, charger: Int?, label: String) {
+        if (_inverterSettings.value.busy) return
+        viewModelScope.launch {
+            _inverterSettings.update { it.copy(busy = true, error = null, message = null) }
+            val result = runCatching { repository.setInverterPriority(_uiState.value.config, output, charger) }
+                .getOrElse { com.chapay.homehub.compose.data.InverterSetResult(false, null, it.message ?: "Помилка") }
+            _inverterSettings.update {
+                if (result.ok) {
+                    it.copy(busy = false, settings = result.settings ?: it.settings, message = label, error = null)
+                } else {
+                    it.copy(busy = false, error = result.error ?: "Команда не виконана")
+                }
+            }
+        }
+    }
     // Опитування не накладаються: pull-to-refresh чи команда під час фонового
     // циклу чекають його завершення замість паралельних дублікатів запитів.
     private val fetchMutex = Mutex()

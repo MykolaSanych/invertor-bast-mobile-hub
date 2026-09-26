@@ -627,6 +627,56 @@ class StatusRepository(
         ArchiveSyncResult(fetched, ackedUpTo, notes.joinToString("; "))
     }
 
+    // ---- Режими інвертора (пріоритет виходу / зарядки) ----
+
+    private fun parseInverterSettings(json: JSONObject): InverterSettings? {
+        if (!json.optBoolean("ok", false)) return null
+        fun intOrNull(key: String): Int? = if (json.isNull(key) || !json.has(key)) null else json.optInt(key, -1).takeIf { it >= 0 }
+        val mode = if (json.isNull("mode")) null else json.optString("mode").takeIf { it.isNotBlank() }
+        return InverterSettings(mode, intOrNull("output_priority"), intOrNull("charger_priority"))
+    }
+
+    /** Читає режим і пріоритети (інвертор сам опитує обладнання: 1-3 с). null - не відповів / стара прошивка. */
+    suspend fun fetchInverterSettings(config: AppConfig): InverterSettings? = withContext(Dispatchers.IO) {
+        if (!config.inverterEnabled) return@withContext null
+        val json = fetchInverterHeavyJson(config, "/api/inverter/settings", emptyMap()) ?: return@withContext null
+        parseInverterSettings(json)
+    }
+
+    /** Змінює ОДИН пріоритет (output 0..2 або charger 0..3); повертає перечитані налаштування. */
+    suspend fun setInverterPriority(config: AppConfig, output: Int?, charger: Int?): InverterSetResult = withContext(Dispatchers.IO) {
+        if (!config.inverterEnabled) return@withContext InverterSetResult(false, null, "Інвертор вимкнено в налаштуваннях")
+        val baseUrl = normalizeBaseUrl(config.inverterBaseUrl)
+        val url = "$baseUrl/api/inverter/settings".toHttpUrlOrNull()
+            ?: return@withContext InverterSetResult(false, null, "Невірна адреса інвертора")
+
+        fun once(): Pair<Int, JSONObject?>? = runCatching {
+            val form = FormBody.Builder()
+            if (output != null) form.add("output", output.toString())
+            if (charger != null) form.add("charger", charger.toString())
+            val req = Request.Builder().url(url).post(form.build()).build()
+            slowClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string()
+                resp.code to body?.let { runCatching { JSONObject(it) }.getOrNull() }
+            }
+        }.getOrNull()
+
+        var result = once()
+        if (result == null || result.first == 401 || result.first == 403) {
+            authenticate(baseUrl, config.inverterPassword)
+            result = once()
+        }
+        val (code, json) = result ?: return@withContext InverterSetResult(false, null, "Інвертор не відповів")
+        when {
+            code == 200 && json != null -> InverterSetResult(true, parseInverterSettings(json), null)
+            code == 429 -> InverterSetResult(false, null, "Занадто часто: зачекайте кілька секунд")
+            code == 404 -> InverterSetResult(false, null, "Прошивка інвертора ще не підтримує цю команду")
+            json != null && json.optString("error") == "NAK" -> InverterSetResult(false, null, "Інвертор відхилив команду (NAK)")
+            json != null && json.optString("error") == "timeout" -> InverterSetResult(false, null, "Інвертор не відповів на команду")
+            else -> InverterSetResult(false, null, "Помилка $code")
+        }
+    }
+
     /** (файлів, байтів) у кеші графіків. */
     fun chartCacheStats(): Pair<Int, Long> = chartCache.stats()
 

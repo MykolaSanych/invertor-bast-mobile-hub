@@ -22,10 +22,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.launch
 import com.chapay.homehub.compose.ui.DashboardViewModel
 import com.chapay.homehub.compose.ui.screens.DashboardScreen
 import com.chapay.homehub.compose.ui.screens.DeviceControlScreen
 import com.chapay.homehub.compose.ui.screens.EnergyChartScreen
+import com.chapay.homehub.compose.ui.screens.InverterSettingsScreen
 import com.chapay.homehub.compose.ui.screens.JournalScreen
 import com.chapay.homehub.compose.ui.screens.SchemeScreen
 import com.chapay.homehub.compose.ui.screens.SettingsScreen
@@ -38,6 +40,7 @@ private const val ROUTE_TIMELINE = "timeline"
 private const val ROUTE_JOURNAL = "journal"
 private const val ROUTE_ENERGY = "energy"
 private const val ROUTE_DEVICE = "device/{key}"
+private const val ROUTE_INVERTER_SETTINGS = "inverter_settings"
 
 private data class BottomDestination(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
 
@@ -55,6 +58,8 @@ fun AppNavHost(
     navController: NavHostController = rememberNavController(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val inverterSettingsState by viewModel.inverterSettings.collectAsState()
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val showBottomBar = BOTTOM_DESTINATIONS.any { it.route == currentRoute } &&
@@ -92,6 +97,16 @@ fun AppNavHost(
                         onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
                         onTriggerGate = viewModel::triggerGate,
                         onToggleLight = viewModel::toggleGarageLight,
+                        // Плитка "Сонце": спершу запит режимів до інвертора, і лише потім екран.
+                        onOpenInverterSettings = {
+                            if (!inverterSettingsState.loading) {
+                                scope.launch {
+                                    viewModel.loadInverterSettings()
+                                    navController.navigate(ROUTE_INVERTER_SETTINGS)
+                                }
+                            }
+                        },
+                        inverterSettingsLoading = inverterSettingsState.loading,
                     )
                 }
                 composable(ROUTE_DEVICE) { backStack ->
@@ -115,6 +130,15 @@ fun AppNavHost(
                                 "boiler2" -> viewModel.setBoiler2AutoWindow(enabled, start, end)
                             }
                         },
+                        onBack = { navController.popBackStack() },
+                    )
+                }
+                composable(ROUTE_INVERTER_SETTINGS) {
+                    InverterSettingsScreen(
+                        state = inverterSettingsState,
+                        onRefresh = { scope.launch { viewModel.loadInverterSettings() } },
+                        onSetOutput = viewModel::setInverterOutputPriority,
+                        onSetCharger = viewModel::setInverterChargerPriority,
                         onBack = { navController.popBackStack() },
                     )
                 }

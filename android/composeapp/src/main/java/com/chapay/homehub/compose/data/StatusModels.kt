@@ -170,3 +170,16 @@ data class UnifiedStatus(
     val updatedAtMs: Long = System.currentTimeMillis(),
     val fromMulticast: Boolean = false,
 )
+
+/**
+ * Режим і налаштування пріоритетів інвертора (Voltronic PI30), як їх віддає /api/inverter/settings.
+ * mode: літера QMOD (P/S/L/B/F/H); outputPriority: 0 мережа, 1 сонце, 2 SBU;
+ * chargerPriority: 0 мережа, 1 сонце, 2 сонце+мережа, 3 лише сонце. null - не вдалось прочитати.
+ */
+data class InverterSettings(
+    val mode: String?,
+    val outputPriority: Int?,
+    val chargerPriority: Int?,
+)
+
+data class InverterSetResult(val ok: Boolean, val settings: InverterSettings?, val error: String?)
