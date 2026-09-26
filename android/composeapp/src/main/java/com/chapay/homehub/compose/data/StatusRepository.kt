@@ -330,7 +330,11 @@ class StatusRepository(
         // Минула доба не змінюється - після першого вдалого завантаження беремо з диска.
         // Сьогодні кеш не використовуємо як "свіже" (ttl 0): він лише показується миттєво
         // до відповіді модуля й виручає при збої зв'язку.
-        cachedJson("daily", config.inverterBaseUrl, requestedDate, PeriodKind.DAY, currentTtlMs = 0L) {
+        cachedJson(
+            "daily", config.inverterBaseUrl, requestedDate, PeriodKind.DAY,
+            currentTtlMs = 0L,
+            merge = ::mergeDailyPayloads,
+        ) {
             fetchInverterDailyNetwork(config, requestedDate)
         }
     }
@@ -435,6 +439,7 @@ class StatusRepository(
         key: String,
         period: PeriodKind,
         currentTtlMs: Long,
+        merge: ((old: JSONObject, new: JSONObject) -> JSONObject)? = null,
         load: suspend () -> JSONObject?,
     ): JSONObject? {
         val scope = chartCache.scopeOf(scopeUrl)
@@ -445,10 +450,62 @@ class StatusRepository(
         }
         val fresh = load()
         if (fresh != null) {
-            chartCache.put(kind, scope, key, fresh)
-            return fresh
+            // Незакритий період: модуль міг "забути" те, що телефон уже бачив (перезавантаження,
+            // повна пам'ять) - зберігаємо об'єднання, а не голу відповідь.
+            val toStore = if (entry != null && merge != null) runCatching { merge(entry.payload, fresh) }.getOrDefault(fresh) else fresh
+            chartCache.put(kind, scope, key, toStore)
+            return toStore
         }
         return entry?.payload
+    }
+
+    // Добова відповідь інвертора: об'єднання того, що телефон бачив раніше, з новою відповіддю.
+    // Доба лише накопичується, тож для кожної години беремо більше значення (pv/home/grid),
+    // слоти - об'єднання за хвилиною, а підсумки перераховуємо із годин (не менше за нові).
+    private fun mergeDailyPayloads(old: JSONObject, new: JSONObject): JSONObject {
+        fun hoursOf(p: JSONObject): Map<Int, JSONObject> {
+            val arr = p.optJSONArray("hours") ?: return emptyMap()
+            return (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.associateBy { it.optInt("hour", -1) }
+        }
+        val oldHours = hoursOf(old)
+        val newHours = hoursOf(new)
+        val hourKeys = (oldHours.keys + newHours.keys).filter { it in 0..23 }.sorted()
+        val mergedHours = JSONArray()
+        var sumPv = 0.0
+        var sumHome = 0.0
+        var sumGrid = 0.0
+        for (h in hourKeys) {
+            val a = oldHours[h]
+            val b = newHours[h]
+            val base = JSONObject((b ?: a)!!.toString())
+            for (field in listOf("pv", "home", "grid")) {
+                val v = maxOf(a?.optDouble(field, 0.0) ?: 0.0, b?.optDouble(field, 0.0) ?: 0.0)
+                base.put(field, v)
+            }
+            sumPv += base.optDouble("pv", 0.0)
+            sumHome += base.optDouble("home", 0.0)
+            sumGrid += base.optDouble("grid", 0.0)
+            mergedHours.put(base)
+        }
+
+        val slotMap = sortedMapOf<Int, JSONObject>()
+        old.optJSONArray("slots")?.let { arr -> for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { slotMap[it.optInt("m", -1)] = it } }
+        new.optJSONArray("slots")?.let { arr -> for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { slotMap[it.optInt("m", -1)] = it } }
+        val mergedSlots = JSONArray()
+        slotMap.filterKeys { it >= 0 }.values.forEach { mergedSlots.put(it) }
+
+        val out = JSONObject(new.toString())
+        out.put("hours", mergedHours)
+        out.put("slots", mergedSlots)
+        val newTotals = new.optJSONObject("totals")
+        out.put(
+            "totals",
+            JSONObject()
+                .put("dailyPV", maxOf(sumPv, newTotals?.optDouble("dailyPV", 0.0) ?: 0.0))
+                .put("dailyHome", maxOf(sumHome, newTotals?.optDouble("dailyHome", 0.0) ?: 0.0))
+                .put("dailyGrid", maxOf(sumGrid, newTotals?.optDouble("dailyGrid", 0.0) ?: 0.0)),
+        )
+        return out
     }
 
     /** Що вже є на диску для цього періоду (без мережі): екран показує це миттєво, потім оновлює. */
