@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -33,13 +35,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import com.chapay.homehub.compose.ui.InverterSettingsUiState
 import com.chapay.homehub.compose.ui.theme.AccentPv
 import com.chapay.homehub.compose.ui.theme.OutlineSubtle
@@ -76,7 +81,7 @@ private fun modeText(mode: String?): String = when (mode) {
     else -> "невідомо ($mode)"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun InverterSettingsScreen(
     state: InverterSettingsUiState,
@@ -84,10 +89,22 @@ fun InverterSettingsScreen(
     onSetOutput: (Int) -> Unit,
     onSetCharger: (Int) -> Unit,
     onBack: () -> Unit,
+    // Яку секцію прокрутити у видиму область одразу при відкритті: "output" (картка
+    // сонця) чи "charger" (картка АКБ). null - без автопрокрутки.
+    focusSection: String? = null,
 ) {
     // Обрана, але ще не підтверджена зміна: (це вихід чи зарядка, значення, назва).
     var pending by remember { mutableStateOf<Triple<Boolean, Int, String>?>(null) }
     val settings = state.settings
+    val chargerSectionRequester = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(focusSection) {
+        if (focusSection == "charger") {
+            // Один кадр на розкладку, перш ніж просити прокрутити до ще не виміряної секції.
+            kotlinx.coroutines.delay(50)
+            scope.launch { chargerSectionRequester.bringIntoView() }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -149,6 +166,7 @@ fun InverterSettingsScreen(
                 current = settings?.chargerPriority,
                 enabled = !state.loading && !state.busy,
                 onPick = { option -> pending = Triple(false, option.value, "Пріоритет зарядки: ${option.title}") },
+                modifier = Modifier.bringIntoViewRequester(chargerSectionRequester),
             )
 
             Text(
@@ -183,8 +201,9 @@ private fun PrioritySection(
     current: Int?,
     enabled: Boolean,
     onPick: (PriorityOption) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.labelMedium, color = TextMuted)
         options.forEach { option ->
             val selected = option.value == current

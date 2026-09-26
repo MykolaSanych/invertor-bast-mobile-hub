@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.BatteryChargingFull
@@ -89,8 +90,12 @@ fun DashboardScreen(
     onOpenSettings: () -> Unit,
     onTriggerGate: () -> Unit,
     onToggleLight: () -> Unit,
-    onOpenInverterSettings: () -> Unit = {},
+    // focus: "output" (картка сонця) або "charger" (картка АКБ) - який пріоритет
+    // відкрити зверху на екрані режимів інвертора.
+    onOpenInverterSettings: (focus: String) -> Unit = {},
     inverterSettingsLoading: Boolean = false,
+    // module: "invertor-bast" / "load_controller" / "garage" - чий журнал відкрити.
+    onOpenJournal: (module: String) -> Unit = {},
 ) {
     val inverter = uiState.status.inverter
     val loadController = uiState.status.loadController
@@ -139,7 +144,8 @@ fun DashboardScreen(
                         icon = Icons.Filled.WbSunny,
                         iconTint = pvIndicatorColor(inverter),
                         busy = inverterSettingsLoading,
-                        onClick = onOpenInverterSettings,
+                        onClick = { onOpenInverterSettings("output") },
+                        onOpenJournal = { onOpenJournal("invertor-bast") },
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "напруга" to "${formatVolts(it.pvVoltage)} В" },
@@ -163,6 +169,7 @@ fun DashboardScreen(
                             inverter?.let { "за добу" to "${formatWatts(it.dailyGrid)} Вт·год" },
                         ),
                         onClick = { onOpenDevice("grid") },
+                        onOpenJournal = { onOpenJournal("invertor-bast") },
                     )
                 }
                 CardRow {
@@ -173,6 +180,9 @@ fun DashboardScreen(
                         unit = "%",
                         accent = AccentBattery,
                         icon = Icons.Filled.BatteryChargingFull,
+                        busy = inverterSettingsLoading,
+                        onClick = { onOpenInverterSettings("charger") },
+                        onOpenJournal = { onOpenJournal("invertor-bast") },
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "напруга" to "${formatVolts(it.batteryVoltage)} В" },
@@ -194,6 +204,7 @@ fun DashboardScreen(
                             inverter?.let { "за добу" to "${formatWatts(it.dailyHome)} Вт·год" },
                         ),
                         onClick = { onOpenDevice("load") },
+                        onOpenJournal = { onOpenJournal("invertor-bast") },
                     )
                 }
                 CardRow {
@@ -212,6 +223,7 @@ fun DashboardScreen(
                             loadController?.let { "стан" to boolTextUk(it.boiler1On) },
                         ),
                         onClick = { onOpenDevice("boiler1") },
+                        onOpenJournal = { onOpenJournal("load_controller") },
                     )
                     MetricCard(
                         title = "НАСОС",
@@ -228,6 +240,7 @@ fun DashboardScreen(
                             loadController?.let { "стан" to boolTextUk(it.pumpOn) },
                         ),
                         onClick = { onOpenDevice("pump") },
+                        onOpenJournal = { onOpenJournal("load_controller") },
                     )
                 }
                 // Не в CardRow: цей рядок містить кнопки (GateCard), чия
@@ -255,11 +268,13 @@ fun DashboardScreen(
                             garage?.let { "стан" to boolTextUk(it.boiler2On) },
                         ),
                         onClick = { onOpenDevice("boiler2") },
+                        onOpenJournal = { onOpenJournal("garage") },
                     )
                     GateCard(
                         garage = garage,
                         onTriggerGate = onTriggerGate,
                         onToggleLight = onToggleLight,
+                        onOpenJournal = { onOpenJournal("garage") },
                         modifier = Modifier.weight(1f).alpha(if (garageStale) 0.5f else 1f),
                     )
                 }
@@ -329,6 +344,7 @@ private fun GateCard(
     garage: GarageStatus?,
     onTriggerGate: () -> Unit,
     onToggleLight: () -> Unit,
+    onOpenJournal: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -367,10 +383,29 @@ private fun GateCard(
         shape = RoundedCornerShape(20.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Garage, contentDescription = null, tint = AccentGate, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("ВОРОТА", style = MaterialTheme.typography.labelMedium, color = TextMuted)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Garage, contentDescription = null, tint = AccentGate, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("ВОРОТА", style = MaterialTheme.typography.labelMedium, color = TextMuted)
+                }
+                IconButton(
+                    onClick = onOpenJournal,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .background(SurfaceContainerHigh.copy(alpha = 0.6f), CircleShape),
+                ) {
+                    Icon(
+                        Icons.Filled.Article,
+                        contentDescription = "Журнал подій",
+                        tint = TextMuted,
+                        modifier = Modifier.size(15.dp),
+                    )
+                }
             }
             Spacer(Modifier.height(10.dp))
             Text(

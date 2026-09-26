@@ -5,8 +5,10 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,11 +17,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import com.chapay.homehub.compose.ui.theme.HeroNumber
 import com.chapay.homehub.compose.ui.theme.OutlineSubtle
 import com.chapay.homehub.compose.ui.theme.SurfaceContainer
+import com.chapay.homehub.compose.ui.theme.SurfaceContainerHigh
 import com.chapay.homehub.compose.ui.theme.TextMuted
 import com.chapay.homehub.compose.ui.theme.TextPrimary
 
@@ -64,6 +71,9 @@ fun MetricCard(
     stale: Boolean = false,
     // Іде запит, після якого відкриється екран деталей: біля назви крутиться індикатор.
     busy: Boolean = false,
+    // Маленька кнопка в правому верхньому куті картки - відкриває журнал подій пристрою,
+    // пов'язаного з цією карткою. null - кнопки немає (не для кожної картки є свій журнал).
+    onOpenJournal: (() -> Unit)? = null,
 ) {
     val pulse = remember { Animatable(0f) }
     LaunchedEffect(valueText) {
@@ -84,6 +94,7 @@ fun MetricCard(
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, accent.copy(alpha = 0.16f + pulse.value * 0.55f)),
     ) {
+        Box {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
@@ -141,6 +152,24 @@ fun MetricCard(
                     }
                 }
             }
+        }
+        if (onOpenJournal != null) {
+            IconButton(
+                onClick = onOpenJournal,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(28.dp)
+                    .background(SurfaceContainerHigh.copy(alpha = 0.6f), CircleShape),
+            ) {
+                Icon(
+                    Icons.Filled.Article,
+                    contentDescription = "Журнал подій",
+                    tint = TextMuted,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
         }
     }
 }

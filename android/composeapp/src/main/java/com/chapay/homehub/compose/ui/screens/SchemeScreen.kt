@@ -1,11 +1,5 @@
 package com.chapay.homehub.compose.ui.screens
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -34,7 +28,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -79,7 +78,7 @@ private data class SchemeLink(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SchemeScreen(uiState: DashboardUiState, onBack: () -> Unit) {
+fun SchemeScreen(uiState: DashboardUiState, onBack: (() -> Unit)? = null) {
     val inverter = uiState.status.inverter
     val load = uiState.status.loadController
     val garage = uiState.status.garage
@@ -133,8 +132,10 @@ fun SchemeScreen(uiState: DashboardUiState, onBack: () -> Unit) {
             TopAppBar(
                 title = { Text("Схема живлення") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    if (onBack != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                        }
                     }
                 },
             )
@@ -177,6 +178,15 @@ fun SchemeScreen(uiState: DashboardUiState, onBack: () -> Unit) {
     }
 }
 
+// Довжина патерну пунктиру (16 риска + 12 проміжок) - крок, після якого фаза анімації
+// зациклюється.
+private const val DASH_PATTERN_LENGTH = 28f
+
+// Швидкість "руху" пунктиру: росте з потужністю (корінь, щоб кіловати не розганяли лінію
+// до нечитабельного миготіння), але має видиму нижню межу навіть для дрібної потужності.
+private fun dashSpeedPxPerMs(powerW: Double): Float =
+    0.010f + 0.00045f * kotlin.math.sqrt(kotlin.math.abs(powerW)).toFloat()
+
 @Composable
 private fun SchemeLinks(
     links: List<SchemeLink>,
@@ -184,16 +194,18 @@ private fun SchemeLinks(
     widthPx: Float,
     heightPx: Float,
 ) {
-    val infinite = rememberInfiniteTransition(label = "scheme-flow")
-    val dashPhase by infinite.animateFloat(
-        initialValue = 0f,
-        targetValue = 48f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1400, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "dash-phase",
-    )
+    // Один наскрізний "годинник" (мс від першої композиції), а не Animatable з фіксованою
+    // тривалістю - бо кожна лінія тепер рухається зі своєю швидкістю, яка до того ж сама
+    // міняється з часом (стежить за живою потужністю).
+    var elapsedMs by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        var lastFrameNanos = withFrameNanos { it }
+        while (true) {
+            val nowNanos = withFrameNanos { it }
+            elapsedMs += (nowNanos - lastFrameNanos) / 1_000_000f
+            lastFrameNanos = nowNanos
+        }
+    }
 
     Canvas(modifier = Modifier.fillMaxSize()) {
         links.forEach { link ->
@@ -204,12 +216,17 @@ private fun SchemeLinks(
             val flowing = kotlin.math.abs(link.powerW) > 5.0
 
             if (flowing) {
+                // Від'ємна потужність (зараз лише в акумулятора: розряджається, віддає
+                // струм) - лінія рухається у зворотний бік, від "to" до "from", хоча сама
+                // геометрія (кінці лінії) не змінюється.
+                val reversed = link.powerW < 0.0
+                val phase = (elapsedMs * dashSpeedPxPerMs(link.powerW)) % DASH_PATTERN_LENGTH
                 drawLine(
                     color = link.color.copy(alpha = 0.85f),
                     start = start,
                     end = end,
                     strokeWidth = 5f,
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f), -dashPhase),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f), if (reversed) phase else -phase),
                 )
             } else {
                 drawLine(

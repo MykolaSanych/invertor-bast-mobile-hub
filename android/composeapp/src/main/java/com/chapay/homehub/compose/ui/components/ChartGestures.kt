@@ -89,11 +89,19 @@ fun rememberChartViewport(key: Any?, domainMin: Float, domainMax: Float, minSpan
     remember(key, domainMin, domainMax, minSpan) { ChartViewport(domainMin, domainMax, minSpan) }
 
 /**
- * Жести графіка. Два пальці - масштаб і зсув. Один палець:
+ * Жести графіка. Два пальці - масштаб і зсув, завжди. Один палець:
  *  - [dragMovesCursor] (графік не наближено) - веде вертикальну лінію-курсор ([onCursor]);
  *  - інакше (графік наближено) - зсуває його ([onPan] у пікселях), а короткий дотик
  *    без руху віддає [onTap] (поставити курсор / обрати лінію).
  * [onZoom] отримує x центру жесту (px) і множник масштабу.
+ *
+ * Графік лежить усередині горизонтально-гортаного пейджера вкладок (сам він, коли
+ * вкладку показано в [com.chapay.homehub.compose.ui.components.LandscapeInPortrait],
+ * повернутий на 90° - тож "вісь X" графіка [Offset.x] тут фізично йде ВЕРТИКАЛЬНО
+ * екраном, а фізичний ГОРИЗОНТАЛЬНИЙ свайп відповідає локальній осі Y графіка, якої він
+ * не використовує). Тому один палець графік забирає собі, лише коли після подолання
+ * touch slop рух переважає по осі X - інакше подію не консюмимо, і той самий необроблений
+ * дотик бачить пейджер-предок і гортає вкладку.
  */
 fun Modifier.chartGestures(
     key: Any?,
@@ -105,11 +113,16 @@ fun Modifier.chartGestures(
 ): Modifier = pointerInput(key, dragMovesCursor) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
+        // Миттєвий відгук на дотик (курсор одразу під пальцем) - це не consume(), тож
+        // пейджер однаково бачить необроблений down і, якщо палець піде вбік, зможе
+        // почати гортання.
+        if (dragMovesCursor) onCursor(down.position)
         var multiTouch = false
         var moved = false
-        if (dragMovesCursor) onCursor(down.position)
+        var owned = false
+        var event: androidx.compose.ui.input.pointer.PointerEvent
         do {
-            val event = awaitPointerEvent()
+            event = awaitPointerEvent()
             val pressed = event.changes.filter { it.pressed }
             if (pressed.size >= 2) {
                 multiTouch = true
@@ -121,14 +134,20 @@ fun Modifier.chartGestures(
                 event.changes.forEach { if (it.positionChanged()) it.consume() }
             } else if (pressed.size == 1 && !multiTouch) {
                 val change: PointerInputChange = pressed[0]
-                if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
-                if (dragMovesCursor) {
-                    onCursor(change.position)
-                } else if (moved) {
-                    val dx = change.position.x - change.previousPosition.x
-                    if (dx != 0f) onPan(dx)
+                val total = change.position - down.position
+                if (!moved && total.getDistance() > viewConfiguration.touchSlop) {
+                    moved = true
+                    owned = kotlin.math.abs(total.x) >= kotlin.math.abs(total.y)
                 }
-                if (change.positionChanged()) change.consume()
+                if (owned) {
+                    if (dragMovesCursor) {
+                        onCursor(change.position)
+                    } else {
+                        val dx = change.position.x - change.previousPosition.x
+                        if (dx != 0f) onPan(dx)
+                    }
+                    if (change.positionChanged()) change.consume()
+                }
             }
         } while (event.changes.any { it.pressed })
         if (!multiTouch && !moved && !dragMovesCursor) onTap(down.position)

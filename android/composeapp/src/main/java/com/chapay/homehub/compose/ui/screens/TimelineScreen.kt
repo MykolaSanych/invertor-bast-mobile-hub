@@ -52,7 +52,6 @@ import com.chapay.homehub.compose.data.StatusRepository
 import com.chapay.homehub.compose.ui.components.ChartToolbarActions
 import com.chapay.homehub.compose.ui.components.ChartViewport
 import com.chapay.homehub.compose.ui.components.DateNavHeader
-import com.chapay.homehub.compose.ui.components.LockLandscapeOrientation
 import com.chapay.homehub.compose.ui.components.VisibilityToggle
 import com.chapay.homehub.compose.ui.components.chartGestures
 import com.chapay.homehub.compose.ui.components.rememberChartViewport
@@ -153,8 +152,7 @@ private fun parseLegacyHistory(payload: JSONObject): TimelineData {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -> Unit) {
-    LockLandscapeOrientation()
+fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: (() -> Unit)? = null) {
     var date by remember { mutableStateOf(todayIso()) }
     var data by remember { mutableStateOf<TimelineData?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -212,8 +210,10 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: () -
             TopAppBar(
                 title = { Text("Хронологія") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    if (onBack != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                        }
                     }
                 },
                 actions = { ChartToolbarActions(viewport) },

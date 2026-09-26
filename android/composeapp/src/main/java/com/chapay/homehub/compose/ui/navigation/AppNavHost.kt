@@ -1,29 +1,22 @@
 package com.chapay.homehub.compose.ui.navigation
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountTree
-import androidx.compose.material.icons.filled.Article
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import kotlinx.coroutines.launch
+import androidx.navigation.navArgument
 import com.chapay.homehub.compose.ui.DashboardViewModel
+import com.chapay.homehub.compose.ui.components.LandscapeInPortrait
 import com.chapay.homehub.compose.ui.screens.DashboardScreen
 import com.chapay.homehub.compose.ui.screens.DeviceControlScreen
 import com.chapay.homehub.compose.ui.screens.EnergyChartScreen
@@ -32,25 +25,23 @@ import com.chapay.homehub.compose.ui.screens.JournalScreen
 import com.chapay.homehub.compose.ui.screens.SchemeScreen
 import com.chapay.homehub.compose.ui.screens.SettingsScreen
 import com.chapay.homehub.compose.ui.screens.TimelineScreen
+import kotlinx.coroutines.launch
 
-private const val ROUTE_DASHBOARD = "dashboard"
+private const val ROUTE_MAIN = "main"
 private const val ROUTE_SETTINGS = "settings"
-private const val ROUTE_SCHEME = "scheme"
-private const val ROUTE_TIMELINE = "timeline"
-private const val ROUTE_JOURNAL = "journal"
-private const val ROUTE_ENERGY = "energy"
 private const val ROUTE_DEVICE = "device/{key}"
-private const val ROUTE_INVERTER_SETTINGS = "inverter_settings"
+private const val ROUTE_INVERTER_SETTINGS = "inverter_settings/{focus}"
+private const val ROUTE_JOURNAL_DEVICE = "journal_device/{module}"
 
-private data class BottomDestination(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
-
-private val BOTTOM_DESTINATIONS = listOf(
-    BottomDestination(ROUTE_DASHBOARD, "Дім", Icons.Filled.Home),
-    BottomDestination(ROUTE_SCHEME, "Схема", Icons.Filled.AccountTree),
-    BottomDestination(ROUTE_TIMELINE, "Хронологія", Icons.Filled.Schedule),
-    BottomDestination(ROUTE_JOURNAL, "Журнал", Icons.Filled.Article),
-    BottomDestination(ROUTE_ENERGY, "Графік", Icons.Filled.BarChart),
-)
+// П'ять вкладок головного екрана - тепер сторінки одного горизонтально-гортаного
+// пейджера (без нижнього меню, перемикання - лише свайпом вліво/вправо, як і між
+// звичайними сторінками NavHost решта екранів лишаються "штовхнутими" зверху пейджера).
+private const val PAGE_DASHBOARD = 0
+private const val PAGE_SCHEME = 1
+private const val PAGE_TIMELINE = 2
+private const val PAGE_JOURNAL = 3
+private const val PAGE_ENERGY = 4
+private const val PAGE_COUNT = 5
 
 @Composable
 fun AppNavHost(
@@ -59,118 +50,139 @@ fun AppNavHost(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val inverterSettingsState by viewModel.inverterSettings.collectAsState()
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
-    val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route
-    val showBottomBar = BOTTOM_DESTINATIONS.any { it.route == currentRoute } &&
-        currentRoute != ROUTE_TIMELINE && currentRoute != ROUTE_ENERGY
+    val scope = rememberCoroutineScope()
 
-    Scaffold(
-        bottomBar = {
-            if (showBottomBar) {
-                NavigationBar {
-                    BOTTOM_DESTINATIONS.forEach { dest ->
-                        NavigationBarItem(
-                            selected = currentRoute == dest.route,
-                            onClick = {
-                                navController.navigate(dest.route) {
-                                    popUpTo(ROUTE_DASHBOARD) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            icon = { Icon(dest.icon, contentDescription = dest.label) },
-                            label = { Text(dest.label) },
-                        )
-                    }
-                }
+    fun openInverterSettings(focus: String) {
+        if (!inverterSettingsState.loading) {
+            scope.launch {
+                // Плитка сонця/АКБ: запит режимів відправляється ДО відкриття екрана
+                // (він триває, поки на плитці крутиться індикатор), а не після.
+                viewModel.loadInverterSettings()
+                navController.navigate("inverter_settings/$focus")
             }
-        },
-    ) { outerPadding ->
-        Box(Modifier.padding(bottom = outerPadding.calculateBottomPadding())) {
-            NavHost(navController = navController, startDestination = ROUTE_DASHBOARD) {
-                composable(ROUTE_DASHBOARD) {
-                    DashboardScreen(
-                        uiState = uiState,
-                        onRefresh = viewModel::refreshNow,
-                        onOpenDevice = { key -> navController.navigate("device/$key") },
-                        onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
-                        onTriggerGate = viewModel::triggerGate,
-                        onToggleLight = viewModel::toggleGarageLight,
-                        // Плитка "Сонце": спершу запит режимів до інвертора, і лише потім екран.
-                        onOpenInverterSettings = {
-                            if (!inverterSettingsState.loading) {
-                                scope.launch {
-                                    viewModel.loadInverterSettings()
-                                    navController.navigate(ROUTE_INVERTER_SETTINGS)
-                                }
-                            }
-                        },
-                        inverterSettingsLoading = inverterSettingsState.loading,
-                    )
-                }
-                composable(ROUTE_DEVICE) { backStack ->
-                    val key = backStack.arguments?.getString("key") ?: ""
-                    DeviceControlScreen(
-                        deviceKey = key,
-                        uiState = uiState,
-                        onSetMode = { mode ->
-                            when (key) {
-                                "grid" -> viewModel.setInverterGridMode(mode)
-                                "load" -> viewModel.setInverterLoadMode(mode)
-                                "boiler1" -> viewModel.setBoiler1Mode(mode)
-                                "pump" -> viewModel.setPumpMode(mode)
-                                "boiler2" -> viewModel.setBoiler2Mode(mode)
-                            }
-                        },
-                        onSetAutoWindow = { enabled, start, end ->
-                            when (key) {
-                                "boiler1" -> viewModel.setBoiler1AutoWindow(enabled, start, end)
-                                "pump" -> viewModel.setPumpAutoWindow(enabled, start, end)
-                                "boiler2" -> viewModel.setBoiler2AutoWindow(enabled, start, end)
-                            }
-                        },
-                        onBack = { navController.popBackStack() },
-                    )
-                }
-                composable(ROUTE_INVERTER_SETTINGS) {
-                    InverterSettingsScreen(
-                        state = inverterSettingsState,
-                        onRefresh = { scope.launch { viewModel.loadInverterSettings() } },
-                        onSetOutput = viewModel::setInverterOutputPriority,
-                        onSetCharger = viewModel::setInverterChargerPriority,
-                        onBack = { navController.popBackStack() },
-                    )
-                }
-                composable(ROUTE_SETTINGS) {
-                    SettingsScreen(
-                        config = uiState.config,
-                        onSave = viewModel::setConfig,
-                        onBack = { navController.popBackStack() },
-                        repository = viewModel.repository,
-                    )
-                }
-                composable(ROUTE_SCHEME) {
-                    SchemeScreen(uiState = uiState, onBack = { navController.popBackStack() })
-                }
-                composable(ROUTE_TIMELINE) {
-                    TimelineScreen(
-                        config = uiState.config,
-                        repository = viewModel.repository,
-                        onBack = { navController.popBackStack() },
-                    )
-                }
-                composable(ROUTE_JOURNAL) {
-                    JournalScreen(config = uiState.config, repository = viewModel.repository)
-                }
-                composable(ROUTE_ENERGY) {
-                    val inv = uiState.status.inverter
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        NavHost(navController = navController, startDestination = ROUTE_MAIN) {
+            composable(ROUTE_MAIN) {
+                MainPager(
+                    viewModel = viewModel,
+                    onOpenDevice = { key -> navController.navigate("device/$key") },
+                    onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
+                    onOpenInverterSettings = ::openInverterSettings,
+                    inverterSettingsLoading = inverterSettingsState.loading,
+                    onOpenJournal = { module -> navController.navigate("journal_device/$module") },
+                )
+            }
+            composable(ROUTE_DEVICE) { backStack ->
+                val key = backStack.arguments?.getString("key") ?: ""
+                DeviceControlScreen(
+                    deviceKey = key,
+                    uiState = uiState,
+                    onSetMode = { mode ->
+                        when (key) {
+                            "grid" -> viewModel.setInverterGridMode(mode)
+                            "load" -> viewModel.setInverterLoadMode(mode)
+                            "boiler1" -> viewModel.setBoiler1Mode(mode)
+                            "pump" -> viewModel.setPumpMode(mode)
+                            "boiler2" -> viewModel.setBoiler2Mode(mode)
+                        }
+                    },
+                    onSetAutoWindow = { enabled, start, end ->
+                        when (key) {
+                            "boiler1" -> viewModel.setBoiler1AutoWindow(enabled, start, end)
+                            "pump" -> viewModel.setPumpAutoWindow(enabled, start, end)
+                            "boiler2" -> viewModel.setBoiler2AutoWindow(enabled, start, end)
+                        }
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(
+                ROUTE_INVERTER_SETTINGS,
+                arguments = listOf(navArgument("focus") { type = NavType.StringType; defaultValue = "output" }),
+            ) { backStack ->
+                val focus = backStack.arguments?.getString("focus") ?: "output"
+                InverterSettingsScreen(
+                    state = inverterSettingsState,
+                    onRefresh = { scope.launch { viewModel.loadInverterSettings() } },
+                    onSetOutput = viewModel::setInverterOutputPriority,
+                    onSetCharger = viewModel::setInverterChargerPriority,
+                    onBack = { navController.popBackStack() },
+                    focusSection = focus,
+                )
+            }
+            composable(
+                ROUTE_JOURNAL_DEVICE,
+                arguments = listOf(navArgument("module") { type = NavType.StringType }),
+            ) { backStack ->
+                val module = backStack.arguments?.getString("module") ?: ""
+                JournalScreen(
+                    config = uiState.config,
+                    repository = viewModel.repository,
+                    moduleFilter = module,
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(ROUTE_SETTINGS) {
+                SettingsScreen(
+                    config = uiState.config,
+                    onSave = viewModel::setConfig,
+                    onBack = { navController.popBackStack() },
+                    repository = viewModel.repository,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * П'ять головних вкладок як сторінки [HorizontalPager] замість колишнього нижнього меню:
+ * гортаються свайпом ліворуч/праворуч. Хронологія й графік - "ландшафтні" екрани
+ * (широкий вміст), але сама сторінка лишається портретною: [LandscapeInPortrait] повертає
+ * їхній вміст на 90° на місці, замість реального повороту пристрою, - і саме тому свайп
+ * пейджера (тепер фізично вертикальний усередині цих двох вкладок) не конфліктує зі
+ * скролом/масштабом/курсором графіка (фізично горизонтальним там), див. chartGestures.
+ */
+@Composable
+private fun MainPager(
+    viewModel: DashboardViewModel,
+    onOpenDevice: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenInverterSettings: (String) -> Unit,
+    inverterSettingsLoading: Boolean,
+    onOpenJournal: (String) -> Unit,
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    val pagerState = rememberPagerState(pageCount = { PAGE_COUNT })
+
+    HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+        when (page) {
+            PAGE_DASHBOARD -> DashboardScreen(
+                uiState = uiState,
+                onRefresh = viewModel::refreshNow,
+                onOpenDevice = onOpenDevice,
+                onOpenSettings = onOpenSettings,
+                onTriggerGate = viewModel::triggerGate,
+                onToggleLight = viewModel::toggleGarageLight,
+                onOpenInverterSettings = onOpenInverterSettings,
+                inverterSettingsLoading = inverterSettingsLoading,
+                onOpenJournal = onOpenJournal,
+            )
+            PAGE_SCHEME -> SchemeScreen(uiState = uiState)
+            PAGE_TIMELINE -> LandscapeInPortrait {
+                TimelineScreen(config = uiState.config, repository = viewModel.repository)
+            }
+            PAGE_JOURNAL -> JournalScreen(config = uiState.config, repository = viewModel.repository)
+            PAGE_ENERGY -> {
+                val inv = uiState.status.inverter
+                LandscapeInPortrait {
                     EnergyChartScreen(
                         config = uiState.config,
                         repository = viewModel.repository,
                         status = uiState.status,
                         liveTotals = inv?.let { Triple(it.dailyPv, it.dailyHome, it.dailyGrid) },
-                        onBack = { navController.popBackStack() },
                     )
                 }
             }

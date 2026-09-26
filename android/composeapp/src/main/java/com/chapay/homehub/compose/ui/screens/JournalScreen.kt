@@ -13,10 +13,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -54,22 +58,37 @@ private fun parseLogLine(raw: String): LogEntry {
     }
 }
 
+// Підпис модуля в журналі -> як показати картці в заголовку екрана.
+private val MODULE_TITLES = mapOf(
+    "invertor-bast" to "Журнал: інвертор",
+    "load_controller" to "Журнал: контролер навантаження",
+    "garage" to "Журнал: гараж",
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun JournalScreen(config: AppConfig, repository: StatusRepository) {
+fun JournalScreen(
+    config: AppConfig,
+    repository: StatusRepository,
+    // Не null, коли екран відкрито з картки пристрою - показує лише його події
+    // (module у [LogEntry]) і дає кнопку "назад". null - вкладка "Журнал", усі події.
+    moduleFilter: String? = null,
+    onBack: (() -> Unit)? = null,
+) {
     var date by remember { mutableStateOf(todayIso()) }
-    var entries by remember { mutableStateOf<List<LogEntry>>(emptyList()) }
+    var allEntries by remember { mutableStateOf<List<LogEntry>>(emptyList()) }
+    val entries = if (moduleFilter == null) allEntries else allEntries.filter { it.module == moduleFilter }
     var loading by remember { mutableStateOf(true) }
 
     // Та сама причина, що в TimelineScreen/EnergyChartScreen: вкладка
     // лишається живою в пам'яті між перемиканнями нижньої навігації.
     LaunchedEffect(date, config) {
         // Нова дата/конфіг - старі рядки чужої доби не показуємо.
-        entries = emptyList()
+        allEntries = emptyList()
         // Що вже є на телефоні - показуємо одразу, мережа лише оновлює.
         val cached = runCatching { repository.peekLoadControllerLogLines(config, date) }.getOrNull()
         if (cached != null) {
-            entries = cached.map(::parseLogLine).asReversed()
+            allEntries = cached.map(::parseLogLine).asReversed()
             loading = false
         }
         var firstLoad = cached == null
@@ -78,17 +97,28 @@ fun JournalScreen(config: AppConfig, repository: StatusRepository) {
             val lines = runCatching { repository.fetchLoadControllerLogLines(config, date) }.getOrNull()
             // Тимчасовий збій зв'язку (лагає ZeroTier) не стирає вже показаний журнал.
             if (lines != null) {
-                entries = lines.map(::parseLogLine).asReversed()
+                allEntries = lines.map(::parseLogLine).asReversed()
             }
             loading = false
             firstLoad = false
             // Коли даних ще нема - повторюємо швидко, не чекаємо 30с.
-            delay(if (lines == null && entries.isEmpty()) 5_000 else 30_000)
+            delay(if (lines == null && allEntries.isEmpty()) 5_000 else 30_000)
         }
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Журнал подій") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text(MODULE_TITLES[moduleFilter] ?: "Журнал подій") },
+                navigationIcon = {
+                    if (onBack != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                        }
+                    }
+                },
+            )
+        },
     ) { innerPadding ->
         Column(
             modifier = Modifier

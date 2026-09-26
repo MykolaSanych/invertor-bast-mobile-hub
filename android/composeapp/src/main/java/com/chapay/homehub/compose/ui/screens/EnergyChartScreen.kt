@@ -54,7 +54,6 @@ import com.chapay.homehub.compose.data.StatusRepository
 import com.chapay.homehub.compose.data.UnifiedStatus
 import com.chapay.homehub.compose.ui.components.ChartToolbarActions
 import com.chapay.homehub.compose.ui.components.ChartViewport
-import com.chapay.homehub.compose.ui.components.LockLandscapeOrientation
 import com.chapay.homehub.compose.ui.components.NavGranularity
 import com.chapay.homehub.compose.ui.components.PeriodNavHeader
 import com.chapay.homehub.compose.ui.components.VisibilityToggle
@@ -295,9 +294,8 @@ fun EnergyChartScreen(
     repository: StatusRepository,
     status: UnifiedStatus,
     liveTotals: Triple<Double, Double, Double>?,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
-    LockLandscapeOrientation()
     var period by rememberSaveable { mutableStateOf(EnergyPeriod.DAY) }
     // Опорна дата "YYYY-MM-DD": для місяця/року береться її початок, тож період
     // не губиться при перемиканні Доба/Місяць/Рік.
@@ -424,8 +422,10 @@ fun EnergyChartScreen(
             TopAppBar(
                 title = { Text("Графік енергії") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    if (onBack != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                        }
                     }
                 },
                 actions = {
