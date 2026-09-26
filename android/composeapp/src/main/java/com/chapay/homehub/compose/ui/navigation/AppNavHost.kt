@@ -34,13 +34,14 @@ private const val ROUTE_INVERTER_SETTINGS = "inverter_settings/{focus}"
 private const val ROUTE_JOURNAL_DEVICE = "journal_device/{module}"
 
 // П'ять вкладок головного екрана - тепер сторінки одного горизонтально-гортаного
-// пейджера (без нижнього меню, перемикання - лише свайпом вліво/вправо, як і між
-// звичайними сторінками NavHost решта екранів лишаються "штовхнутими" зверху пейджера).
-private const val PAGE_DASHBOARD = 0
-private const val PAGE_SCHEME = 1
-private const val PAGE_TIMELINE = 2
-private const val PAGE_JOURNAL = 3
-private const val PAGE_ENERGY = 4
+// пейджера (без нижнього меню, перемикання - лише свайпом вліво/вправо; решта екранів
+// лишаються "штовхнутими" зверху пейджера, як і раніше). Порядок зліва направо:
+// Схема - Дім (стартова) - Графік - Хронологія - Журнал.
+private const val PAGE_SCHEME = 0
+private const val PAGE_DASHBOARD = 1
+private const val PAGE_ENERGY = 2
+private const val PAGE_TIMELINE = 3
+private const val PAGE_JOURNAL = 4
 private const val PAGE_COUNT = 5
 
 @Composable
@@ -155,7 +156,7 @@ private fun MainPager(
     onOpenJournal: (String) -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val pagerState = rememberPagerState(pageCount = { PAGE_COUNT })
+    val pagerState = rememberPagerState(initialPage = PAGE_DASHBOARD, pageCount = { PAGE_COUNT })
 
     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
         when (page) {
