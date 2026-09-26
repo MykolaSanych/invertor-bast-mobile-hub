@@ -20,7 +20,8 @@ import com.chapay.homehub.compose.ui.components.LandscapeInPortrait
 import com.chapay.homehub.compose.ui.screens.DashboardScreen
 import com.chapay.homehub.compose.ui.screens.DeviceControlScreen
 import com.chapay.homehub.compose.ui.screens.EnergyChartScreen
-import com.chapay.homehub.compose.ui.screens.InverterSettingsScreen
+import com.chapay.homehub.compose.ui.screens.InverterChargerPriorityScreen
+import com.chapay.homehub.compose.ui.screens.InverterOutputPriorityScreen
 import com.chapay.homehub.compose.ui.screens.JournalScreen
 import com.chapay.homehub.compose.ui.screens.SchemeScreen
 import com.chapay.homehub.compose.ui.screens.SettingsScreen
@@ -30,7 +31,10 @@ import kotlinx.coroutines.launch
 private const val ROUTE_MAIN = "main"
 private const val ROUTE_SETTINGS = "settings"
 private const val ROUTE_DEVICE = "device/{key}"
-private const val ROUTE_INVERTER_SETTINGS = "inverter_settings/{focus}"
+// Два ОКРЕМІ екрани (не один спільний з "фокусом") - клік по сонцю й клік по АКБ
+// повинні відкривати дві різні дії керування, а не той самий екран з різною прокруткою.
+private const val ROUTE_INVERTER_OUTPUT = "inverter_output_priority"
+private const val ROUTE_INVERTER_CHARGER = "inverter_charger_priority"
 private const val ROUTE_JOURNAL_DEVICE = "journal_device/{module}"
 
 // П'ять вкладок головного екрана - тепер сторінки одного горизонтально-гортаного
@@ -53,13 +57,15 @@ fun AppNavHost(
     val inverterSettingsState by viewModel.inverterSettings.collectAsState()
     val scope = rememberCoroutineScope()
 
+    // focus: "output" (плитка сонця) чи "charger" (плитка АКБ) - які РІЗНІ дії керування
+    // відкрити; це не той самий екран з різною прокруткою, а два окремі призначення.
     fun openInverterSettings(focus: String) {
         if (!inverterSettingsState.loading) {
             scope.launch {
                 // Плитка сонця/АКБ: запит режимів відправляється ДО відкриття екрана
                 // (він триває, поки на плитці крутиться індикатор), а не після.
                 viewModel.loadInverterSettings()
-                navController.navigate("inverter_settings/$focus")
+                navController.navigate(if (focus == "charger") ROUTE_INVERTER_CHARGER else ROUTE_INVERTER_OUTPUT)
             }
         }
     }
@@ -100,18 +106,20 @@ fun AppNavHost(
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(
-                ROUTE_INVERTER_SETTINGS,
-                arguments = listOf(navArgument("focus") { type = NavType.StringType; defaultValue = "output" }),
-            ) { backStack ->
-                val focus = backStack.arguments?.getString("focus") ?: "output"
-                InverterSettingsScreen(
+            composable(ROUTE_INVERTER_OUTPUT) {
+                InverterOutputPriorityScreen(
                     state = inverterSettingsState,
                     onRefresh = { scope.launch { viewModel.loadInverterSettings() } },
                     onSetOutput = viewModel::setInverterOutputPriority,
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(ROUTE_INVERTER_CHARGER) {
+                InverterChargerPriorityScreen(
+                    state = inverterSettingsState,
+                    onRefresh = { scope.launch { viewModel.loadInverterSettings() } },
                     onSetCharger = viewModel::setInverterChargerPriority,
                     onBack = { navController.popBackStack() },
-                    focusSection = focus,
                 )
             }
             composable(

@@ -28,7 +28,10 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
     // enqueueRefresh - тобто віджет щоразу на мить "блимав" рисками, а тоді
     // знову заповнювався. Тепер onUpdate лише плаче фонове оновлення й НЕ
     // чіпає вже намальований віджет - останні реальні дані лишаються на
-    // екрані, поки не прийде свіжий успішний фетч.
+    // екрані, поки не прийде свіжий успішний фетч. Сам StatusWidgetRefreshWorker
+    // додатково не частіше ніж раз на 20с реально ходить у мережу й пульсує
+    // рамку лише на РЕАЛЬНУ зміну даних (див. StatusWidgetProvider/Worker) -
+    // разом ці два фікси й прибирають "постійне блимання".
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         StatusWidgetProvider.enqueueRefresh(context)
     }
@@ -56,12 +59,18 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
         // миттєве споживання, тож застаріває не так критично).
         private const val FRESH_STATUS_MAX_AGE_MS = 10L * 60L * 1000L
 
-        private val COLOR_ON = Color.parseColor("#33FF99")
-        private val COLOR_OFF = Color.parseColor("#7F8FA6")
-        private val COLOR_GATE_OPEN = Color.parseColor("#33FF99")
-        private val COLOR_GATE_CLOSED = Color.parseColor("#4F7CFF")
-        private val COLOR_GATE_MOVING = Color.parseColor("#FFB347")
-        private val COLOR_UNKNOWN = Color.parseColor("#7F8FA6")
+        // Приглушена, "преміальна" палітра - та сама, що й у самому застосунку
+        // (ui/theme/Color.kt): AccentBoiler/AccentPump тощо, а не неонові
+        // кольори старої версії віджета.
+        private val COLOR_OFF = Color.parseColor("#5C6B85") // TextMuted, притлумлений
+        private val COLOR_IDLE_ON = Color.parseColor("#B7C5D8") // реле увімкнено, але не працює
+        private val COLOR_BOILER_WORKING = Color.parseColor("#D97757") // AccentBoiler
+        private val COLOR_PUMP_WORKING = Color.parseColor("#3FB6B0") // AccentPump
+        private val COLOR_LIGHT_ON = Color.parseColor("#E8C468") // теплий, приглушений золотий
+        private val COLOR_GATE_OPEN = Color.parseColor("#4CBB8A") // AccentBattery (зелений)
+        private val COLOR_GATE_CLOSED = Color.parseColor("#5B8DEF") // AccentGrid (синій)
+        private val COLOR_GATE_MOVING = Color.parseColor("#E8A94C") // AccentPv (бурштиновий)
+        private val COLOR_UNKNOWN = COLOR_OFF
 
         fun hasActiveWidgets(context: Context): Boolean {
             return getWidgetIds(context).isNotEmpty()
@@ -99,40 +108,40 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
 
             applyPowerDeviceRow(
                 views,
-                rowId = R.id.widgetDevBoiler1Row,
+                dotId = R.id.widgetDevBoiler1Dot,
                 stateId = R.id.widgetDevBoiler1State,
                 on = load?.boiler1On,
                 powerW = load?.boilerPower,
                 thresholdW = BOILER_POWER_WORKING_THRESHOLD_W,
                 isFresh = isFresh,
-                highlightRes = R.drawable.widget_device_row_working,
+                workingColor = COLOR_BOILER_WORKING,
             )
             applyPowerDeviceRow(
                 views,
-                rowId = R.id.widgetDevBoiler2Row,
+                dotId = R.id.widgetDevBoiler2Dot,
                 stateId = R.id.widgetDevBoiler2State,
                 on = garage?.boiler2On,
                 powerW = garage?.boilerPower,
                 thresholdW = BOILER_POWER_WORKING_THRESHOLD_W,
                 isFresh = isFresh,
-                highlightRes = R.drawable.widget_device_row_working,
+                workingColor = COLOR_BOILER_WORKING,
             )
             applyPowerDeviceRow(
                 views,
-                rowId = R.id.widgetDevPumpRow,
+                dotId = R.id.widgetDevPumpDot,
                 stateId = R.id.widgetDevPumpState,
                 on = load?.pumpOn,
                 powerW = load?.pumpPower,
                 thresholdW = PUMP_POWER_WORKING_THRESHOLD_W,
                 isFresh = isFresh,
-                highlightRes = R.drawable.widget_device_row_pump_active,
+                workingColor = COLOR_PUMP_WORKING,
             )
             applySimpleOnOffRow(
                 views,
-                rowId = R.id.widgetDevLightRow,
+                dotId = R.id.widgetDevLightDot,
                 stateId = R.id.widgetDevLightState,
                 on = garage?.garageLightOn,
-                highlightRes = R.drawable.widget_device_row_light_active,
+                onColor = COLOR_LIGHT_ON,
             )
             applyGateRow(views, garage)
 
@@ -150,10 +159,52 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             return views
         }
 
-        private fun onOffColor(on: Boolean?): Int = when (on) {
-            true -> COLOR_ON
-            false -> COLOR_OFF
-            null -> COLOR_UNKNOWN
+        // Кольорова крапка + текст разом несуть увесь стан (раніше стан ще й
+        // підсвічував увесь рядок великим напівпрозорим прямокутником - тепер
+        // цього немає: тонше й спокійніше, менше "блимає" оком навіть коли
+        // дані реально змінюються щохвилини).
+        private fun applyDot(views: RemoteViews, dotId: Int, color: Int) {
+            views.setInt(dotId, "setColorFilter", color)
+        }
+
+        // Реле "увімкнено" (режим дозволяє роботу) - це не те саме, що
+        // пристрій зараз реально споживає струм (бойлер догрів воду й чекає,
+        // насос стоїть). "УВІМК"/"ВИМК" завжди показує стан реле; лише коли
+        // потужність перевищує поріг - і крапка, і текст переходять на
+        // яскравий колір пристрою (сигнал "зараз реально працює").
+        private fun applyPowerDeviceRow(
+            views: RemoteViews,
+            dotId: Int,
+            stateId: Int,
+            on: Boolean?,
+            powerW: Double?,
+            thresholdW: Double,
+            isFresh: Boolean,
+            workingColor: Int,
+        ) {
+            views.setTextViewText(stateId, onOffText(on))
+            val isWorking = isFresh && on == true && powerW != null && powerW.isFinite() && powerW > thresholdW
+            val color = when {
+                isWorking -> workingColor
+                on == true -> COLOR_IDLE_ON
+                on == false -> COLOR_OFF
+                else -> COLOR_UNKNOWN
+            }
+            views.setInt(stateId, "setTextColor", color)
+            applyDot(views, dotId, color)
+        }
+
+        // Світло - просте реле без поняття "працює", тому в нього лише два
+        // стани: увімкнено (теплий золотий) або вимкнено (приглушений сірий).
+        private fun applySimpleOnOffRow(views: RemoteViews, dotId: Int, stateId: Int, on: Boolean?, onColor: Int) {
+            views.setTextViewText(stateId, onOffText(on))
+            val color = when (on) {
+                true -> onColor
+                false -> COLOR_OFF
+                null -> COLOR_UNKNOWN
+            }
+            views.setInt(stateId, "setTextColor", color)
+            applyDot(views, dotId, color)
         }
 
         private fun onOffText(on: Boolean?): String = when (on) {
@@ -162,74 +213,27 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
             null -> "--"
         }
 
-        // RemoteViews не завжди перемальовує віджет "з нуля" - якщо layout
-        // той самий, Android часто застосовує лише ті дії (setInt,
-        // setTextViewText...), які реально викликані в ЦЬОМУ виклику, поверх
-        // уже намальованого віджета, а все, що не викликано, лишається як
-        // було. Тому фон рядка ОБОВ'ЯЗКОВО виставляти щоразу в обидва стани
-        // (підсвітка або прозорий) - умовний виклик лише для "увімкнути"
-        // призводив до того, що підсвітка, раз спрацювавши, більше ніколи не
-        // скидалась.
-        private fun setRowHighlight(views: RemoteViews, rowId: Int, active: Boolean, highlightRes: Int) {
-            if (active) {
-                views.setInt(rowId, "setBackgroundResource", highlightRes)
-            } else {
-                views.setInt(rowId, "setBackgroundColor", Color.TRANSPARENT)
-            }
-        }
-
-        // Світло - просте реле без поняття "працює" (на відміну від
-        // бойлера/насоса), тому підсвітка поля прив'язана прямо до
-        // "увімкнено", без порогу потужності й без перевірки свіжості.
-        private fun applySimpleOnOffRow(views: RemoteViews, rowId: Int, stateId: Int, on: Boolean?, highlightRes: Int) {
-            views.setTextViewText(stateId, onOffText(on))
-            views.setInt(stateId, "setTextColor", onOffColor(on))
-            setRowHighlight(views, rowId, on == true, highlightRes)
-        }
-
-        // Реле "увімкнено" (режим дозволяє роботу) - це не те саме, що
-        // пристрій зараз реально споживає струм (бойлер догрів воду й чекає,
-        // насос стоїть). "УВІМК"/"ВИМК" завжди показує стан реле; коли
-        // потужність перевищує поріг - поле рядка додатково підсвічується
-        // кольором пристрою, як явний індикатор "зараз працює".
-        private fun applyPowerDeviceRow(
-            views: RemoteViews,
-            rowId: Int,
-            stateId: Int,
-            on: Boolean?,
-            powerW: Double?,
-            thresholdW: Double,
-            isFresh: Boolean,
-            highlightRes: Int,
-        ) {
-            views.setTextViewText(stateId, onOffText(on))
-            views.setInt(stateId, "setTextColor", onOffColor(on))
-
-            val isWorking = isFresh && on == true && powerW != null && powerW.isFinite() && powerW > thresholdW
-            setRowHighlight(views, rowId, isWorking, highlightRes)
-        }
-
         private fun applyGateRow(views: RemoteViews, garage: GarageStatus?) {
             if (garage == null) {
                 views.setTextViewText(R.id.widgetDevGateState, "--")
                 views.setInt(R.id.widgetDevGateState, "setTextColor", COLOR_UNKNOWN)
-                setRowHighlight(views, R.id.widgetDevGateRow, false, R.drawable.widget_device_row_gate_active)
+                applyDot(views, R.id.widgetDevGateDot, COLOR_UNKNOWN)
                 return
             }
 
             val closedPin = garage.gateClosedPin
             val raw = garage.gateState.trim().lowercase()
-            val (text, color, isOpen) = when {
-                closedPin == 0 -> Triple("зач.", COLOR_GATE_CLOSED, false)
-                closedPin > 0 -> Triple("відч.", COLOR_GATE_OPEN, true)
-                raw.contains("open") -> Triple("відч.", COLOR_GATE_OPEN, true)
-                raw.contains("close") -> Triple("зач.", COLOR_GATE_CLOSED, false)
-                raw.contains("stop") || raw.contains("move") -> Triple("рух", COLOR_GATE_MOVING, false)
-                else -> Triple("--", COLOR_UNKNOWN, false)
+            val (text, color) = when {
+                closedPin == 0 -> "зач." to COLOR_GATE_CLOSED
+                closedPin > 0 -> "відч." to COLOR_GATE_OPEN
+                raw.contains("open") -> "відч." to COLOR_GATE_OPEN
+                raw.contains("close") -> "зач." to COLOR_GATE_CLOSED
+                raw.contains("stop") || raw.contains("move") -> "рух" to COLOR_GATE_MOVING
+                else -> "--" to COLOR_UNKNOWN
             }
             views.setTextViewText(R.id.widgetDevGateState, text)
             views.setInt(R.id.widgetDevGateState, "setTextColor", color)
-            setRowHighlight(views, R.id.widgetDevGateRow, isOpen, R.drawable.widget_device_row_gate_active)
+            applyDot(views, R.id.widgetDevGateDot, color)
         }
     }
 }

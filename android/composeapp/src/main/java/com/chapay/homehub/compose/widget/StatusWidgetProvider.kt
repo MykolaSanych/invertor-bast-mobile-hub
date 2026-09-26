@@ -79,6 +79,47 @@ class StatusWidgetProvider : AppWidgetProvider() {
                 DeviceStateWidgetProvider.hasActiveWidgets(context)
         }
 
+        // Останній "відбиток" показаних значень - лише для авто-фонових оновлень
+        // (StatusWidgetRefreshWorker), щоб пульс-підсвітка спрацьовувала на РЕАЛЬНУ
+        // зміну даних, а не на кожен успішний фоновий запит (OS/лаунчер на цьому
+        // пристрої кличе onUpdate раз на ~9-10с - раніше кожен такий тик підсвічував
+        // рамку, тобто віджет "постійно блимав", хоча дані щоразу були майже ті самі).
+        // Ручні дії (кнопка воріт) і живе опитування з відкритого застосунку пульс не
+        // питають тут - вони й так свідомо викликають triggerPulse=true/false самі.
+        @Volatile
+        private var lastAutoSignature: String? = null
+
+        /** true, якщо [status] помітно відрізняється від того, що востаннє показав фоновий воркер. */
+        internal fun hasChangedSinceLastAutoRefresh(status: UnifiedStatus?): Boolean {
+            val signature = buildSignature(status)
+            val changed = signature != lastAutoSignature
+            lastAutoSignature = signature
+            return changed
+        }
+
+        // Округлення до 3 Вт / 1% SOC - невеликий шум датчиків (±1-2 Вт) не має
+        // сам собою підпалювати підсвітку "щойно оновилось".
+        private fun buildSignature(status: UnifiedStatus?): String {
+            val inverter = status?.inverter
+            val load = status?.loadController
+            val garage = status?.garage
+            fun p(v: Double?) = v?.let { (it / 3.0).roundToInt() } ?: Int.MIN_VALUE
+            fun s(v: Double?) = v?.roundToInt() ?: Int.MIN_VALUE
+            return listOf(
+                s(pickNumber(inverter?.bmeExtTemp, inverter?.bmeTemp, load?.bmeTemp, garage?.bmeTemp)?.let { it * 10 }),
+                p(pickNumber(inverter?.pvW, load?.pvW, garage?.pvW)),
+                p(pickNumber(inverter?.gridW, load?.gridW, garage?.gridW)),
+                p(pickNumber(inverter?.loadW, load?.loadW, garage?.loadW)),
+                p(pickNumber(inverter?.batteryPower, load?.batteryPower, garage?.batteryPower)),
+                s(pickNumber(inverter?.batterySoc, load?.batterySoc, garage?.batterySoc)),
+                load?.boiler1On, p(load?.boilerPower),
+                garage?.boiler2On, p(garage?.boilerPower),
+                load?.pumpOn, p(load?.pumpPower),
+                garage?.garageLightOn,
+                garage?.gateClosedPin, garage?.gateState,
+            ).joinToString("|")
+        }
+
         fun updateAllWidgets(context: Context, status: UnifiedStatus?, triggerPulse: Boolean = true) {
             val pulseActive = triggerPulse && hasAnyModuleData(status)
 

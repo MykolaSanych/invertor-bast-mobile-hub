@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Кругла крапка-індикатор стану пристрою: колір застосовується в рантаймі
+     через setColorFilter (RemoteViews.setInt(id, "setColorFilter", color)) -
+     єдиний спосіб динамічно фарбувати форму в RemoteViews на всіх версіях API. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#FFFFFFFF" />
+</shape>

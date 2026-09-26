@@ -12,16 +12,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -35,16 +33,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import com.chapay.homehub.compose.ui.InverterSettingsUiState
 import com.chapay.homehub.compose.ui.theme.AccentPv
 import com.chapay.homehub.compose.ui.theme.OutlineSubtle
@@ -81,35 +76,71 @@ private fun modeText(mode: String?): String = when (mode) {
     else -> "невідомо ($mode)"
 }
 
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+/**
+ * Екран пріоритету ДЖЕРЕЛА ВИХОДУ - відкривається лише з картки сонця. Окремий від
+ * екрана зарядки (раніше обидва пріоритети жили на одному спільному екрані, і різниця
+ * між "клік по сонцю" й "клік по АКБ" була лише в автопрокрутці - тепер це справді два
+ * різні, самостійні меню керування, кожне зі своєю дією.
+ */
 @Composable
-fun InverterSettingsScreen(
+fun InverterOutputPriorityScreen(
     state: InverterSettingsUiState,
     onRefresh: () -> Unit,
     onSetOutput: (Int) -> Unit,
+    onBack: () -> Unit,
+) {
+    InverterPriorityScreen(
+        title = "Пріоритет джерела виходу",
+        state = state,
+        options = OUTPUT_OPTIONS,
+        current = state.settings?.outputPriority,
+        onRefresh = onRefresh,
+        onPick = onSetOutput,
+        onBack = onBack,
+    )
+}
+
+/**
+ * Екран пріоритету ЗАРЯДКИ АКУМУЛЯТОРА - відкривається лише з картки АКБ. Див.
+ * коментар біля [InverterOutputPriorityScreen].
+ */
+@Composable
+fun InverterChargerPriorityScreen(
+    state: InverterSettingsUiState,
+    onRefresh: () -> Unit,
     onSetCharger: (Int) -> Unit,
     onBack: () -> Unit,
-    // Яку секцію прокрутити у видиму область одразу при відкритті: "output" (картка
-    // сонця) чи "charger" (картка АКБ). null - без автопрокрутки.
-    focusSection: String? = null,
 ) {
-    // Обрана, але ще не підтверджена зміна: (це вихід чи зарядка, значення, назва).
-    var pending by remember { mutableStateOf<Triple<Boolean, Int, String>?>(null) }
+    InverterPriorityScreen(
+        title = "Пріоритет зарядки акумулятора",
+        state = state,
+        options = CHARGER_OPTIONS,
+        current = state.settings?.chargerPriority,
+        onRefresh = onRefresh,
+        onPick = onSetCharger,
+        onBack = onBack,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InverterPriorityScreen(
+    title: String,
+    state: InverterSettingsUiState,
+    options: List<PriorityOption>,
+    current: Int?,
+    onRefresh: () -> Unit,
+    onPick: (Int) -> Unit,
+    onBack: () -> Unit,
+) {
+    // Обрана, але ще не підтверджена зміна.
+    var pending by remember { mutableStateOf<PriorityOption?>(null) }
     val settings = state.settings
-    val chargerSectionRequester = remember { BringIntoViewRequester() }
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(focusSection) {
-        if (focusSection == "charger") {
-            // Один кадр на розкладку, перш ніж просити прокрутити до ще не виміряної секції.
-            kotlinx.coroutines.delay(50)
-            scope.launch { chargerSectionRequester.bringIntoView() }
-        }
-    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Режими інвертора") },
+                title = { Text(title) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
@@ -154,19 +185,11 @@ fun InverterSettingsScreen(
             }
 
             PrioritySection(
-                title = "ПРІОРИТЕТ ДЖЕРЕЛА ВИХОДУ",
-                options = OUTPUT_OPTIONS,
-                current = settings?.outputPriority,
+                title = title.uppercase(),
+                options = options,
+                current = current,
                 enabled = !state.loading && !state.busy,
-                onPick = { option -> pending = Triple(true, option.value, "Пріоритет виходу: ${option.title}") },
-            )
-            PrioritySection(
-                title = "ПРІОРИТЕТ ЗАРЯДКИ АКУМУЛЯТОРА",
-                options = CHARGER_OPTIONS,
-                current = settings?.chargerPriority,
-                enabled = !state.loading && !state.busy,
-                onPick = { option -> pending = Triple(false, option.value, "Пріоритет зарядки: ${option.title}") },
-                modifier = Modifier.bringIntoViewRequester(chargerSectionRequester),
+                onPick = { option -> pending = option },
             )
 
             Text(
@@ -178,14 +201,14 @@ fun InverterSettingsScreen(
         }
     }
 
-    pending?.let { (isOutput, value, title) ->
+    pending?.let { option ->
         AlertDialog(
             onDismissRequest = { pending = null },
             title = { Text("Змінити режим інвертора?") },
-            text = { Text("$title\n\nНалаштування буде записано в інвертор.") },
+            text = { Text("${title}: ${option.title}\n\nНалаштування буде записано в інвертор.") },
             confirmButton = {
                 TextButton(onClick = {
-                    if (isOutput) onSetOutput(value) else onSetCharger(value)
+                    onPick(option.value)
                     pending = null
                 }) { Text("Змінити") }
             },
@@ -201,9 +224,8 @@ private fun PrioritySection(
     current: Int?,
     enabled: Boolean,
     onPick: (PriorityOption) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.labelMedium, color = TextMuted)
         options.forEach { option ->
             val selected = option.value == current
