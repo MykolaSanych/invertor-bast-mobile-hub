@@ -58,26 +58,80 @@ private fun parseLogLine(raw: String): LogEntry {
     }
 }
 
-// Підпис модуля в журналі -> як показати картці в заголовку екрана.
-private val MODULE_TITLES = mapOf(
-    "invertor-bast" to "Журнал: інвертор",
-    "load_controller" to "Журнал: контролер навантаження",
-    "garage" to "Журнал: гараж",
+// Заголовок екрана для кожного реле (ключі - ті самі, що onOpenDevice/CardKey на
+// дашборді: "pv"/"grid"/"battery"/"load"/"boiler1"/"pump"/"boiler2"/"gate"/"light").
+private val DEVICE_TITLES = mapOf(
+    "pv" to "Журнал: сонце",
+    "grid" to "Журнал: мережа",
+    "battery" to "Журнал: АКБ",
+    "load" to "Журнал: навантаження",
+    "boiler1" to "Журнал: бойлер 1",
+    "pump" to "Журнал: насос",
+    "boiler2" to "Журнал: бойлер 2",
+    "gate" to "Журнал: ворота",
+    "light" to "Журнал: світло",
 )
+
+// Журнал - спільний для всіх трьох модулів (кожен пересилає свої події на
+// load_controller), а module у [LogEntry] каже лише ЯКИЙ МОДУЛЬ це записав - на
+// одному модулі "живе" по кілька карток (invertor-bast: сонце/мережа/АКБ/
+// навантаження; load_controller: бойлер1/насос; garage: бойлер2/ворота/світло).
+// Раніше кнопка журналу на картці фільтрувала лише за модулем, тобто картка
+// "Насос" показувала й події бойлера 1 впереміш - тепер дивимось у текст
+// повідомлення (він завжди містить ті самі стійкі українські слова, які самі ж
+// прошивки й пишуть) і визначаємо САМЕ реле. Перевіряємо через contains, а не
+// startsWith: інвертор пересилає рядок із власним вкладеним префіксом
+// "[TYPE] повідомлення" (напр. "[РЕЖИМ] НАВАНТАЖЕННЯ режим: ..."), і після
+// розбору головним регексом (за часом+модулем) цей внутрішній префікс лишається
+// на початку message - живі логи це підтвердили. Системні/невідомі повідомлення
+// (null) у фільтрованому вигляді не показуються взагалі - вони не стосуються
+// жодного конкретного реле.
+private fun classifyDevice(module: String, message: String): String? {
+    val m = message.lowercase()
+    return when (module) {
+        "invertor-bast" -> when {
+            m.contains("стан pv") -> "pv"
+            m.contains("стан мережі") -> "grid"
+            m.contains("стан акумулятора") -> "battery"
+            m.contains("мережа_авто режим") || m.contains("мережа режим") -> "grid"
+            m.contains("навантаження_авто режим") || m.contains("навантаження режим") -> "load"
+            // Загальний режим інвертора (QMOD: мережа/акумулятор/...) - той самий
+            // показник, що вже є на картці "Мережа" (поле "режим").
+            m.contains("зміна режиму") -> "grid"
+            else -> null
+        }
+        "load_controller" -> when {
+            m.contains("насос") -> "pump"
+            m.contains("бойлер") -> "boiler1"
+            else -> null
+        }
+        "garage" -> when {
+            m.contains("світло") -> "light"
+            m.contains("ворот") -> "gate"
+            m.contains("бойлер") -> "boiler2"
+            else -> null
+        }
+        else -> null
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JournalScreen(
     config: AppConfig,
     repository: StatusRepository,
-    // Не null, коли екран відкрито з картки пристрою - показує лише його події
-    // (module у [LogEntry]) і дає кнопку "назад". null - вкладка "Журнал", усі події.
-    moduleFilter: String? = null,
+    // Не null, коли екран відкрито з картки пристрою - показує лише події ЦЬОГО
+    // реле (classifyDevice) і дає кнопку "назад". null - вкладка "Журнал", усі події.
+    deviceFilter: String? = null,
     onBack: (() -> Unit)? = null,
 ) {
     var date by remember { mutableStateOf(todayIso()) }
     var allEntries by remember { mutableStateOf<List<LogEntry>>(emptyList()) }
-    val entries = if (moduleFilter == null) allEntries else allEntries.filter { it.module == moduleFilter }
+    val entries = if (deviceFilter == null) {
+        allEntries
+    } else {
+        allEntries.filter { classifyDevice(it.module, it.message) == deviceFilter }
+    }
     var loading by remember { mutableStateOf(true) }
 
     // Та сама причина, що в TimelineScreen/EnergyChartScreen: вкладка
@@ -109,7 +163,7 @@ fun JournalScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(MODULE_TITLES[moduleFilter] ?: "Журнал подій") },
+                title = { Text(DEVICE_TITLES[deviceFilter] ?: "Журнал подій") },
                 navigationIcon = {
                     if (onBack != null) {
                         IconButton(onClick = onBack) {

@@ -35,7 +35,7 @@ private const val ROUTE_DEVICE = "device/{key}"
 // повинні відкривати дві різні дії керування, а не той самий екран з різною прокруткою.
 private const val ROUTE_INVERTER_OUTPUT = "inverter_output_priority"
 private const val ROUTE_INVERTER_CHARGER = "inverter_charger_priority"
-private const val ROUTE_JOURNAL_DEVICE = "journal_device/{module}"
+private const val ROUTE_JOURNAL_DEVICE = "journal_device/{device}"
 
 // П'ять вкладок головного екрана - тепер сторінки одного горизонтально-гортаного
 // пейджера (без нижнього меню, перемикання - лише свайпом вліво/вправо; решта екранів
@@ -79,7 +79,7 @@ fun AppNavHost(
                     onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
                     onOpenInverterSettings = ::openInverterSettings,
                     inverterSettingsLoading = inverterSettingsState.loading,
-                    onOpenJournal = { module -> navController.navigate("journal_device/$module") },
+                    onOpenJournal = { device -> navController.navigate("journal_device/$device") },
                 )
             }
             composable(ROUTE_DEVICE) { backStack ->
@@ -124,13 +124,13 @@ fun AppNavHost(
             }
             composable(
                 ROUTE_JOURNAL_DEVICE,
-                arguments = listOf(navArgument("module") { type = NavType.StringType }),
+                arguments = listOf(navArgument("device") { type = NavType.StringType }),
             ) { backStack ->
-                val module = backStack.arguments?.getString("module") ?: ""
+                val device = backStack.arguments?.getString("device") ?: ""
                 JournalScreen(
                     config = uiState.config,
                     repository = viewModel.repository,
-                    moduleFilter = module,
+                    deviceFilter = device,
                     onBack = { navController.popBackStack() },
                 )
             }

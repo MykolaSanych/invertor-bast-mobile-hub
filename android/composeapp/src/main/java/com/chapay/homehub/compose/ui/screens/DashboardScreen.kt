@@ -145,7 +145,7 @@ fun DashboardScreen(
                         iconTint = pvIndicatorColor(inverter),
                         busy = inverterSettingsLoading,
                         onClick = { onOpenInverterSettings("output") },
-                        onOpenJournal = { onOpenJournal("invertor-bast") },
+                        onOpenJournal = { onOpenJournal("pv") },
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "напруга" to "${formatVolts(it.pvVoltage)} В" },
@@ -169,7 +169,7 @@ fun DashboardScreen(
                             inverter?.let { "за добу" to "${formatWatts(it.dailyGrid)} Вт·год" },
                         ),
                         onClick = { onOpenDevice("grid") },
-                        onOpenJournal = { onOpenJournal("invertor-bast") },
+                        onOpenJournal = { onOpenJournal("grid") },
                     )
                 }
                 CardRow {
@@ -182,7 +182,7 @@ fun DashboardScreen(
                         icon = Icons.Filled.BatteryChargingFull,
                         busy = inverterSettingsLoading,
                         onClick = { onOpenInverterSettings("charger") },
-                        onOpenJournal = { onOpenJournal("invertor-bast") },
+                        onOpenJournal = { onOpenJournal("battery") },
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "напруга" to "${formatVolts(it.batteryVoltage)} В" },
@@ -204,7 +204,7 @@ fun DashboardScreen(
                             inverter?.let { "за добу" to "${formatWatts(it.dailyHome)} Вт·год" },
                         ),
                         onClick = { onOpenDevice("load") },
-                        onOpenJournal = { onOpenJournal("invertor-bast") },
+                        onOpenJournal = { onOpenJournal("load") },
                     )
                 }
                 CardRow {
@@ -223,7 +223,7 @@ fun DashboardScreen(
                             loadController?.let { "стан" to boolTextUk(it.boiler1On) },
                         ),
                         onClick = { onOpenDevice("boiler1") },
-                        onOpenJournal = { onOpenJournal("load_controller") },
+                        onOpenJournal = { onOpenJournal("boiler1") },
                     )
                     MetricCard(
                         title = "НАСОС",
@@ -240,7 +240,7 @@ fun DashboardScreen(
                             loadController?.let { "стан" to boolTextUk(it.pumpOn) },
                         ),
                         onClick = { onOpenDevice("pump") },
-                        onOpenJournal = { onOpenJournal("load_controller") },
+                        onOpenJournal = { onOpenJournal("pump") },
                     )
                 }
                 // Не в CardRow: цей рядок містить кнопки (GateCard), чия
@@ -268,13 +268,13 @@ fun DashboardScreen(
                             garage?.let { "стан" to boolTextUk(it.boiler2On) },
                         ),
                         onClick = { onOpenDevice("boiler2") },
-                        onOpenJournal = { onOpenJournal("garage") },
+                        onOpenJournal = { onOpenJournal("boiler2") },
                     )
                     GateCard(
                         garage = garage,
                         onTriggerGate = onTriggerGate,
                         onToggleLight = onToggleLight,
-                        onOpenJournal = { onOpenJournal("garage") },
+                        onOpenJournal = { onOpenJournal("gate") },
                         modifier = Modifier.weight(1f).alpha(if (garageStale) 0.5f else 1f),
                     )
                 }
