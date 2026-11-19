@@ -23,30 +23,35 @@ import com.chapay.homehub.compose.ui.screens.EnergyChartScreen
 import com.chapay.homehub.compose.ui.screens.InverterChargerPriorityScreen
 import com.chapay.homehub.compose.ui.screens.InverterOutputPriorityScreen
 import com.chapay.homehub.compose.ui.screens.JournalScreen
+import com.chapay.homehub.compose.ui.screens.NotificationSettingsScreen
 import com.chapay.homehub.compose.ui.screens.SchemeScreen
 import com.chapay.homehub.compose.ui.screens.SettingsScreen
-import com.chapay.homehub.compose.ui.screens.TimelineScreen
+import com.chapay.homehub.compose.ui.screens.SirioScreen
+import com.chapay.homehub.compose.ui.screens.VoltageHistoryScreen
 import kotlinx.coroutines.launch
 
 private const val ROUTE_MAIN = "main"
 private const val ROUTE_SETTINGS = "settings"
+private const val ROUTE_NOTIFICATIONS = "notification_settings"
 private const val ROUTE_DEVICE = "device/{key}"
 // Два ОКРЕМІ екрани (не один спільний з "фокусом") - клік по сонцю й клік по АКБ
 // повинні відкривати дві різні дії керування, а не той самий екран з різною прокруткою.
 private const val ROUTE_INVERTER_OUTPUT = "inverter_output_priority"
 private const val ROUTE_INVERTER_CHARGER = "inverter_charger_priority"
 private const val ROUTE_JOURNAL_DEVICE = "journal_device/{device}"
+private const val ROUTE_VOLTAGE_HISTORY = "voltage_history/{metric}"
+private const val ROUTE_SIRIO = "sirio"
 
-// П'ять вкладок головного екрана - тепер сторінки одного горизонтально-гортаного
+// Чотири вкладки головного екрана - сторінки одного горизонтально-гортаного
 // пейджера (без нижнього меню, перемикання - лише свайпом вліво/вправо; решта екранів
 // лишаються "штовхнутими" зверху пейджера, як і раніше). Порядок зліва направо:
-// Схема - Дім (стартова) - Графік - Хронологія - Журнал.
-private const val PAGE_SCHEME = 0
-private const val PAGE_DASHBOARD = 1
-private const val PAGE_ENERGY = 2
-private const val PAGE_TIMELINE = 3
-private const val PAGE_JOURNAL = 4
-private const val PAGE_COUNT = 5
+// Журнал - Схема - Дім (стартова) - Графік (разом з хронологією - один екран,
+// щоб порівнювати навантаження з тим, яке обладнання в цей час працювало).
+private const val PAGE_JOURNAL = 0
+private const val PAGE_SCHEME = 1
+private const val PAGE_DASHBOARD = 2
+private const val PAGE_ENERGY = 3
+private const val PAGE_COUNT = 4
 
 @Composable
 fun AppNavHost(
@@ -80,6 +85,8 @@ fun AppNavHost(
                     onOpenInverterSettings = ::openInverterSettings,
                     inverterSettingsLoading = inverterSettingsState.loading,
                     onOpenJournal = { device -> navController.navigate("journal_device/$device") },
+                    onOpenVoltageChart = { metric -> navController.navigate("voltage_history/$metric") },
+                    onOpenSirio = { navController.navigate(ROUTE_SIRIO) },
                 )
             }
             composable(ROUTE_DEVICE) { backStack ->
@@ -96,6 +103,13 @@ fun AppNavHost(
                             "boiler2" -> viewModel.setBoiler2Mode(mode)
                         }
                     },
+                    onSetLock = when (key) {
+                        "load" -> viewModel::setLoadLock
+                        "boiler1" -> viewModel::setBoiler1Lock
+                        "pump" -> viewModel::setPumpLock
+                        "boiler2" -> viewModel::setBoiler2Lock
+                        else -> null
+                    },
                     onSetAutoWindow = { enabled, start, end ->
                         when (key) {
                             "boiler1" -> viewModel.setBoiler1AutoWindow(enabled, start, end)
@@ -111,6 +125,7 @@ fun AppNavHost(
                     state = inverterSettingsState,
                     onRefresh = { scope.launch { viewModel.loadInverterSettings() } },
                     onSetOutput = viewModel::setInverterOutputPriority,
+                    onSetAuto = viewModel::setInverterOutputAuto,
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -134,12 +149,41 @@ fun AppNavHost(
                     onBack = { navController.popBackStack() },
                 )
             }
+            composable(
+                ROUTE_VOLTAGE_HISTORY,
+                arguments = listOf(navArgument("metric") { type = NavType.StringType }),
+            ) { backStack ->
+                val metric = backStack.arguments?.getString("metric") ?: "grid"
+                LandscapeInPortrait {
+                    VoltageHistoryScreen(
+                        config = uiState.config,
+                        repository = viewModel.repository,
+                        metric = metric,
+                        onBack = { navController.popBackStack() },
+                    )
+                }
+            }
+            composable(ROUTE_SIRIO) {
+                SirioScreen(
+                    config = uiState.config,
+                    repository = viewModel.repository,
+                    onBack = { navController.popBackStack() },
+                )
+            }
             composable(ROUTE_SETTINGS) {
                 SettingsScreen(
                     config = uiState.config,
                     onSave = viewModel::setConfig,
                     onBack = { navController.popBackStack() },
                     repository = viewModel.repository,
+                    onOpenNotifications = { navController.navigate(ROUTE_NOTIFICATIONS) },
+                )
+            }
+            composable(ROUTE_NOTIFICATIONS) {
+                NotificationSettingsScreen(
+                    config = uiState.config,
+                    onSave = viewModel::setConfig,
+                    onBack = { navController.popBackStack() },
                 )
             }
         }
@@ -147,12 +191,13 @@ fun AppNavHost(
 }
 
 /**
- * П'ять головних вкладок як сторінки [HorizontalPager] замість колишнього нижнього меню:
- * гортаються свайпом ліворуч/праворуч. Хронологія й графік - "ландшафтні" екрани
+ * Чотири головні вкладки як сторінки [HorizontalPager] замість колишнього нижнього меню:
+ * гортаються свайпом ліворуч/праворуч. Графік (разом із хронологією, вбудованою в той
+ * самий екран - [TimelineBody] всередині [EnergyChartScreen]) - "ландшафтний" екран
  * (широкий вміст), але сама сторінка лишається портретною: [LandscapeInPortrait] повертає
- * їхній вміст на 90° на місці, замість реального повороту пристрою, - і саме тому свайп
- * пейджера (тепер фізично вертикальний усередині цих двох вкладок) не конфліктує зі
- * скролом/масштабом/курсором графіка (фізично горизонтальним там), див. chartGestures.
+ * вміст на 90° на місці, замість реального повороту пристрою, - і саме тому свайп
+ * пейджера (тепер фізично вертикальний усередині цієї вкладки) не конфліктує зі
+ * скролом/масштабом/курсором графіків (фізично горизонтальним там), див. chartGestures.
  */
 @Composable
 private fun MainPager(
@@ -162,6 +207,8 @@ private fun MainPager(
     onOpenInverterSettings: (String) -> Unit,
     inverterSettingsLoading: Boolean,
     onOpenJournal: (String) -> Unit,
+    onOpenVoltageChart: (String) -> Unit,
+    onOpenSirio: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val pagerState = rememberPagerState(initialPage = PAGE_DASHBOARD, pageCount = { PAGE_COUNT })
@@ -178,11 +225,22 @@ private fun MainPager(
                 onOpenInverterSettings = onOpenInverterSettings,
                 inverterSettingsLoading = inverterSettingsLoading,
                 onOpenJournal = onOpenJournal,
+                onOpenVoltageChart = onOpenVoltageChart,
             )
-            PAGE_SCHEME -> SchemeScreen(uiState = uiState)
-            PAGE_TIMELINE -> LandscapeInPortrait {
-                TimelineScreen(config = uiState.config, repository = viewModel.repository)
-            }
+            PAGE_SCHEME -> SchemeScreen(
+                uiState = uiState,
+                onNodeTap = { id ->
+                    when (id) {
+                        "pv" -> onOpenInverterSettings("output")
+                        "battery" -> onOpenInverterSettings("charger")
+                        "grid" -> onOpenDevice("grid")
+                        "load" -> onOpenDevice("load")
+                        "boiler1" -> onOpenDevice("boiler1")
+                        "boiler2" -> onOpenDevice("boiler2")
+                        "pump" -> onOpenSirio()
+                    }
+                },
+            )
             PAGE_JOURNAL -> JournalScreen(config = uiState.config, repository = viewModel.repository)
             PAGE_ENERGY -> {
                 val inv = uiState.status.inverter

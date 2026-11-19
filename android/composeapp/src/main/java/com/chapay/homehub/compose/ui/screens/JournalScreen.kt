@@ -93,11 +93,27 @@ private fun classifyDevice(module: String, message: String): String? {
             m.contains("стан pv") -> "pv"
             m.contains("стан мережі") -> "grid"
             m.contains("стан акумулятора") -> "battery"
-            m.contains("мережа_авто режим") || m.contains("мережа режим") -> "grid"
-            m.contains("навантаження_авто режим") || m.contains("навантаження режим") -> "load"
+            // Мережа більше не має AUTO (переробка автоматики) - "мережа_авто
+            // режим" ніколи не логується, лишаємо лише ручний "мережа режим".
+            m.contains("мережа режим") -> "grid"
+            // "навантаження_захист режим" (новий єдиний захисний контур:
+            // перевантаження інвертора / розряд АКБ) не містив підрядка
+            // "навантаження режим" (є "_захист" між словами) - події захисту
+            // випадали з журналу картки "Навантаження". Перевіряємо саме
+            // "навантаження" (без " режим"), щоб не залежати від точного
+            // набору суфіксів (_авто/_захист/...) у назві пристрою - живі
+            // логи (напр. "[РЕЖИМ] НАВАНТАЖЕННЯ режим: ...") підтвердили,
+            // що це слово більше ніде в журналі інвертора не зустрічається.
+            m.contains("навантаження") -> "load"
             // Загальний режим інвертора (QMOD: мережа/акумулятор/...) - той самий
             // показник, що вже є на картці "Мережа" (поле "режим").
             m.contains("зміна режиму") -> "grid"
+            // Авто-перемикання пріоритету виходу (SBU/сонце) відкривається з
+            // картки "Сонце" - туди й веде його журнал. "команда інвертору" -
+            // сирий POP/PCP запис в EEPROM: POP міняє пріоритет ВИХОДУ (та сама
+            // картка "Сонце"), PCP - пріоритет ЗАРЯДКИ (картка "АКБ").
+            m.contains("авто-пріоритет") || m.contains("pop0") -> "pv"
+            m.contains("pcp0") -> "battery"
             else -> null
         }
         "load_controller" -> when {
@@ -107,13 +123,26 @@ private fun classifyDevice(module: String, message: String): String? {
         }
         "garage" -> when {
             m.contains("світло") -> "light"
-            m.contains("ворот") -> "gate"
+            // "ворота" (Н.в., напр. "ворота відчинені надто довго") і "воріт"
+            // (Р.в., напр. "зміна стану воріт", "несправність датчиків воріт") -
+            // різні відмінки того самого слова, з різним корінням літер: перевірка
+            // лише на "ворот" не ловила жодної реальної події відчинення/закриття
+            // воріт (вони логуються саме через appendDoorStateChangeLog() з
+            // "зміна стану воріт"), тому картка "Ворота" завжди була порожньою.
+            m.contains("ворот") || m.contains("воріт") -> "gate"
             m.contains("бойлер") -> "boiler2"
             else -> null
         }
         else -> null
     }
 }
+
+// GateCard на дашборді - це ОДНА картка й ОДНА кнопка журналу на ворота+світло
+// разом (немає окремої картки/кнопки лише для світла), тож фільтр "gate"
+// повинен показувати обидва - інакше події світла (класифікуються як "light")
+// зникали з єдиного доступного для гаража журналу.
+private fun matchesDeviceFilter(classified: String?, filter: String): Boolean =
+    if (filter == "gate") classified == "gate" || classified == "light" else classified == filter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -130,7 +159,7 @@ fun JournalScreen(
     val entries = if (deviceFilter == null) {
         allEntries
     } else {
-        allEntries.filter { classifyDevice(it.module, it.message) == deviceFilter }
+        allEntries.filter { matchesDeviceFilter(classifyDevice(it.module, it.message), deviceFilter) }
     }
     var loading by remember { mutableStateOf(true) }
 

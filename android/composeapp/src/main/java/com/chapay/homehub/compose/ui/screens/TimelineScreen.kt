@@ -3,7 +3,10 @@ package com.chapay.homehub.compose.ui.screens
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,7 +52,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chapay.homehub.compose.data.AppConfig
 import com.chapay.homehub.compose.data.StatusRepository
-import com.chapay.homehub.compose.ui.components.ChartToolbarActions
 import com.chapay.homehub.compose.ui.components.ChartViewport
 import com.chapay.homehub.compose.ui.components.DateNavHeader
 import com.chapay.homehub.compose.ui.components.VisibilityToggle
@@ -67,7 +69,9 @@ import com.chapay.homehub.compose.ui.theme.TextPrimary
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 
-private const val SECONDS_IN_DAY = 86_400
+// Без private - EnergyChartScreen ділить ці величини й функції, щоб графік
+// потужності й хронологія мали одну спільну (секундну) вісь часу й один viewport.
+const val SECONDS_IN_DAY = 86_400
 
 // Проміжок, коли сигнал був "увімкнений": [startSec, endSec] у секундах доби.
 // ongoing - лінія ще триває (кінець = "зараз" або кінець доби).
@@ -85,7 +89,7 @@ private val ROW_DEFS = listOf(
 )
 
 // Найдрібніше вікно масштабування - 1 хвилина (секундні запуски насоса видно).
-private const val MIN_VIEW_SECONDS = 60f
+const val MIN_VIEW_SECONDS = 60f
 
 /**
  * Події прошивки [[сек, біт, стан], ...] -> проміжки "від-до". Лінія починається
@@ -154,6 +158,71 @@ private fun parseLegacyHistory(payload: JSONObject): TimelineData {
 @Composable
 fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: (() -> Unit)? = null) {
     var date by remember { mutableStateOf(todayIso()) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Хронологія") },
+                navigationIcon = {
+                    if (onBack != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                        }
+                    }
+                },
+            )
+        },
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+        ) {
+            DateNavHeader(date = date, onDateChange = { date = it })
+            TimelineBody(
+                date = date,
+                config = config,
+                repository = repository,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+        }
+    }
+}
+
+/**
+ * Вміст хронології без власних Scaffold/TopAppBar/DateNavHeader - параметризований
+ * зовнішньою [date], щоб його можна було вставити на той самий екран, що й графік
+ * енергії (один спільний вибір доби), а не тільки показувати окремою вкладкою.
+ * Сама [TimelineScreen] - тонка обгортка над цим composable.
+ *
+ * [compact] - для вбудовування поруч із графіком енергії (менше виділеного місця):
+ * підказка-рядок лишається як є (вона й так одна строка), а розгорнута легенда з
+ * тривалостями/кількістю вмикань (по 2 рядки на пристрій) заміняється на її
+ * однорядковий, горизонтально прокрутний варіант ([CompactActiveTimeRow]) - раніше
+ * обидва просто ховались, через що зникали кількість вмикань/добовий час роботи й
+ * підказка про обраний відрізок, а графіку це місце майже не допомагало.
+ *
+ * [externalViewport] - коли хронологія вбудована поруч із графіком енергії, обидва
+ * мають гортатись/масштабуватись синхронно й мати одну спільну лінійку часу: замість
+ * власного viewport тоді передається той самий (секундний) екземпляр, що й у графіка.
+ * Коли null (окрема вкладка "Хронологія") - хронологія, як і раніше, керує собою сама.
+ *
+ * [externalCursor]/[onExternalCursorChange] - та сама ідея для вертикальної лінії-курсора:
+ * коли [onExternalCursorChange] не null, хронологія читає/пише курсор через нього (ділить
+ * один стан із графіком енергії - курсори рухаються синхронно), інакше курсор - власний стан.
+ */
+@Composable
+fun TimelineBody(
+    date: String,
+    config: AppConfig,
+    repository: StatusRepository,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+    externalViewport: ChartViewport? = null,
+    externalCursor: Float? = null,
+    onExternalCursorChange: ((Float?) -> Unit)? = null,
+) {
     var data by remember { mutableStateOf<TimelineData?>(null) }
     var loading by remember { mutableStateOf(true) }
     var selected by remember { mutableStateOf<TimelineInterval?>(null) }
@@ -162,8 +231,12 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: (() 
     var hiddenMask by rememberSaveable { mutableStateOf(0) }
     val visibleRows = ROW_DEFS.indices.filter { (hiddenMask and (1 shl it)) == 0 }
     // Вертикальний курсор: не наближено - веде палець, наближено - дотик.
-    var cursorSec by remember { mutableStateOf<Float?>(null) }
-    val viewport = rememberChartViewport(date, 0f, SECONDS_IN_DAY.toFloat(), MIN_VIEW_SECONDS)
+    var internalCursorSec by remember { mutableStateOf<Float?>(null) }
+    val cursorSec = if (onExternalCursorChange != null) externalCursor else internalCursorSec
+    fun setCursorSec(v: Float?) {
+        if (onExternalCursorChange != null) onExternalCursorChange(v) else internalCursorSec = v
+    }
+    val viewport = externalViewport ?: rememberChartViewport(date, 0f, SECONDS_IN_DAY.toFloat(), MIN_VIEW_SECONDS)
 
     // Той самий цикл, що і в EnergyChartScreen: вкладка лишається живою в
     // пам'яті між перемиканнями нижньої навігації (saveState/restoreState),
@@ -173,7 +246,7 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: (() 
         // Нова дата/конфіг - старі лінії чужої доби не показуємо.
         data = null
         selected = null
-        cursorSec = null
+        setCursorSec(null)
         // Що вже є на телефоні (закриті доби - назавжди) - показуємо одразу.
         val cached = runCatching { repository.peekLoadControllerTimeline(config, date) }.getOrNull()
         var timelineSeen = false
@@ -205,57 +278,46 @@ fun TimelineScreen(config: AppConfig, repository: StatusRepository, onBack: (() 
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Хронологія") },
-                navigationIcon = {
-                    if (onBack != null) {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
-                        }
-                    }
-                },
-                actions = { ChartToolbarActions(viewport) },
+    Column(modifier = modifier) {
+        val current = data
+        if (loading && current == null) {
+            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else if (current == null) {
+            Text(
+                text = "немає даних за цю добу",
+                color = TextMuted,
+                modifier = Modifier.padding(24.dp),
             )
-        },
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-        ) {
-            DateNavHeader(date = date, onDateChange = { date = it })
-            val current = data
-            if (loading && current == null) {
-                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            } else if (current == null) {
-                Text(
-                    text = "немає даних за цю добу",
-                    color = TextMuted,
-                    modifier = Modifier.padding(24.dp),
-                )
-            } else {
-                TimelineChart(
+        } else {
+            TimelineChart(
+                data = current,
+                viewport = viewport,
+                visibleRows = visibleRows,
+                selected = selected,
+                cursorSec = cursorSec,
+                // Рух курсора скидає обрану лінію; дотик спершу ставить курсор, потім обирає.
+                onCursor = {
+                    setCursorSec(it)
+                    selected = null
+                },
+                onSelect = { selected = it },
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+            Spacer(Modifier.height(if (compact) 2.dp else 4.dp))
+            InfoLine(data = current, visibleRows = visibleRows, selected = selected, cursorSec = cursorSec)
+            Spacer(Modifier.height(if (compact) 2.dp else 4.dp))
+            if (compact) {
+                CompactActiveTimeRow(
                     data = current,
-                    viewport = viewport,
-                    visibleRows = visibleRows,
-                    selected = selected,
-                    cursorSec = cursorSec,
-                    // Рух курсора скидає обрану лінію; дотик спершу ставить курсор, потім обирає.
-                    onCursor = {
-                        cursorSec = it
+                    hiddenMask = hiddenMask,
+                    onToggle = { row ->
+                        hiddenMask = hiddenMask xor (1 shl row)
                         selected = null
                     },
-                    onSelect = { selected = it },
-                    modifier = Modifier.fillMaxWidth().weight(1f),
                 )
-                Spacer(Modifier.height(4.dp))
-                InfoLine(data = current, visibleRows = visibleRows, selected = selected, cursorSec = cursorSec)
-                Spacer(Modifier.height(4.dp))
+            } else {
                 ActiveTimeLegend(
                     data = current,
                     hiddenMask = hiddenMask,
@@ -274,7 +336,7 @@ private fun hms(sec: Int): String {
     return "%02d:%02d:%02d".format(s / 3600 % 24, s / 60 % 60, s % 60)
 }
 
-private fun hm(sec: Int): String {
+fun hm(sec: Int): String {
     val s = sec.coerceIn(0, SECONDS_IN_DAY)
     return "%02d:%02d".format(s / 3600 % 24, s / 60 % 60)
 }
@@ -372,10 +434,36 @@ private fun ActiveTimeLegend(data: TimelineData, hiddenMask: Int, onToggle: (Int
     }
 }
 
-// Кроки вертикальної сітки/підписів осі часу (с): вибираємо найменший, що дає <= ~10 підписів.
-private val TICK_STEPS = intArrayOf(60, 120, 300, 600, 900, 1800, 3600, 7200, 10800)
+/**
+ * Той самий активний час/кількість вмикань, що й [ActiveTimeLegend], але в один рядок
+ * (назва+деталі суміщені в одному підписі VisibilityToggle замість двох) і з
+ * горизонтальною прокруткою, якщо не влазить - для вбудованого (compact) вигляду
+ * поруч із графіком енергії, де вертикального місця мало.
+ */
+@Composable
+private fun CompactActiveTimeRow(data: TimelineData, hiddenMask: Int, onToggle: (Int) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        ROW_DEFS.forEachIndexed { row, (label, color) ->
+            val mine = data.intervals.filter { it.row == row }
+            val totalSec = mine.sumOf { (it.endSec - it.startSec).coerceAtLeast(0) }
+            val summary = if (mine.isEmpty()) "не вмикався" else "${durationText(totalSec)} · ${mine.size} вкл."
+            VisibilityToggle(
+                label = "$label: $summary",
+                color = color,
+                visible = (hiddenMask and (1 shl row)) == 0,
+                onToggle = { onToggle(row) },
+            )
+        }
+    }
+}
 
-private fun tickStepFor(spanSec: Float): Int =
+// Кроки вертикальної сітки/підписів осі часу (с): вибираємо найменший, що дає <= ~10 підписів.
+val TICK_STEPS = intArrayOf(60, 120, 300, 600, 900, 1800, 3600, 7200, 10800)
+
+fun tickStepFor(spanSec: Float): Int =
     TICK_STEPS.firstOrNull { spanSec / it <= 10f } ?: TICK_STEPS.last()
 
 @Composable

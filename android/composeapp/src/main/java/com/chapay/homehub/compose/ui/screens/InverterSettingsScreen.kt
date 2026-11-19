@@ -29,6 +29,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -87,6 +89,7 @@ fun InverterOutputPriorityScreen(
     state: InverterSettingsUiState,
     onRefresh: () -> Unit,
     onSetOutput: (Int) -> Unit,
+    onSetAuto: (Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
     InverterPriorityScreen(
@@ -97,6 +100,9 @@ fun InverterOutputPriorityScreen(
         onRefresh = onRefresh,
         onPick = onSetOutput,
         onBack = onBack,
+        auto = state.settings?.outputPriorityAuto ?: false,
+        autoEtaSec = state.settings?.outputPriorityAutoEtaSec,
+        onSetAuto = onSetAuto,
     )
 }
 
@@ -132,6 +138,9 @@ private fun InverterPriorityScreen(
     onRefresh: () -> Unit,
     onPick: (Int) -> Unit,
     onBack: () -> Unit,
+    auto: Boolean = false,
+    autoEtaSec: Int? = null,
+    onSetAuto: ((Boolean) -> Unit)? = null,
 ) {
     // Обрана, але ще не підтверджена зміна.
     var pending by remember { mutableStateOf<PriorityOption?>(null) }
@@ -177,6 +186,39 @@ private fun InverterPriorityScreen(
                 }
             }
 
+            if (onSetAuto != null) {
+                Card(colors = CardDefaults.cardColors(containerColor = SurfaceContainer), shape = RoundedCornerShape(20.dp)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("АВТО (SBU/сонце)", style = MaterialTheme.typography.labelMedium, color = TextMuted)
+                                Text(
+                                    if (auto) "увімкнено" else "вимкнено",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = TextPrimary,
+                                )
+                            }
+                            Switch(
+                                checked = auto,
+                                onCheckedChange = onSetAuto,
+                                enabled = !state.loading && !state.busy,
+                                colors = SwitchDefaults.colors(checkedTrackColor = AccentPv),
+                            )
+                        }
+                        Text(
+                            "Генерація >100Вт 15+ хв - SBU; немає генерації 30+ хв (і заряд АКБ <90%) або заряд АКБ ≤50% - сонце.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted,
+                        )
+                        if (auto && autoEtaSec != null && autoEtaSec > 0) {
+                            Spacer(Modifier.height(4.dp))
+                            val etaText = if (autoEtaSec >= 60) "${autoEtaSec / 60} хв" else "$autoEtaSec с"
+                            Text("до наступного перемикання: $etaText", style = MaterialTheme.typography.bodySmall, color = AccentPv)
+                        }
+                    }
+                }
+            }
+
             if (state.error != null) {
                 Text(state.error, style = MaterialTheme.typography.bodyMedium, color = StatusAlert)
             }
@@ -205,7 +247,12 @@ private fun InverterPriorityScreen(
         AlertDialog(
             onDismissRequest = { pending = null },
             title = { Text("Змінити режим інвертора?") },
-            text = { Text("${title}: ${option.title}\n\nНалаштування буде записано в інвертор.") },
+            text = {
+                Text(
+                    "${title}: ${option.title}\n\nНалаштування буде записано в інвертор." +
+                        if (auto) " Це вимкне автоперемикання (АВТО)." else "",
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     onPick(option.value)

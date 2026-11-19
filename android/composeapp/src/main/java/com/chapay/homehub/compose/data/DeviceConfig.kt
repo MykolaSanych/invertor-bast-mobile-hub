@@ -12,6 +12,12 @@ data class AppConfig(
     val loadControllerPassword: String = DEFAULT_WEB_PASSWORD,
     val garageBaseUrl: String = "http://192.168.1.4",
     val garagePassword: String = DEFAULT_WEB_PASSWORD,
+    // Sirio (частотник насоса, окрема прошивка ESP8266) - свій HTTP API без
+    // пароля для статусу (лише розширені параметри/налаштування просять PIN -
+    // SIRIO_ADVANCED_PIN_DEFAULT, той самий, що в самій прошивці Sirio).
+    val sirioBaseUrl: String = "http://192.168.4.1",
+    val sirioEnabled: Boolean = false,
+    val sirioAdvancedPin: String = "1230",
     val pollIntervalSec: Int = 5,
     val inverterEnabled: Boolean = true,
     val loadControllerEnabled: Boolean = true,
@@ -33,7 +39,11 @@ data class AppConfig(
     val notifyModuleOffline: Boolean = true,
     val notifyPowerOverload: Boolean = true,
     val notifyLogicUnstable: Boolean = true,
+    val notifySirioError: Boolean = true,
+    val notifySirioMotor: Boolean = true,
     val interfaceMode: String = "pro",
+    // Фоновий сервіс (опитування + сповіщення), коли застосунок закритий.
+    val backgroundServiceEnabled: Boolean = true,
 )
 
 object AppConfigStorage {
@@ -44,6 +54,9 @@ object AppConfigStorage {
     private const val K_LOAD_PASS = "load_pass"
     private const val K_GARAGE_URL = "garage_url"
     private const val K_GARAGE_PASS = "garage_pass"
+    private const val K_SIRIO_URL = "sirio_url"
+    private const val K_SIRIO_ENABLED = "sirio_enabled"
+    private const val K_SIRIO_PIN = "sirio_pin"
     private const val K_POLL_SEC = "poll_sec"
     private const val K_INV_ENABLED = "inv_enabled"
     private const val K_LOAD_ENABLED = "load_enabled"
@@ -65,7 +78,10 @@ object AppConfigStorage {
     private const val K_N_MODULE_OFFLINE = "n_module_offline"
     private const val K_N_POWER_OVERLOAD = "n_power_overload"
     private const val K_N_LOGIC_UNSTABLE = "n_logic_unstable"
+    private const val K_N_SIRIO_ERROR = "n_sirio_error"
+    private const val K_N_SIRIO_MOTOR = "n_sirio_motor"
     private const val K_INTERFACE_MODE = "ui_mode"
+    private const val K_BG_SERVICE_ENABLED = "bg_service_enabled"
 
     private fun normalizePassword(value: String?): String {
         val trimmed = value?.trim()
@@ -89,6 +105,9 @@ object AppConfigStorage {
             loadControllerPassword = normalizePassword(p.getString(K_LOAD_PASS, DEFAULT_WEB_PASSWORD)),
             garageBaseUrl = p.getString(K_GARAGE_URL, "http://192.168.1.4") ?: "http://192.168.1.4",
             garagePassword = normalizePassword(p.getString(K_GARAGE_PASS, DEFAULT_WEB_PASSWORD)),
+            sirioBaseUrl = p.getString(K_SIRIO_URL, "http://192.168.4.1") ?: "http://192.168.4.1",
+            sirioEnabled = p.getBoolean(K_SIRIO_ENABLED, false),
+            sirioAdvancedPin = p.getString(K_SIRIO_PIN, "1230") ?: "1230",
             pollIntervalSec = p.getInt(K_POLL_SEC, 5).coerceIn(2, 60),
             inverterEnabled = p.getBoolean(K_INV_ENABLED, true),
             loadControllerEnabled = p.getBoolean(K_LOAD_ENABLED, true),
@@ -110,7 +129,10 @@ object AppConfigStorage {
             notifyModuleOffline = p.getBoolean(K_N_MODULE_OFFLINE, true),
             notifyPowerOverload = p.getBoolean(K_N_POWER_OVERLOAD, true),
             notifyLogicUnstable = p.getBoolean(K_N_LOGIC_UNSTABLE, true),
+            notifySirioError = p.getBoolean(K_N_SIRIO_ERROR, true),
+            notifySirioMotor = p.getBoolean(K_N_SIRIO_MOTOR, true),
             interfaceMode = normalizeInterfaceMode(p.getString(K_INTERFACE_MODE, "pro")),
+            backgroundServiceEnabled = p.getBoolean(K_BG_SERVICE_ENABLED, true),
         )
     }
 
@@ -123,6 +145,9 @@ object AppConfigStorage {
             .putString(K_LOAD_PASS, cfg.loadControllerPassword)
             .putString(K_GARAGE_URL, cfg.garageBaseUrl.trim())
             .putString(K_GARAGE_PASS, cfg.garagePassword)
+            .putString(K_SIRIO_URL, cfg.sirioBaseUrl.trim())
+            .putBoolean(K_SIRIO_ENABLED, cfg.sirioEnabled)
+            .putString(K_SIRIO_PIN, cfg.sirioAdvancedPin)
             .putInt(K_POLL_SEC, cfg.pollIntervalSec.coerceIn(2, 60))
             .putBoolean(K_INV_ENABLED, cfg.inverterEnabled)
             .putBoolean(K_LOAD_ENABLED, cfg.loadControllerEnabled)
@@ -144,7 +169,10 @@ object AppConfigStorage {
             .putBoolean(K_N_MODULE_OFFLINE, cfg.notifyModuleOffline)
             .putBoolean(K_N_POWER_OVERLOAD, cfg.notifyPowerOverload)
             .putBoolean(K_N_LOGIC_UNSTABLE, cfg.notifyLogicUnstable)
+            .putBoolean(K_N_SIRIO_ERROR, cfg.notifySirioError)
+            .putBoolean(K_N_SIRIO_MOTOR, cfg.notifySirioMotor)
             .putString(K_INTERFACE_MODE, normalizeInterfaceMode(cfg.interfaceMode))
+            .putBoolean(K_BG_SERVICE_ENABLED, cfg.backgroundServiceEnabled)
             .apply()
     }
 }

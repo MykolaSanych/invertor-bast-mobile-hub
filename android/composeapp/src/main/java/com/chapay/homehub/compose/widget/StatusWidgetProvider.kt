@@ -26,10 +26,13 @@ class StatusWidgetProvider : AppWidgetProvider() {
         enqueueRefresh(context)
     }
 
-    // Див. коментар у DeviceStateWidgetProvider.onUpdate - той самий фікс:
-    // не домальовувати порожній стан перед фоновим оновленням.
+    // Лише СИНХРОННО повертаємо останні дані з кешу. WorkManager-роботу тут більше
+    // НЕ ставимо: її часта постановка (onUpdate лаунчера прилітав ~щосекунди)
+    // смикала внутрішні компоненти WorkManager → PACKAGE_CHANGED на наш пакет →
+    // цикл перебудови віджетів у лаунчері, що й скидав віджет у "--". Свіжі дані
+    // кладе EventPollingService (що кілька секунд) напряму, без WorkManager.
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        enqueueRefresh(context)
+        repaintFromCache(context)
     }
 
     override fun onAppWidgetOptionsChanged(
@@ -39,7 +42,7 @@ class StatusWidgetProvider : AppWidgetProvider() {
         newOptions: android.os.Bundle,
     ) {
         super.onAppWidgetOptionsChanged(context, appWidgetManager, appWidgetId, newOptions)
-        enqueueRefresh(context)
+        repaintFromCache(context)
     }
 
     companion object {
@@ -92,19 +95,53 @@ class StatusWidgetProvider : AppWidgetProvider() {
         // відсутній модуль останнім дійсним знімком САМЕ ЦЬОГО модуля, а не всього
         // статусу цілком - точно як робить живий застосунок (DashboardViewModel) зі
         // своїм окремим "липким" станом.
+        // Живий застосунок опитує на своєму корутин-диспетчері, а WorkManager
+        // виконує Worker на власному фоновому потоці - тобто mergeWithLastGoodAutoStatus
+        // могли викликати ДВА РІЗНІ ПОТОКИ одночасно. lastGoodAutoStatus був лише
+        // @Volatile (гарантує видимість запису, але не атомарність "прочитати-
+        // змінити-записати"): якщо обидва потоки встигали прочитати старе значення
+        // ДО того, як інший запише нове, останній запис "перемагав" і міг відкотити
+        // щойно показані дані на менш повні - подив("стан з'являється на долю секунди
+        // і зникає"). Тепер злиття кешу И сам виклик updateAppWidget серіалізовані
+        // одним lock - другий потік завжди бачить результат першого, тож ніколи не
+        // намалює менш повні дані, ніж уже на екрані.
+        private val widgetUpdateLock = Any()
+
         @Volatile
         private var lastGoodAutoStatus: UnifiedStatus? = null
 
+        // lastGoodAutoStatus живе лише в пам'яті процесу - після того, як систему
+        // вбиває процес застосунку, він порожній, і холодний фетч, що не достукався
+        // до модуля (ZeroTier у Doze), давав "--". Один раз на процес піднімаємо
+        // останній дійсний знімок із диска (WidgetStatusCache), щоб холодний старт
+        // одразу мав чим залатати відсутні модулі. Викликати ДО першого
+        // mergeWithLastGoodAutoStatus (на початку updateAllWidgets і воркера).
+        @Volatile
+        private var cachePrimed = false
+
+        internal fun primeFromDiskIfNeeded(context: Context) {
+            if (cachePrimed) return
+            synchronized(widgetUpdateLock) {
+                if (cachePrimed) return
+                if (lastGoodAutoStatus == null) {
+                    WidgetStatusCache.load(context)?.let { lastGoodAutoStatus = it }
+                }
+                cachePrimed = true
+            }
+        }
+
         internal fun mergeWithLastGoodAutoStatus(fresh: UnifiedStatus): UnifiedStatus {
-            val last = lastGoodAutoStatus
-            val merged = UnifiedStatus(
-                inverter = fresh.inverter ?: last?.inverter,
-                loadController = fresh.loadController ?: last?.loadController,
-                garage = fresh.garage ?: last?.garage,
-                updatedAtMs = fresh.updatedAtMs,
-            )
-            lastGoodAutoStatus = merged
-            return merged
+            synchronized(widgetUpdateLock) {
+                val last = lastGoodAutoStatus
+                val merged = UnifiedStatus(
+                    inverter = fresh.inverter ?: last?.inverter,
+                    loadController = fresh.loadController ?: last?.loadController,
+                    garage = fresh.garage ?: last?.garage,
+                    updatedAtMs = fresh.updatedAtMs,
+                )
+                lastGoodAutoStatus = merged
+                return merged
+            }
         }
 
         // Останній "відбиток" показаних значень - лише для авто-фонових оновлень
@@ -148,23 +185,79 @@ class StatusWidgetProvider : AppWidgetProvider() {
             ).joinToString("|")
         }
 
+        // ВАЖЛИВО: живий застосунок (DashboardViewModel, поки відкритий) і фоновий
+        // StatusWidgetRefreshWorker оновлюють ті самі три віджети НЕЗАЛЕЖНО, і
+        // раніше кожен тримав власний "липкий" кеш (застосунок - у DashboardUiState,
+        // воркер - lastGoodAutoStatus нижче). Коли обидва шляхи спрацьовували по черзі,
+        // воркер міг переписати щойно показані живим застосунком СВІЖІ дані своїм
+        // ЗАСТАРІЛИМ кешем (бо той жодного разу не бачив свіжих даних застосунку) -
+        // саме це й давало "цифри на мить стають іншими". Виклик
+        // mergeWithLastGoodAutoStatus() ТУТ, в одній спільній точці для ОБОХ шляхів,
+        // гарантує, що обидва завжди пишуть/читають той самий кеш - жоден не може
+        // відкотити те, що щойно показав інший.
         fun updateAllWidgets(context: Context, status: UnifiedStatus?, triggerPulse: Boolean = true) {
-            val pulseActive = triggerPulse && hasAnyModuleData(status)
+            // Усе злиття+малювання - в ОДНОМУ synchronized-блоці (не лише сам мердж):
+            // інакше два потоки могли б обидва змерджити (кожен побачивши результат
+            // іншого - ОК), але потім намалювати віджет у "неправильному" порядку -
+            // другий виклик updateAppWidget завжди мусить бути щонайменше таким же
+            // повним, як перший, а не випадково раніше змердженим значенням.
+            synchronized(widgetUpdateLock) {
+                // Перед першим злиттям цього процесу підтягуємо останній знімок із
+                // диска - інакше холодний старт не має чим залатати відсутні модулі.
+                primeFromDiskIfNeeded(context)
+                // mergeWithLastGoodAutoStatus сам бере widgetUpdateLock - Kotlin/JVM
+                // synchronized є reentrant (той самий потік може взяти лок повторно),
+                // тож вкладений виклик тут безпечний, не дедлок.
+                val merged = mergeWithLastGoodAutoStatus(status ?: UnifiedStatus())
 
+                // Повні прочерки не малюємо НІКОЛИ - краще лишити на екрані останній
+                // кадр, ніж блимнути порожнечею.
+                if (!hasAnyModuleData(merged)) return
+
+                // Зберігаємо непорожній знімок, щоб наступний холодний старт показав
+                // останні реальні дані, а не прочерки.
+                WidgetStatusCache.save(context, merged)
+
+                renderAll(context, merged, pulseActive = triggerPulse)
+
+                if (triggerPulse) {
+                    enqueueRefresh(context, delayMs = WIDGET_PULSE_CLEAR_DELAY_MS, suppressPulse = true)
+                }
+            }
+        }
+
+        // Малює ВСІ три віджети з останнього відомого (кешованого) стану СИНХРОННО,
+        // без жодної мережі. Головний засіб проти мерехтіння: лаунчер скидає
+        // RemoteViews до "--" і кличе onUpdate мало не щосекунди, а свіжі дані
+        // приходять асинхронним воркером реально лише раз на 20с (throttle), тож між
+        // скиданнями видно прочерки. Перемальовуючи кеш на КОЖЕН onUpdate, тримаємо
+        // дані на екрані постійно.
+        fun repaintFromCache(context: Context) {
+            synchronized(widgetUpdateLock) {
+                primeFromDiskIfNeeded(context)
+                val cached = lastGoodAutoStatus
+                if (cached == null || !hasAnyModuleData(cached)) return
+                renderAll(context, cached, pulseActive = false)
+            }
+        }
+
+        // Лаунчер Motorola сам (не наш код) у циклі ~1с перебудовує віджети
+        // (refreshAndBindWidgetsAndShortcuts), скидаючи наш до initialLayout "--". Тому
+        // дедуплікацію прибрано: мусимо перемальовувати дані на КОЖЕН onUpdate, інакше
+        // після чергового скидання лаунчера віджет лишається на "--" (саме так і сталось,
+        // коли рендер пропускали за "незмінним" станом). Залишкове блимання - наслідок
+        // цього циклу лаунчера, усунути його повністю з боку застосунку не можна.
+        private fun renderAll(context: Context, merged: UnifiedStatus, pulseActive: Boolean) {
             val widgetIds = getWidgetIds(context)
             if (widgetIds.isNotEmpty()) {
                 AppWidgetManager.getInstance(context).updateAppWidget(
                     widgetIds,
-                    buildRemoteViews(context, status, pulseActive = pulseActive),
+                    buildRemoteViews(context, merged, pulseActive = pulseActive),
                 )
             }
 
-            GateWidgetProvider.updateAllWidgets(context, status, pulseActive)
-            DeviceStateWidgetProvider.updateAllWidgets(context, status, pulseActive)
-
-            if (pulseActive) {
-                enqueueRefresh(context, delayMs = WIDGET_PULSE_CLEAR_DELAY_MS, suppressPulse = true)
-            }
+            GateWidgetProvider.updateAllWidgets(context, merged, pulseActive)
+            DeviceStateWidgetProvider.updateAllWidgets(context, merged, pulseActive)
         }
 
         private fun hasAnyModuleData(status: UnifiedStatus?): Boolean {

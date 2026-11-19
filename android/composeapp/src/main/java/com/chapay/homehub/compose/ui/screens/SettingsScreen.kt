@@ -41,6 +41,7 @@ fun SettingsScreen(
     onSave: (AppConfig) -> Unit,
     onBack: () -> Unit,
     repository: StatusRepository,
+    onOpenNotifications: () -> Unit = {},
 ) {
     var cacheStats by remember { mutableStateOf(repository.chartCacheStats()) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -56,7 +57,13 @@ fun SettingsScreen(
     var garagePass by remember { mutableStateOf(config.garagePassword) }
     var garageEnabled by remember { mutableStateOf(config.garageEnabled) }
 
+    var sirioUrl by remember { mutableStateOf(config.sirioBaseUrl) }
+    var sirioPin by remember { mutableStateOf(config.sirioAdvancedPin) }
+    var sirioEnabled by remember { mutableStateOf(config.sirioEnabled) }
+
     var pollSec by remember { mutableStateOf(config.pollIntervalSec.toString()) }
+
+    var bgServiceEnabled by remember { mutableStateOf(config.backgroundServiceEnabled) }
 
     Scaffold(
         topBar = {
@@ -106,6 +113,17 @@ fun SettingsScreen(
                 enabled = garageEnabled,
                 onEnabledChange = { garageEnabled = it },
             )
+            Spacer(Modifier.height(20.dp))
+            DeviceSection(
+                title = "Насос Sirio (частотник)",
+                url = sirioUrl,
+                onUrlChange = { sirioUrl = it },
+                pass = sirioPin,
+                onPassChange = { sirioPin = it },
+                enabled = sirioEnabled,
+                onEnabledChange = { sirioEnabled = it },
+                passLabel = "PIN (розширені параметри)",
+            )
 
             Spacer(Modifier.height(20.dp))
             Text("Інтервал опитування, с", style = MaterialTheme.typography.labelMedium, color = TextMuted)
@@ -116,6 +134,27 @@ fun SettingsScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            Spacer(Modifier.height(20.dp))
+            Text("Фоновий сервіс і сповіщення", style = MaterialTheme.typography.labelMedium, color = TextMuted)
+            Text(
+                "Застосунок стежить за будинком навіть закритим і надсилає сповіщення про події.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text("Працювати у фоні")
+                Switch(checked = bgServiceEnabled, onCheckedChange = { bgServiceEnabled = it })
+            }
+            Spacer(Modifier.height(6.dp))
+            androidx.compose.material3.OutlinedButton(onClick = onOpenNotifications, modifier = Modifier.fillMaxWidth()) {
+                Text("Які повідомлення надсилати")
+            }
 
             Spacer(Modifier.height(20.dp))
             Text("Архів історії на телефоні", style = MaterialTheme.typography.labelMedium, color = TextMuted)
@@ -174,7 +213,11 @@ fun SettingsScreen(
                             garageBaseUrl = garageUrl.trim(),
                             garagePassword = garagePass,
                             garageEnabled = garageEnabled,
+                            sirioBaseUrl = sirioUrl.trim(),
+                            sirioAdvancedPin = sirioPin,
+                            sirioEnabled = sirioEnabled,
                             pollIntervalSec = pollSec.toIntOrNull()?.coerceIn(2, 60) ?: config.pollIntervalSec,
+                            backgroundServiceEnabled = bgServiceEnabled,
                         ),
                     )
                     onBack()
@@ -196,6 +239,7 @@ private fun DeviceSection(
     onPassChange: (String) -> Unit,
     enabled: Boolean,
     onEnabledChange: (Boolean) -> Unit,
+    passLabel: String = "Пароль",
 ) {
     Column {
         Row(
@@ -216,7 +260,7 @@ private fun DeviceSection(
         OutlinedTextField(
             value = pass,
             onValueChange = onPassChange,
-            label = { Text("Пароль") },
+            label = { Text(passLabel) },
             modifier = Modifier.fillMaxWidth(),
         )
     }

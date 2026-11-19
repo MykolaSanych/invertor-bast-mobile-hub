@@ -35,7 +35,11 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
     // модулів не скидав саме його рядки в "--", поки решта віджета оновлена) -
     // див. StatusWidgetProvider/StatusWidgetRefreshWorker.
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        StatusWidgetProvider.enqueueRefresh(context)
+        // Лише СИНХРОННО малюємо останні дані з кешу. WorkManager-роботу тут НЕ
+        // ставимо - її часта постановка смикала компоненти WorkManager →
+        // PACKAGE_CHANGED → цикл перебудови віджетів у лаунчері (блимання/прочерки).
+        // Свіжі дані кладе EventPollingService напряму, без WorkManager.
+        StatusWidgetProvider.repaintFromCache(context)
     }
 
     override fun onAppWidgetOptionsChanged(
@@ -45,7 +49,7 @@ class DeviceStateWidgetProvider : AppWidgetProvider() {
         newOptions: android.os.Bundle,
     ) {
         super.onAppWidgetOptionsChanged(context, appWidgetManager, appWidgetId, newOptions)
-        StatusWidgetProvider.enqueueRefresh(context)
+        StatusWidgetProvider.repaintFromCache(context)
     }
 
     companion object {

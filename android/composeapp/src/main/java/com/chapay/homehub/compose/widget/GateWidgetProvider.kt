@@ -20,10 +20,11 @@ class GateWidgetProvider : AppWidgetProvider() {
         StatusWidgetProvider.enqueueRefresh(context)
     }
 
-    // Див. коментар у DeviceStateWidgetProvider.onUpdate - той самий фікс:
-    // не домальовувати порожній стан перед фоновим оновленням.
+    // Лише СИНХРОННО малюємо останні дані з кешу. WorkManager-роботу тут НЕ ставимо
+    // (її часта постановка → PACKAGE_CHANGED → цикл перебудови віджетів у лаунчері).
+    // Свіжі дані кладе EventPollingService напряму.
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        StatusWidgetProvider.enqueueRefresh(context)
+        StatusWidgetProvider.repaintFromCache(context)
     }
 
     override fun onAppWidgetOptionsChanged(
@@ -33,7 +34,7 @@ class GateWidgetProvider : AppWidgetProvider() {
         newOptions: android.os.Bundle,
     ) {
         super.onAppWidgetOptionsChanged(context, appWidgetManager, appWidgetId, newOptions)
-        StatusWidgetProvider.enqueueRefresh(context)
+        StatusWidgetProvider.repaintFromCache(context)
     }
 
     override fun onReceive(context: Context, intent: Intent) {

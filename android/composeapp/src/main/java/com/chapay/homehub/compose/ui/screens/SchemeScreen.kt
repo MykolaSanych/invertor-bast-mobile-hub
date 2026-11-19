@@ -2,19 +2,25 @@ package com.chapay.homehub.compose.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Water
 import androidx.compose.material.icons.filled.Whatshot
@@ -78,7 +84,13 @@ private data class SchemeLink(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SchemeScreen(uiState: DashboardUiState, onBack: (() -> Unit)? = null) {
+fun SchemeScreen(
+    uiState: DashboardUiState,
+    onBack: (() -> Unit)? = null,
+    // id вузла, по якому тапнули ("pv"/"grid"/"inverter"/"battery"/"load"/
+    // "boiler1"/"pump"/"boiler2") - відкриває його додаткові параметри.
+    onNodeTap: (String) -> Unit = {},
+) {
     val inverter = uiState.status.inverter
     val load = uiState.status.loadController
     val garage = uiState.status.garage
@@ -163,6 +175,7 @@ fun SchemeScreen(uiState: DashboardUiState, onBack: (() -> Unit)? = null) {
                 // рівно в центр вузла.
                 SchemeNodeChip(
                     node = node,
+                    onTap = { onNodeTap(node.id) },
                     modifier = Modifier.layout { measurable, c ->
                         val p = measurable.measure(c.copy(minWidth = 0, minHeight = 0))
                         layout(c.maxWidth, c.maxHeight) {
@@ -172,6 +185,62 @@ fun SchemeScreen(uiState: DashboardUiState, onBack: (() -> Unit)? = null) {
                             )
                         }
                     },
+                )
+            }
+
+            ClimateCorner(
+                uiState = uiState,
+                modifier = Modifier.align(Alignment.TopEnd),
+            )
+        }
+    }
+}
+
+// Невеликий, не-картковий індикатор у кутку схеми: температура з усіх фізично
+// підключених BME280 (внутрішній+зовнішній інвертора, навантаження, гараж) -
+// без окремого екрана/картки, просто щоб показати, що дані є.
+@Composable
+private fun ClimateCorner(uiState: DashboardUiState, modifier: Modifier = Modifier) {
+    val inverter = uiState.status.inverter
+    val load = uiState.status.loadController
+    val garage = uiState.status.garage
+
+    val rows = buildList {
+        if (inverter?.bmeAvailable == true && inverter.bmeTemp != null) {
+            add("Інвертор" to inverter.bmeTemp)
+        }
+        if (inverter?.bmeExtAvailable == true && inverter.bmeExtTemp != null) {
+            add("Інвертор (зовн.)" to inverter.bmeExtTemp)
+        }
+        if (load?.bmeAvailable == true && load.bmeTemp != null) {
+            add("Навантаження" to load.bmeTemp)
+        }
+        if (garage?.bmeAvailable == true && garage.bmeTemp != null) {
+            add("Гараж" to garage.bmeTemp)
+        }
+    }
+    if (rows.isEmpty()) return
+
+    Column(
+        modifier = modifier
+            .background(SurfaceContainer.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.End,
+    ) {
+        rows.forEach { (label, temp) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.Thermostat,
+                    contentDescription = null,
+                    tint = TextMuted,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = "$label: ${"%.1f".format(temp)}°C",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextPrimary,
+                    maxLines = 1,
                 )
             }
         }
@@ -241,9 +310,9 @@ private fun SchemeLinks(
 }
 
 @Composable
-private fun SchemeNodeChip(node: SchemeNode, modifier: Modifier = Modifier) {
+private fun SchemeNodeChip(node: SchemeNode, onTap: () -> Unit, modifier: Modifier = Modifier) {
     Card(
-        modifier = modifier.width(88.dp),
+        modifier = modifier.width(88.dp).clickable(onClick = onTap),
         colors = CardDefaults.cardColors(containerColor = SurfaceContainer),
         border = BorderStroke(1.dp, node.accent.copy(alpha = 0.4f)),
         shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),

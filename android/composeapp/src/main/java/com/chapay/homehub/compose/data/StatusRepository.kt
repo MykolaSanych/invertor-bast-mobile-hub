@@ -633,7 +633,13 @@ class StatusRepository(
         if (!json.optBoolean("ok", false)) return null
         fun intOrNull(key: String): Int? = if (json.isNull(key) || !json.has(key)) null else json.optInt(key, -1).takeIf { it >= 0 }
         val mode = if (json.isNull("mode")) null else json.optString("mode").takeIf { it.isNotBlank() }
-        return InverterSettings(mode, intOrNull("output_priority"), intOrNull("charger_priority"))
+        return InverterSettings(
+            mode,
+            intOrNull("output_priority"),
+            intOrNull("charger_priority"),
+            outputPriorityAuto = json.optBooleanSafe("output_priority_auto"),
+            outputPriorityAutoEtaSec = json.optNullableInt("output_priority_auto_eta_sec"),
+        )
     }
 
     /** Читає режим і пріоритети (інвертор сам опитує обладнання: 1-3 с). null - не відповів / стара прошивка. */
@@ -641,6 +647,51 @@ class StatusRepository(
         if (!config.inverterEnabled) return@withContext null
         val json = fetchInverterHeavyJson(config, "/api/inverter/settings", emptyMap()) ?: return@withContext null
         parseInverterSettings(json)
+    }
+
+    // Сумісність зі старою прошивкою (ще не оновленою через OTA): вона віддає
+    // "age_sec" (скільки тому), нова - "ts" (абсолютний epoch). Без цього
+    // запасного варіанта оновлення застосунку ДО оновлення прошивки робило б
+    // графік порожнім - виглядало б як "дані зникли", хоча на модулі вони
+    // лишались цілими. Більше так не робити: нові поля API - лише із
+    // зворотно сумісним розбором на боці застосунку.
+    private fun parseVoltageHistory(json: JSONObject): VoltageHistoryResult {
+        val intervalSec = json.optInt("interval_sec", 600)
+        val arr = json.optJSONArray("samples")
+        val nowSec = System.currentTimeMillis() / 1000
+        val points = mutableListOf<VoltageHistoryPoint>()
+        if (arr != null) {
+            for (i in 0 until arr.length()) {
+                val row = arr.optJSONObject(i) ?: continue
+                val epochSec = if (row.has("ts")) row.optLong("ts", 0L) else nowSec - row.optLong("age_sec", 0L)
+                val grid = row.optDouble("grid", 0.0)
+                val pv = row.optDouble("pv", 0.0)
+                // battery - SOC АКБ (%), не напруга: легітимно може бути малим. Фільтр
+                // "фальшивих нулів" (зашумлена відповідь UART на старій прошивці) - мережа+
+                // сонце+АКБ одночасно РІВНО нуль, а не сама лише ця величина.
+                val battery = row.optDouble("battery", 0.0)
+                if (grid <= 0.0 && pv <= 0.0 && battery <= 0.0) continue
+                points.add(
+                    VoltageHistoryPoint(
+                        epochSec = epochSec,
+                        grid = grid,
+                        pv = pv,
+                        battery = battery,
+                    ),
+                )
+            }
+        }
+        return VoltageHistoryResult(intervalSec, points)
+    }
+
+    /**
+     * 24-годинна історія напруг мережі/сонця/АКБ - з денних файлів на
+     * інверторі (/api/voltage_history, учора+сьогодні), тож переживає
+     * перезапуск модуля. Кожна точка несе АБСОЛЮТНИЙ час (epochSec).
+     */
+    suspend fun fetchInverterVoltageHistory(config: AppConfig): VoltageHistoryResult? = withContext(Dispatchers.IO) {
+        val json = fetchInverterHeavyJson(config, "/api/voltage_history", emptyMap()) ?: return@withContext null
+        parseVoltageHistory(json)
     }
 
     /** Змінює ОДИН пріоритет (output 0..2 або charger 0..3); повертає перечитані налаштування. */
@@ -677,10 +728,147 @@ class StatusRepository(
         }
     }
 
+    /** Вмикає/вимикає авто-перемикання пріоритету виходу (SBU/сонце, п.2 переробки). */
+    suspend fun setInverterOutputAuto(config: AppConfig, enabled: Boolean): InverterSetResult = withContext(Dispatchers.IO) {
+        if (!config.inverterEnabled) return@withContext InverterSetResult(false, null, "Інвертор вимкнено в налаштуваннях")
+        val baseUrl = normalizeBaseUrl(config.inverterBaseUrl)
+        val url = "$baseUrl/api/inverter/settings".toHttpUrlOrNull()
+            ?: return@withContext InverterSetResult(false, null, "Невірна адреса інвертора")
+
+        fun once(): Pair<Int, JSONObject?>? = runCatching {
+            val form = FormBody.Builder().add("output_auto", if (enabled) "on" else "off")
+            val req = Request.Builder().url(url).post(form.build()).build()
+            slowClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string()
+                resp.code to body?.let { runCatching { JSONObject(it) }.getOrNull() }
+            }
+        }.getOrNull()
+
+        var result = once()
+        if (result == null || result.first == 401 || result.first == 403) {
+            authenticate(baseUrl, config.inverterPassword)
+            result = once()
+        }
+        val (code, json) = result ?: return@withContext InverterSetResult(false, null, "Інвертор не відповів")
+        if (code == 200 && json != null) {
+            InverterSetResult(true, parseInverterSettings(json), null)
+        } else {
+            InverterSetResult(false, null, "Помилка $code")
+        }
+    }
+
     /** (файлів, байтів) у кеші графіків. */
     fun chartCacheStats(): Pair<Int, Long> = chartCache.stats()
 
     fun clearChartCache(): Int = chartCache.clear()
+
+    // ---- Sirio (частотник насоса, окрема прошивка sirio_esp32/ESP8266) ----
+    // Власний HTTP API, без сесій/паролю для статусу й базових параметрів -
+    // лише "просунуті" (key=003/009/010) просять окремий вхід за PIN.
+
+    private fun parseSirioStatus(json: JSONObject): SirioStatus {
+        val errorCounts = (0..13).associateWith { json.optInt("e$it", -1) }.filterValues { it >= 0 }
+        return SirioStatus(
+            standBy = json.optInt("standBy") == 1,
+            motorOn = json.optInt("motorOn") == 1,
+            errorActive = json.optBoolean("errorActive", false) || json.optInt("flagError") == 1,
+            errorNumber = json.optInt("errorNumber"),
+            extEnabled = json.optInt("extEnabled") == 1,
+            barOrPsi = json.optInt("barOrPsi") == 1,
+            setPointPress10 = json.optInt("setPointPress"),
+            freqMax = json.optInt("freqMax"),
+            ampMax10 = json.optInt("ampMax"),
+            amp10 = json.optInt("amp"),
+            tempIgbt = json.optInt("tempIgbt"),
+            temp = json.optInt("temp"),
+            hPowerOn = json.optInt("hPowerOn"),
+            hPowerRunning = json.optInt("hPowerRunning"),
+            nrStarts = json.optInt("nrStarts"),
+            press10 = json.optInt("press"),
+            freqHz = json.optInt("freq"),
+            volt = json.optInt("volt"),
+            errorCounts = errorCounts,
+        )
+    }
+
+    suspend fun fetchSirioStatus(config: AppConfig): SirioStatus? = withContext(Dispatchers.IO) {
+        if (!config.sirioEnabled) return@withContext null
+        val baseUrl = normalizeBaseUrl(config.sirioBaseUrl)
+        val url = buildUrl(baseUrl, "/ajax/get-registers", mapOf("key" to "001")) ?: return@withContext null
+        parseSirioStatus(fetchJsonResult(url, client).json ?: return@withContext null)
+    }
+
+    /** Пуск/стоп (toggle - та сама команда перемикає обидва боки, як і фізична кнопка). */
+    suspend fun toggleSirioRun(config: AppConfig): Boolean = withContext(Dispatchers.IO) {
+        if (!config.sirioEnabled) return@withContext false
+        val baseUrl = normalizeBaseUrl(config.sirioBaseUrl)
+        val url = buildUrl(baseUrl, "/ajax/set-registers", mapOf("key" to "011")) ?: return@withContext false
+        fetchJsonResult(url, client).json?.optBoolean("result", false) ?: false
+    }
+
+    /** Крок параметра ±1 (протокол J12 вміє лише це - немає команди "встановити рівно"). */
+    suspend fun stepSirioParam(config: AppConfig, index: Int, up: Boolean, advanced: Boolean): Boolean = withContext(Dispatchers.IO) {
+        if (!config.sirioEnabled) return@withContext false
+        val baseUrl = normalizeBaseUrl(config.sirioBaseUrl)
+        val key = if (advanced) (if (up) "009" else "010") else (if (up) "007" else "008")
+        val url = buildUrl(baseUrl, "/ajax/set-registers", mapOf("key" to key, "index" to index.toString()))
+            ?: return@withContext false
+        fetchJsonResult(url, client).json?.optBoolean("result", false) ?: false
+    }
+
+    /** Живе читання одного параметра з пам'яті ATmega (без кешу на модулі). */
+    suspend fun readSirioParam(config: AppConfig, index: Int, advanced: Boolean): Int? = withContext(Dispatchers.IO) {
+        if (!config.sirioEnabled) return@withContext null
+        val baseUrl = normalizeBaseUrl(config.sirioBaseUrl)
+        val key = if (advanced) "003" else "002"
+        val url = buildUrl(baseUrl, "/ajax/get-registers", mapOf("key" to key, "index" to index.toString()))
+            ?: return@withContext null
+        val json = fetchJsonResult(url, client).json ?: return@withContext null
+        if (!json.optBoolean("result", false)) return@withContext null
+        json.optInt("value")
+    }
+
+    /** Вхід для розширених параметрів (PIN - той самий, що на дисплеї/в прошивці Sirio). */
+    suspend fun loginSirioAdvanced(config: AppConfig): Boolean = withContext(Dispatchers.IO) {
+        if (!config.sirioEnabled) return@withContext false
+        val baseUrl = normalizeBaseUrl(config.sirioBaseUrl)
+        val url = buildUrl(baseUrl, "/ajax/login", mapOf("pin" to config.sirioAdvancedPin)) ?: return@withContext false
+        fetchJsonResult(url, client).json?.optBoolean("logged", false) ?: false
+    }
+
+    /** Паспортна крива Q-H насоса (для наближеної оцінки витрати) - вкладка "Насос". */
+    suspend fun fetchSirioPump(config: AppConfig): SirioPumpConfig? = withContext(Dispatchers.IO) {
+        if (!config.sirioEnabled) return@withContext null
+        val baseUrl = normalizeBaseUrl(config.sirioBaseUrl)
+        val url = buildUrl(baseUrl, "/ajax/get-pump", emptyMap()) ?: return@withContext null
+        val json = fetchJsonResult(url, client).json ?: return@withContext null
+        val qArr = json.optJSONArray("q")
+        val hArr = json.optJSONArray("h")
+        val n = minOf(qArr?.length() ?: 0, hArr?.length() ?: 0)
+        SirioPumpConfig(
+            depth = json.optDouble("depth", 0.0),
+            fn = json.optDouble("fn", 50.0),
+            qunit = json.optInt("qunit", 0),
+            points = (0 until n).map { i -> qArr!!.optDouble(i) to hArr!!.optDouble(i) },
+        )
+    }
+
+    suspend fun setSirioPump(config: AppConfig, pump: SirioPumpConfig): Boolean = withContext(Dispatchers.IO) {
+        if (!config.sirioEnabled) return@withContext false
+        val baseUrl = normalizeBaseUrl(config.sirioBaseUrl)
+        val url = buildUrl(
+            baseUrl,
+            "/ajax/set-pump",
+            mapOf(
+                "depth" to pump.depth.toString(),
+                "fn" to pump.fn.toString(),
+                "qunit" to pump.qunit.toString(),
+                "q" to pump.points.joinToString(",") { it.first.toString() },
+                "h" to pump.points.joinToString(",") { it.second.toString() },
+            ),
+        ) ?: return@withContext false
+        fetchJsonResult(url, client).json?.optBoolean("result", false) ?: false
+    }
 
     private fun fetchInverterHeavyText(config: AppConfig, path: String): String? {
         if (!config.inverterEnabled) return null
@@ -1127,38 +1315,13 @@ class StatusRepository(
         postMode(config.inverterBaseUrl, config.inverterPassword, "/api/loadmode", mode)
     }
 
-    suspend fun setInverterLoadLock(config: AppConfig, locked: Boolean): Boolean = withContext(Dispatchers.IO) {
+    suspend fun setInverterLoadLock(config: AppConfig, lockMode: String): Boolean = withContext(Dispatchers.IO) {
         if (!config.inverterEnabled) return@withContext false
         postForm(
             baseUrlRaw = config.inverterBaseUrl,
             password = config.inverterPassword,
             path = "/api/loadlock",
-            formPairs = listOf("locked" to if (locked) "1" else "0"),
-        )
-    }
-
-    suspend fun setInverterGridLogic(
-        config: AppConfig,
-        pvThresholdW: Double,
-        offDelaySec: Int,
-        onDelaySec: Int,
-        forceGridOnW: Double,
-        batteryLowSocPct: Double,
-        offMinSocPct: Double,
-    ): Boolean = withContext(Dispatchers.IO) {
-        if (!config.inverterEnabled) return@withContext false
-        postForm(
-            baseUrlRaw = config.inverterBaseUrl,
-            password = config.inverterPassword,
-            path = "/api/gridlogic",
-            formPairs = listOf(
-                "pv_threshold_w" to pvThresholdW.toString(),
-                "off_delay_sec" to offDelaySec.toString(),
-                "on_delay_sec" to onDelaySec.toString(),
-                "force_grid_on_w" to forceGridOnW.toString(),
-                "battery_low_soc_pct" to batteryLowSocPct.toString(),
-                "off_min_soc_pct" to offMinSocPct.toString(),
-            ),
+            formPairs = listOf("lock" to lockMode.uppercase()),
         )
     }
 
@@ -1166,9 +1329,7 @@ class StatusRepository(
         config: AppConfig,
         pvThresholdW: Double,
         shutdownDelaySec: Int,
-        overloadPowerW: Double,
         gridRestoreV: Double,
-        overloadGridV: Double,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!config.inverterEnabled) return@withContext false
         postForm(
@@ -1178,9 +1339,7 @@ class StatusRepository(
             formPairs = listOf(
                 "pv_threshold_w" to pvThresholdW.toString(),
                 "shutdown_delay_sec" to shutdownDelaySec.toString(),
-                "overload_power_w" to overloadPowerW.toString(),
                 "grid_restore_v" to gridRestoreV.toString(),
-                "overload_grid_v" to overloadGridV.toString(),
             ),
         )
     }
@@ -1204,12 +1363,8 @@ class StatusRepository(
         config: AppConfig,
         pvThresholdW: Double,
         shutdownDelaySec: Int,
-        batteryShutoffW: Double,
-        batteryResumeW: Double,
         peerActiveW: Double,
         gridRestoreV: Double,
-        batteryReleaseGridV: Double,
-        batteryReleaseSocPct: Double,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!config.loadControllerEnabled) return@withContext false
         postForm(
@@ -1219,12 +1374,8 @@ class StatusRepository(
             formPairs = listOf(
                 "pv_threshold_w" to pvThresholdW.toString(),
                 "shutdown_delay_sec" to shutdownDelaySec.toString(),
-                "battery_shutoff_w" to batteryShutoffW.toString(),
-                "battery_resume_w" to batteryResumeW.toString(),
                 "peer_active_w" to peerActiveW.toString(),
                 "grid_restore_v" to gridRestoreV.toString(),
-                "battery_release_grid_v" to batteryReleaseGridV.toString(),
-                "battery_release_soc_pct" to batteryReleaseSocPct.toString(),
             ),
         )
     }
@@ -1320,12 +1471,8 @@ class StatusRepository(
         config: AppConfig,
         pvThresholdW: Double,
         shutdownDelaySec: Int,
-        batteryShutoffW: Double,
-        batteryResumeW: Double,
         peerActiveW: Double,
         gridRestoreV: Double,
-        batteryReleaseGridV: Double,
-        batteryReleaseSocPct: Double,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!config.garageEnabled) return@withContext false
         postForm(
@@ -1335,12 +1482,8 @@ class StatusRepository(
             formPairs = listOf(
                 "pv_threshold_w" to pvThresholdW.toString(),
                 "shutdown_delay_sec" to shutdownDelaySec.toString(),
-                "battery_shutoff_w" to batteryShutoffW.toString(),
-                "battery_resume_w" to batteryResumeW.toString(),
                 "peer_active_w" to peerActiveW.toString(),
                 "grid_restore_v" to gridRestoreV.toString(),
-                "battery_release_grid_v" to batteryReleaseGridV.toString(),
-                "battery_release_soc_pct" to batteryReleaseSocPct.toString(),
             ),
         )
     }
@@ -1445,20 +1588,23 @@ class StatusRepository(
             dailyHome = json.optDoubleSafeAny("dailyHome", "daily_home"),
             dailyGrid = json.optDoubleSafeAny("dailyGrid", "daily_grid"),
             lastUpdate = json.optStringSafeAny(rtcTime, "last_update", "time"),
-            loadOnLocked = json.optBooleanSafe("load_on_locked"),
+            loadLock = json.optStringSafeAny("NONE", "load_lock"),
+            loadOverloadActive = json.optBooleanSafe("load_overload_active"),
+            loadBatteryProtectActive = json.optBooleanSafe("load_battery_protect_active"),
             batterySoc = json.optDoubleSafeAny("battery"),
             batteryPower = json.optDoubleSafeAny("battery_power"),
             mode = json.optStringSafeAny("---", "mode"),
             modeReason = json.optStringSafeAny("manual", "mode_reason"),
             loadMode = json.optStringSafeAny("---", "load_mode"),
             loadModeReason = json.optStringSafeAny("manual", "load_mode_reason"),
-            gridLogic = parseInverterGridLogic(json),
             loadLogic = parseInverterLoadLogic(json),
             gridRelayOn = json.optBooleanSafe("pin34_state"),
             gridPresent = gridPresent,
             gridRelayReason = json.optStringSafeAny("manual", "pin34_reason"),
             loadRelayOn = json.optBooleanSafe("pinLoad_state"),
             loadRelayReason = json.optStringSafeAny("manual", "pinLoad_reason"),
+            outputPriorityAuto = json.optBooleanSafe("output_priority_auto"),
+            outputPriorityAutoEtaSec = json.optNullableInt("output_priority_auto_eta_sec"),
             wifiStrength = json.optDoubleSafeAny("wifi_strength"),
             uptimeSec = json.optLongSafeAny("uptime"),
             rtcTime = rtcTime,
@@ -1497,6 +1643,9 @@ class StatusRepository(
             pumpStateReason = json.optStringSafeAny("manual", "pump_state_reason"),
             boilerLock = json.optStringSafeAny("NONE", "boiler_lock"),
             pumpLock = json.optStringSafeAny("NONE", "pump_lock"),
+            overloadActive = json.optBooleanSafe("overload_active"),
+            batteryProtectActive = json.optBooleanSafe("battery_protect_active"),
+            boilerRestartEtaSec = json.optNullableInt("boiler_restart_eta_sec"),
             boilerLogic = parseBoilerLogic(json),
             pumpLogic = parsePumpLogic(json),
             boiler1AutoWindowEnabled = json.optBooleanSafe("boiler_auto_window_enabled"),
@@ -1552,6 +1701,9 @@ class StatusRepository(
             boiler2On = json.optBooleanSafe("boiler_on"),
             boiler2StateReason = json.optStringSafeAny("manual", "boiler_state_reason"),
             boilerLock = json.optStringSafeAny("NONE", "boiler_lock"),
+            overloadActive = json.optBooleanSafe("overload_active"),
+            batteryProtectActive = json.optBooleanSafe("battery_protect_active"),
+            boilerRestartEtaSec = json.optNullableInt("boiler_restart_eta_sec"),
             boilerLogic = parseBoilerLogic(json),
             boiler2AutoWindowEnabled = json.optBooleanSafe("boiler_auto_window_enabled"),
             boiler2AutoWindowStart = json.optStringSafeAny("00:00", "boiler_auto_window_start"),
@@ -1590,26 +1742,16 @@ class StatusRepository(
         )
     }
 
-    private fun parseInverterGridLogic(json: JSONObject): InverterGridLogicConfig {
-        val nested = json.optJSONObject("grid_logic")
-        return InverterGridLogicConfig(
-            pvThresholdW = nested?.optDoubleSafeAny("pv_threshold_w") ?: 150.0,
-            offDelaySec = nested?.optInt("off_delay_sec", 300) ?: 300,
-            onDelaySec = nested?.optInt("on_delay_sec", 1800) ?: 1800,
-            forceGridOnW = nested?.optDoubleSafeAny("force_grid_on_w") ?: 3000.0,
-            batteryLowSocPct = nested?.optDoubleSafeAny("battery_low_soc_pct") ?: 70.0,
-            offMinSocPct = nested?.optDoubleSafeAny("off_min_soc_pct") ?: 85.0,
-        )
-    }
-
     private fun parseInverterLoadLogic(json: JSONObject): InverterLoadLogicConfig {
         val nested = json.optJSONObject("load_logic")
         return InverterLoadLogicConfig(
             pvThresholdW = nested?.optDoubleSafeAny("pv_threshold_w") ?: 100.0,
             shutdownDelaySec = nested?.optInt("shutdown_delay_sec", 120) ?: 120,
-            overloadPowerW = nested?.optDoubleSafeAny("overload_power_w") ?: 4500.0,
             gridRestoreV = nested?.optDoubleSafeAny("grid_restore_v") ?: 180.0,
-            overloadGridV = nested?.optDoubleSafeAny("overload_grid_v") ?: 190.0,
+            overloadOffW = nested?.optDoubleSafeAny("overload_off_w") ?: 5000.0,
+            overloadResumeW = nested?.optDoubleSafeAny("overload_resume_w") ?: 1500.0,
+            batteryDischargeOffW = nested?.optDoubleSafeAny("battery_discharge_off_w") ?: -3500.0,
+            batteryDischargeResumeW = nested?.optDoubleSafeAny("battery_discharge_resume_w") ?: -3000.0,
         )
     }
 
@@ -1618,12 +1760,12 @@ class StatusRepository(
         return BoilerLogicConfig(
             pvThresholdW = nested?.optDoubleSafeAny("pv_threshold_w") ?: 100.0,
             shutdownDelaySec = nested?.optInt("shutdown_delay_sec", 120) ?: 120,
-            batteryShutoffW = nested?.optDoubleSafeAny("battery_shutoff_w") ?: -1800.0,
-            batteryResumeW = nested?.optDoubleSafeAny("battery_resume_w") ?: 200.0,
-            peerActiveW = nested?.optDoubleSafeAny("peer_active_w") ?: 1000.0,
+            peerActiveW = nested?.optDoubleSafeAny("peer_active_w") ?: 500.0,
             gridRestoreV = nested?.optDoubleSafeAny("grid_restore_v") ?: 180.0,
-            batteryReleaseGridV = nested?.optDoubleSafeAny("battery_release_grid_v") ?: 190.0,
-            batteryReleaseSocPct = nested?.optDoubleSafeAny("battery_release_soc_pct") ?: 90.0,
+            overloadOffW = nested?.optDoubleSafeAny("overload_off_w") ?: 5000.0,
+            overloadResumeW = nested?.optDoubleSafeAny("overload_resume_w") ?: 1500.0,
+            batteryDischargeOffW = nested?.optDoubleSafeAny("battery_discharge_off_w") ?: -3500.0,
+            batteryDischargeResumeW = nested?.optDoubleSafeAny("battery_discharge_resume_w") ?: -3000.0,
         )
     }
 
@@ -1915,6 +2057,16 @@ private fun JSONObject.optNullableDouble(key: String): Double? {
 
 private fun JSONObject.optDoubleSafe(key: String): Double {
     return optNullableDouble(key) ?: 0.0
+}
+
+private fun JSONObject.optNullableInt(key: String): Int? {
+    val raw = opt(key)
+    if (raw == null || raw == JSONObject.NULL) return null
+    return when (raw) {
+        is Number -> raw.toInt()
+        is String -> raw.toIntOrNull()
+        else -> null
+    }
 }
 
 private fun JSONObject.optBooleanSafe(key: String): Boolean {

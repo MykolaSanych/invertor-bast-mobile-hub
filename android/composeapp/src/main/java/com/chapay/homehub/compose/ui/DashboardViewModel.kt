@@ -7,6 +7,8 @@ import com.chapay.homehub.compose.data.AppConfig
 import com.chapay.homehub.compose.data.AppConfigStorage
 import com.chapay.homehub.compose.data.StatusRepository
 import com.chapay.homehub.compose.data.UnifiedStatus
+import com.chapay.homehub.compose.data.VoltageLocalHistoryStore
+import com.chapay.homehub.compose.service.EventPollingServiceController
 import com.chapay.homehub.compose.widget.StatusWidgetProvider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -76,6 +78,23 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setInverterChargerPriority(value: Int) = applyInverterPriority(output = null, charger = value, label = "Пріоритет зарядки змінено")
 
+    /** Авто-перемикання пріоритету виходу (SBU/сонце, п.2 переробки). */
+    fun setInverterOutputAuto(enabled: Boolean) {
+        if (_inverterSettings.value.busy) return
+        viewModelScope.launch {
+            _inverterSettings.update { it.copy(busy = true, error = null, message = null) }
+            val result = runCatching { repository.setInverterOutputAuto(_uiState.value.config, enabled) }
+                .getOrElse { com.chapay.homehub.compose.data.InverterSetResult(false, null, it.message ?: "Помилка") }
+            _inverterSettings.update {
+                if (result.ok) {
+                    it.copy(busy = false, settings = result.settings ?: it.settings, message = if (enabled) "Авто-пріоритет увімкнено" else "Авто-пріоритет вимкнено", error = null)
+                } else {
+                    it.copy(busy = false, error = result.error ?: "Команда не виконана")
+                }
+            }
+        }
+    }
+
     private fun applyInverterPriority(output: Int?, charger: Int?, label: String) {
         if (_inverterSettings.value.busy) return
         viewModelScope.launch {
@@ -98,6 +117,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     init {
         val stored = AppConfigStorage.load(application)
         _uiState.update { it.copy(config = stored) }
+        if (stored.backgroundServiceEnabled) EventPollingServiceController.start(application)
         startPolling()
         startArchiveSync()
     }
@@ -119,7 +139,15 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun setConfig(config: AppConfig) {
+        val was = _uiState.value.config
         AppConfigStorage.save(getApplication(), config)
+        if (config.backgroundServiceEnabled != was.backgroundServiceEnabled) {
+            if (config.backgroundServiceEnabled) {
+                EventPollingServiceController.start(getApplication())
+            } else {
+                EventPollingServiceController.stop(getApplication())
+            }
+        }
         // Інші адреси/вимкнені модулі - старі "липкі" дані більше не актуальні.
         _uiState.update {
             it.copy(
@@ -156,6 +184,13 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             val unified = runCatching { repository.fetchUnified(config) }.getOrNull() ?: UnifiedStatus()
             val now = System.currentTimeMillis()
             val hasAnyData = unified.inverter != null || unified.loadController != null || unified.garage != null
+            // Власна 24-год історія напруг/заряду на телефоні - підстраховка на
+            // випадок, якщо модуль перезавантажився й втратив частину своєї
+            // (навіть флеш-) історії між двома відкриттями графіка. Третє поле -
+            // SOC АКБ (%), не напруга - інформативніше для цього графіка.
+            unified.inverter?.let {
+                VoltageLocalHistoryStore.recordIfDue(getApplication(), now, it.lineVoltage, it.pvVoltage, it.batterySoc)
+            }
 
             var merged: UnifiedStatus? = null
             _uiState.update { cur ->
@@ -207,16 +242,34 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         submitCommand { repository.setInverterLoadMode(_uiState.value.config, mode) }
     }
 
+    // NONE|ON|OFF - фіксація довгим натисканням (п.3а переробки). Короткий тап
+    // на ON/OFF лишається звичайною тимчасовою зміною режиму (setXMode вище).
+    fun setLoadLock(mode: String) {
+        submitCommand { repository.setInverterLoadLock(_uiState.value.config, mode) }
+    }
+
     fun setBoiler1Mode(mode: String) {
         submitCommand { repository.setBoiler1Mode(_uiState.value.config, mode) }
+    }
+
+    fun setBoiler1Lock(mode: String) {
+        submitCommand { repository.setBoiler1Lock(_uiState.value.config, mode) }
     }
 
     fun setPumpMode(mode: String) {
         submitCommand { repository.setPumpMode(_uiState.value.config, mode) }
     }
 
+    fun setPumpLock(mode: String) {
+        submitCommand { repository.setPumpLock(_uiState.value.config, mode) }
+    }
+
     fun setBoiler2Mode(mode: String) {
         submitCommand { repository.setBoiler2Mode(_uiState.value.config, mode) }
+    }
+
+    fun setBoiler2Lock(mode: String) {
+        submitCommand { repository.setBoiler2Lock(_uiState.value.config, mode) }
     }
 
     fun setBoiler1AutoWindow(enabled: Boolean, start: String, end: String) {

@@ -19,6 +19,12 @@ class StatusWidgetRefreshWorker(
             return Result.success()
         }
 
+        // Холодний старт процесу: піднімаємо останній дійсний знімок із диска, щоб
+        // mergeWithLastGoodAutoStatus нижче мав чим залатати модуль, який у фоні не
+        // відповів (ZeroTier у Doze) - інакше статус лишався б порожнім і віджет
+        // показував би "--" замість останніх відомих значень.
+        StatusWidgetProvider.primeFromDiskIfNeeded(applicationContext)
+
         // На цьому пристрої система/лаунчер кличе onUpdate() раз на ~9-10с - явно
         // частіше за задекларований updatePeriodMillis (поза нашим кодом, OS-квірк).
         // Кожен такий тик запускав повний мережевий опит трьох модулів і перемальовував

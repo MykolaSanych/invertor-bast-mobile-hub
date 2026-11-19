@@ -1,38 +1,31 @@
 package com.chapay.homehub.compose.data
 
-data class InverterGridLogicConfig(
-    val pvThresholdW: Double,
-    val offDelaySec: Int,
-    val onDelaySec: Int,
-    val forceGridOnW: Double,
-    val batteryLowSocPct: Double,
-    val offMinSocPct: Double,
-)
-
 data class InverterLoadLogicConfig(
     val pvThresholdW: Double,
     val shutdownDelaySec: Int,
-    val overloadPowerW: Double,
     val gridRestoreV: Double,
-    val overloadGridV: Double,
-)
+    val overloadOffW: Double,
+    val overloadResumeW: Double,
+    val batteryDischargeOffW: Double,
+    val batteryDischargeResumeW: Double,
+) : java.io.Serializable
 
 data class BoilerLogicConfig(
     val pvThresholdW: Double,
     val shutdownDelaySec: Int,
-    val batteryShutoffW: Double,
-    val batteryResumeW: Double,
     val peerActiveW: Double,
     val gridRestoreV: Double,
-    val batteryReleaseGridV: Double,
-    val batteryReleaseSocPct: Double,
-)
+    val overloadOffW: Double,
+    val overloadResumeW: Double,
+    val batteryDischargeOffW: Double,
+    val batteryDischargeResumeW: Double,
+) : java.io.Serializable
 
 data class PumpLogicConfig(
     val pvThresholdW: Double,
     val shutdownDelaySec: Int,
     val gridRestoreV: Double,
-)
+) : java.io.Serializable
 
 data class InverterStatus(
     val pvW: Double,
@@ -49,20 +42,26 @@ data class InverterStatus(
     val dailyHome: Double,
     val dailyGrid: Double,
     val lastUpdate: String,
-    val loadOnLocked: Boolean,
+    // NONE|ON|OFF - фіксація довгим натисканням (раніше було loadOnLocked: Boolean,
+    // фіксація лише на ON; тепер симетрично з бойлерами/насосом).
+    val loadLock: String,
+    val loadOverloadActive: Boolean,
+    val loadBatteryProtectActive: Boolean,
     val batterySoc: Double,
     val batteryPower: Double,
     val mode: String,
     val modeReason: String,
     val loadMode: String,
     val loadModeReason: String,
-    val gridLogic: InverterGridLogicConfig?,
     val loadLogic: InverterLoadLogicConfig?,
     val gridRelayOn: Boolean,
     val gridPresent: Boolean,
     val gridRelayReason: String,
     val loadRelayOn: Boolean,
     val loadRelayReason: String,
+    // Авто-перемикання пріоритету входу (SBU/сонце) - п.2 переробки.
+    val outputPriorityAuto: Boolean,
+    val outputPriorityAutoEtaSec: Int?,
     val wifiStrength: Double,
     val uptimeSec: Long,
     val rtcTime: String,
@@ -76,7 +75,7 @@ data class InverterStatus(
     val bmeExtTemp: Double?,
     val bmeExtHum: Double?,
     val bmeExtPress: Double?,
-)
+) : java.io.Serializable
 
 data class LoadControllerStatus(
     val boiler1Mode: String,
@@ -89,6 +88,9 @@ data class LoadControllerStatus(
     val pumpStateReason: String,
     val boilerLock: String,
     val pumpLock: String,
+    val overloadActive: Boolean,
+    val batteryProtectActive: Boolean,
+    val boilerRestartEtaSec: Int?,
     val boilerLogic: BoilerLogicConfig?,
     val pumpLogic: PumpLogicConfig?,
     val boiler1AutoWindowEnabled: Boolean,
@@ -120,7 +122,7 @@ data class LoadControllerStatus(
     val bmeTemp: Double?,
     val bmeHum: Double?,
     val bmePress: Double?,
-)
+) : java.io.Serializable
 
 data class GarageStatus(
     val boiler2Mode: String,
@@ -128,6 +130,9 @@ data class GarageStatus(
     val boiler2On: Boolean,
     val boiler2StateReason: String,
     val boilerLock: String,
+    val overloadActive: Boolean,
+    val batteryProtectActive: Boolean,
+    val boilerRestartEtaSec: Int?,
     val boilerLogic: BoilerLogicConfig?,
     val boiler2AutoWindowEnabled: Boolean,
     val boiler2AutoWindowStart: String,
@@ -161,7 +166,7 @@ data class GarageStatus(
     val bmeTemp: Double?,
     val bmeHum: Double?,
     val bmePress: Double?,
-)
+) : java.io.Serializable
 
 data class UnifiedStatus(
     val inverter: InverterStatus? = null,
@@ -169,7 +174,7 @@ data class UnifiedStatus(
     val garage: GarageStatus? = null,
     val updatedAtMs: Long = System.currentTimeMillis(),
     val fromMulticast: Boolean = false,
-)
+) : java.io.Serializable
 
 /**
  * Режим і налаштування пріоритетів інвертора (Voltronic PI30), як їх віддає /api/inverter/settings.
@@ -180,6 +185,20 @@ data class InverterSettings(
     val mode: String?,
     val outputPriority: Int?,
     val chargerPriority: Int?,
+    // Авто-перемикання SBU/сонце (п.2 переробки).
+    val outputPriorityAuto: Boolean = false,
+    val outputPriorityAutoEtaSec: Int? = null,
 )
 
 data class InverterSetResult(val ok: Boolean, val settings: InverterSettings?, val error: String?)
+
+/**
+ * Одна точка 24-годинної історії напруг (мережа/сонце/АКБ) - з денних файлів
+ * на модулі (переживають перезапуск). epochSec - АБСОЛЮТНИЙ час вимірювання
+ * (секунди з 1970, локальний час модуля/телефона), а не "скільки тому" - вісь
+ * графіка показує реальний час замірів, а не відносний вік.
+ */
+data class VoltageHistoryPoint(val epochSec: Long, val grid: Double, val pv: Double, val battery: Double)
+
+/** intervalSec - крок між точками буфера; points - від найстарішої до найновішої. */
+data class VoltageHistoryResult(val intervalSec: Int, val points: List<VoltageHistoryPoint>)

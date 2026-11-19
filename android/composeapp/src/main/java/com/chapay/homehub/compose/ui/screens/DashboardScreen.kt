@@ -96,6 +96,8 @@ fun DashboardScreen(
     inverterSettingsLoading: Boolean = false,
     // module: "invertor-bast" / "load_controller" / "garage" - чий журнал відкрити.
     onOpenJournal: (module: String) -> Unit = {},
+    // metric: "grid" / "pv" / "battery" - 24-годинний графік якої напруги відкрити.
+    onOpenVoltageChart: (metric: String) -> Unit = {},
 ) {
     val inverter = uiState.status.inverter
     val loadController = uiState.status.loadController
@@ -146,6 +148,8 @@ fun DashboardScreen(
                         busy = inverterSettingsLoading,
                         onClick = { onOpenInverterSettings("output") },
                         onOpenJournal = { onOpenJournal("pv") },
+                        onOpenVoltageChart = { onOpenVoltageChart("pv") },
+                        updatedAtMs = uiState.inverterAtMs,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "напруга" to "${formatVolts(it.pvVoltage)} В" },
@@ -161,6 +165,7 @@ fun DashboardScreen(
                         accent = AccentGrid,
                         icon = Icons.Filled.ElectricBolt,
                         iconTint = gridIndicatorColor(inverter),
+                        updatedAtMs = uiState.inverterAtMs,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "режим" to it.mode },
@@ -170,6 +175,7 @@ fun DashboardScreen(
                         ),
                         onClick = { onOpenDevice("grid") },
                         onOpenJournal = { onOpenJournal("grid") },
+                        onOpenVoltageChart = { onOpenVoltageChart("grid") },
                     )
                 }
                 CardRow {
@@ -183,6 +189,8 @@ fun DashboardScreen(
                         busy = inverterSettingsLoading,
                         onClick = { onOpenInverterSettings("charger") },
                         onOpenJournal = { onOpenJournal("battery") },
+                        onOpenVoltageChart = { onOpenVoltageChart("battery") },
+                        updatedAtMs = uiState.inverterAtMs,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "напруга" to "${formatVolts(it.batteryVoltage)} В" },
@@ -197,6 +205,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentLoad,
                         icon = Icons.Filled.Power,
+                        updatedAtMs = uiState.inverterAtMs,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             inverter?.let { "режим" to it.loadMode },
@@ -215,6 +224,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentBoiler,
                         icon = Icons.Filled.Whatshot,
+                        updatedAtMs = uiState.loadAtMs,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             loadController?.let { "режим" to it.boiler1Mode },
@@ -232,6 +242,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentPump,
                         icon = Icons.Filled.Water,
+                        updatedAtMs = uiState.loadAtMs,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         details = listOfNotNull(
                             loadController?.let { "режим" to it.pumpMode },
@@ -260,6 +271,7 @@ fun DashboardScreen(
                         unit = "Вт",
                         accent = AccentBoiler,
                         icon = Icons.Filled.Whatshot,
+                        updatedAtMs = uiState.garageAtMs,
                         modifier = Modifier.weight(1f),
                         details = listOfNotNull(
                             garage?.let { "режим" to it.boiler2Mode },
@@ -425,10 +437,19 @@ private fun GateCard(
                 color = TextMuted,
             )
             Spacer(Modifier.height(12.dp))
+            // Колір кнопки воріт показує ПОТОЧНИЙ СТАН (а не дію, як підпис):
+            // зелена - зачинено (безпечно), червона - будь-що інше (відчинено/
+            // рух/невідомо - варто звернути увагу), сіра - немає даних.
+            val gateButtonColor = when {
+                disabled -> SurfaceContainerHigh
+                stateKey == "closed" -> StatusGood
+                else -> StatusAlert
+            }
+            val gateButtonContentColor = if (disabled) TextPrimary else Color(0xFF0D0F16)
             Button(
                 onClick = onTriggerGate,
                 enabled = !disabled,
-                colors = ButtonDefaults.buttonColors(containerColor = AccentGate),
+                colors = ButtonDefaults.buttonColors(containerColor = gateButtonColor, contentColor = gateButtonContentColor),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(gateAction.icon, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -436,10 +457,13 @@ private fun GateCard(
                 Text(if (disabled) "--" else gateAction.label)
             }
             Spacer(Modifier.height(6.dp))
+            // Кнопка світла - жовта, коли увімкнено, темна (як і решта), коли вимкнено.
+            val lightButtonColor = if (lightOn) AccentPv else SurfaceContainerHigh
+            val lightButtonContentColor = if (lightOn) Color(0xFF0D0F16) else TextPrimary
             Button(
                 onClick = onToggleLight,
                 enabled = !disabled,
-                colors = ButtonDefaults.buttonColors(containerColor = SurfaceContainerHigh, contentColor = TextPrimary),
+                colors = ButtonDefaults.buttonColors(containerColor = lightButtonColor, contentColor = lightButtonContentColor),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Filled.Lightbulb, contentDescription = null, modifier = Modifier.size(16.dp))

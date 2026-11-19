@@ -1,6 +1,9 @@
 package com.chapay.homehub.compose.ui.screens
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,22 +13,32 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ShowChart
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,6 +59,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,6 +81,7 @@ import com.chapay.homehub.compose.ui.theme.OutlineSubtle
 import com.chapay.homehub.compose.ui.theme.SurfaceContainer
 import com.chapay.homehub.compose.ui.theme.SurfaceContainerHigh
 import com.chapay.homehub.compose.ui.theme.TextMuted
+import com.chapay.homehub.compose.ui.theme.TextPrimary
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import kotlin.math.abs
@@ -112,10 +127,15 @@ private val MONTH_FULL = listOf(
     "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень",
 )
 
-// Кроки підписів осі X доби (хв).
-private val MINUTE_TICK_STEPS = intArrayOf(1, 2, 5, 10, 15, 30, 60, 120, 180)
-
-private fun hhmm(minute: Int): String = "%d:%02d".format(minute / 60, minute % 60)
+// Заголовок шапки замість громіздкого рядка керування, який тепер під "сендвічем".
+private fun periodTitleFor(period: EnergyPeriod, anchor: String): String = when (period) {
+    EnergyPeriod.DAY -> anchor
+    EnergyPeriod.MONTH -> {
+        val month = anchor.substring(5, 7).toIntOrNull() ?: 1
+        "${MONTH_FULL.getOrElse(month - 1) { "" }} ${anchor.take(4)}"
+    }
+    EnergyPeriod.YEAR -> anchor.take(4)
+}
 
 private fun daysIn(year: Int, month: Int): Int {
     val cal = java.util.Calendar.getInstance()
@@ -124,15 +144,20 @@ private fun daysIn(year: Int, month: Int): Int {
 }
 
 private fun buildAxis(period: EnergyPeriod, stepMinutes: Int, anchor: String): XAxis = when (period) {
+    // Секунди доби (не хвилини) - та сама одиниця, що й у TimelineBody нижче, тож
+    // обидва графіки поділяють один viewport і одну лінійку часу (див. dayViewport
+    // в EnergyChartScreen). tickSteps/maxTicks тут не беруть участі в прорисовці
+    // DAY (showXAxisLabels=false - кроки сітки бере tickStepFor з TimelineScreen),
+    // лишені для узгодженості типу XAxis.
     EnergyPeriod.DAY -> XAxis(
-        domainMax = (1440 - stepMinutes).coerceAtLeast(1).toFloat(),
-        pointWidth = stepMinutes.toFloat(),
-        maxBridge = stepMinutes * 6f,
-        minSpan = (stepMinutes * 2).toFloat(),
-        tickSteps = MINUTE_TICK_STEPS,
+        domainMax = ((1440 - stepMinutes) * 60).coerceAtLeast(1).toFloat(),
+        pointWidth = (stepMinutes * 60).toFloat(),
+        maxBridge = stepMinutes * 60 * 6f,
+        minSpan = (stepMinutes * 60 * 2).toFloat(),
+        tickSteps = TICK_STEPS,
         maxTicks = 8f,
-        tickLabel = { hhmm(it) },
-        pointTitle = { "${hhmm(it)}-${hhmm(it + stepMinutes)}" },
+        tickLabel = { hm(it) },
+        pointTitle = { "${hm(it)}-${hm(it + stepMinutes * 60)}" },
         energyUnits = false,
     )
     EnergyPeriod.MONTH -> {
@@ -175,7 +200,7 @@ private fun parseDay(payload: JSONObject): LoadedPeriod {
             val row = slotsArr.optJSONObject(i) ?: continue
             parsed.add(
                 ChartPoint(
-                    x = row.optInt("m", i * 15),
+                    x = row.optInt("m", i * 15) * 60,
                     pv = row.optDouble("pv_w", 0.0),
                     home = row.optDouble("home_w", 0.0),
                     grid = row.optDouble("grid_w", 0.0),
@@ -190,7 +215,7 @@ private fun parseDay(payload: JSONObject): LoadedPeriod {
                 val row = hoursArr.optJSONObject(i) ?: continue
                 parsed.add(
                     ChartPoint(
-                        x = row.optInt("hour", i) * 60,
+                        x = row.optInt("hour", i) * 3600,
                         pv = row.optDouble("pv", 0.0),
                         home = row.optDouble("home", 0.0),
                         grid = row.optDouble("grid", 0.0),
@@ -413,69 +438,36 @@ fun EnergyChartScreen(
 
     val axis = buildAxis(period, stepMinutes, anchor)
     val viewport = rememberChartViewport(period to periodKey, 0f, axis.domainMax, axis.minSpan)
+    // Доба: графік потужності й хронологія (TimelineBody нижче) ділять ОДИН і той самий
+    // (секундний) viewport, тож масштаб/зсув синхронні, а вертикальна лінійка часу - спільна
+    // (хронологія малює підписи, графік - лише сітку без підписів, див. showXAxisLabels нижче).
+    val dayViewport = rememberChartViewport(anchor, 0f, SECONDS_IN_DAY.toFloat(), MIN_VIEW_SECONDS)
+    val activeViewport = if (period == EnergyPeriod.DAY) dayViewport else viewport
 
     fun totalText(wh: Double) =
         if (period == EnergyPeriod.DAY) "${wh.roundToInt()} Вт·год" else "%.1f кВт·год".format(wh / 1000.0)
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Графік енергії") },
-                navigationIcon = {
-                    if (onBack != null) {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
-                        }
-                    }
-                },
-                actions = {
-                    if (!pieMode) ChartToolbarActions(viewport)
-                },
-            )
-        },
-    ) { innerPadding ->
+    // Усі елементи керування (дата/період/вигляд/видимість ліній/масштаб) - під
+    // кнопкою-"сендвічем", яка сама лежить ПОВЕРХ графіка (плаваюча, без окремого
+    // рядкашапки), а не в окремій TopAppBar - це і звільняє максимум висоти для
+    // графіка+хронології, як просив користувач.
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Box(Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
                 .padding(horizontal = 12.dp, vertical = 4.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PeriodNavHeader(
-                    anchor = anchor,
-                    granularity = period.granularity,
-                    onChange = { anchor = it },
-                    modifier = Modifier.weight(1f),
-                )
-                SingleChoiceSegmentedButtonRow {
-                    EnergyPeriod.entries.forEachIndexed { index, item ->
-                        SegmentedButton(
-                            selected = period == item,
-                            onClick = { period = item },
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = EnergyPeriod.entries.size),
-                        ) { Text(item.label, maxLines = 1) }
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
-                SingleChoiceSegmentedButtonRow {
-                    SegmentedButton(
-                        selected = !pieMode,
-                        onClick = { pieMode = false },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    ) { Text("Лінії", maxLines = 1) }
-                    SegmentedButton(
-                        selected = pieMode,
-                        onClick = { pieMode = true },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    ) { Text("Діаграма", maxLines = 1) }
-                }
-            }
             if (pieMode) {
                 EnergyPieSection(
                     status = status,
                     savedTotals = savedTotals,
                     isToday = period == EnergyPeriod.DAY && isToday,
-                    modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 4.dp),
+                    // Зверху - місце під плаваючі сендвіч/перемикач-кнопки (лежать поверх усього
+                    // екрана в тому самому куті): без цього відступу власний рядок фільтрів
+                    // діаграми ("Джерела"/"Споживачі"/...) ховався б під ними.
+                    modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 52.dp),
                     dayMode = period == EnergyPeriod.DAY,
                     periodLabel = when (period) {
                         EnergyPeriod.DAY -> "За добу"
@@ -484,23 +476,6 @@ fun EnergyChartScreen(
                     },
                 )
             } else {
-                SummaryLegendRow(
-                    totals = listOf(totalText(shownTotals.first), totalText(shownTotals.second), totalText(shownTotals.third)),
-                    unitNote = when (period) {
-                        EnergyPeriod.DAY -> if (stepMinutes == 15) "Вт, середня за 15 хв" else "Вт, середня за годину"
-                        EnergyPeriod.MONTH -> "кВт·год за добу"
-                        EnergyPeriod.YEAR -> "кВт·год за місяць"
-                    },
-                    visible = listOf(showPv, showHome, showGrid),
-                    onToggle = { index ->
-                        when (index) {
-                            0 -> showPv = !showPv
-                            1 -> showHome = !showHome
-                            else -> showGrid = !showGrid
-                        }
-                    },
-                )
-                Spacer(Modifier.height(6.dp))
                 when {
                     loading -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
@@ -510,7 +485,7 @@ fun EnergyChartScreen(
                         EnergyLineChart(
                             points = points,
                             axis = axis,
-                            viewport = viewport,
+                            viewport = activeViewport,
                             visible = listOf(showPv, showHome, showGrid),
                             cursorX = cursorX,
                             onCursor = { cursorX = it },
@@ -519,7 +494,14 @@ fun EnergyChartScreen(
                                 EnergyPeriod.MONTH -> "немає даних за цей місяць"
                                 EnergyPeriod.YEAR -> "немає даних за цей рік"
                             },
-                            modifier = Modifier.fillMaxWidth().weight(1f),
+                            // Доба: підписи часу малює лише хронологія нижче (одна спільна
+                            // лінійка), а лівий відступ збігається з її labelWidthPx (72dp),
+                            // щоб вертикальні лінії обох графіків читались в один стовпчик.
+                            leftMarginDp = if (period == EnergyPeriod.DAY) 72.dp else 44.dp,
+                            showXAxisLabels = period != EnergyPeriod.DAY,
+                            // 3:2 із хронологією нижче (трохи більше їй, за проханням) -
+                            // обидва в тому самому Column ділять залишок висоти за вагою.
+                            modifier = Modifier.fillMaxWidth().weight(3f),
                         )
                         if (unsavedHomeWh > 50.0) {
                             Text(
@@ -533,6 +515,150 @@ fun EnergyChartScreen(
                         }
                     }
                 }
+                // Хронологія роботи обладнання - лише для доби (таймлайн по
+                // суті й показує саме один день), на тому самому екрані, що й
+                // графік потужності, щоб порівнювати навантаження з тим, яке
+                // обладнання в цей момент реально працювало - одним поглядом,
+                // без перемикання вкладок. Без заголовка - курсор/підписи рядків
+                // прямо на графіку й так досить зрозумілі.
+                if (period == EnergyPeriod.DAY) {
+                    HorizontalDivider(color = OutlineSubtle, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
+                    TimelineBody(
+                        date = anchor,
+                        config = config,
+                        repository = repository,
+                        compact = true,
+                        externalViewport = dayViewport,
+                        // Той самий курсор, що й у графіка вище - рухається синхронно.
+                        externalCursor = cursorX,
+                        onExternalCursorChange = { cursorX = it },
+                        modifier = Modifier.fillMaxWidth().weight(2f),
+                    )
+                }
+            }
+        }
+
+        // DropdownMenu - це Popup, а Popup НЕ успадковує graphicsLayer-поворот від
+        // LandscapeInPortrait: меню показувалось в нормальній орієнтації, "боком"
+        // відносно вже повернутого графіка позаду. Тому тут - звичайний Surface у
+        // тому самому дереві композиції (не Popup), він обертається разом з усім
+        // іншим. Напівпрозорий скрим на весь екран замінює автоматичне закриття
+        // Popup дотиком поза ним.
+        if (menuExpanded) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { menuExpanded = false },
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(4.dp),
+        ) {
+            IconButton(
+                onClick = { menuExpanded = true },
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(SurfaceContainerHigh.copy(alpha = 0.85f), CircleShape),
+            ) {
+                Icon(Icons.Filled.Menu, contentDescription = "Керування графіком", tint = TextPrimary)
+            }
+            if (menuExpanded) {
+                Surface(
+                    color = SurfaceContainerHigh,
+                    shape = RoundedCornerShape(12.dp),
+                    tonalElevation = 6.dp,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.padding(top = 40.dp).widthIn(max = 300.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()).padding(vertical = 8.dp),
+                    ) {
+                        if (onBack != null) {
+                            DropdownMenuItem(
+                                text = { Text("Назад") },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) },
+                                onClick = { menuExpanded = false; onBack() },
+                            )
+                            HorizontalDivider()
+                        }
+                        Text(
+                            periodTitleFor(period, anchor),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = TextPrimary,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                        PeriodNavHeader(
+                            anchor = anchor,
+                            granularity = period.granularity,
+                            onChange = { anchor = it },
+                            modifier = Modifier.width(260.dp),
+                        )
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                            EnergyPeriod.entries.forEachIndexed { index, item ->
+                                SegmentedButton(
+                                    selected = period == item,
+                                    onClick = { period = item },
+                                    shape = SegmentedButtonDefaults.itemShape(index = index, count = EnergyPeriod.entries.size),
+                                ) { Text(item.label, maxLines = 1) }
+                            }
+                        }
+                        // Перемикач Лінії/Діаграма - окрема завжди видима кнопка поруч із
+                        // сендвічем (не тут): користувач раніше не знаходив її захованою в
+                        // прокрутному меню, тому дублювати її тут більше не варто.
+                        if (!pieMode) {
+                            HorizontalDivider()
+                            SummaryLegendRow(
+                                totals = listOf(totalText(shownTotals.first), totalText(shownTotals.second), totalText(shownTotals.third)),
+                                unitNote = when (period) {
+                                    EnergyPeriod.DAY -> if (stepMinutes == 15) "Вт, середня за 15 хв" else "Вт, середня за годину"
+                                    EnergyPeriod.MONTH -> "кВт·год за добу"
+                                    EnergyPeriod.YEAR -> "кВт·год за місяць"
+                                },
+                                visible = listOf(showPv, showHome, showGrid),
+                                onToggle = { index ->
+                                    when (index) {
+                                        0 -> showPv = !showPv
+                                        1 -> showHome = !showHome
+                                        else -> showGrid = !showGrid
+                                    }
+                                },
+                                modifier = Modifier.width(280.dp).padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                            HorizontalDivider()
+                            Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                                ChartToolbarActions(activeViewport)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Перемикач Лінії/Діаграма - окрема завжди видима кнопка поруч із сендвічем
+        // (не всередині нього): раніше цей перемикач був лише в прокрутному меню,
+        // і користувач не міг його там знайти.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 44.dp, top = 4.dp),
+        ) {
+            IconButton(
+                onClick = { pieMode = !pieMode },
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(SurfaceContainerHigh.copy(alpha = 0.85f), CircleShape),
+            ) {
+                Icon(
+                    imageVector = if (pieMode) Icons.AutoMirrored.Filled.ShowChart else Icons.Filled.PieChart,
+                    contentDescription = if (pieMode) "Показати лінії" else "Показати діаграму",
+                    tint = TextPrimary,
+                )
             }
         }
     }
@@ -548,9 +674,10 @@ private fun SummaryLegendRow(
     unitNote: String,
     visible: List<Boolean>,
     onToggle: (Int) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        modifier = modifier.padding(horizontal = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -580,6 +707,11 @@ private fun EnergyLineChart(
     onCursor: (Float?) -> Unit,
     emptyText: String,
     modifier: Modifier = Modifier,
+    leftMarginDp: Dp = 44.dp,
+    // Доба: хронологія під графіком малює ЄДИНУ спільну лінійку часу (підписи +
+    // сітка), тож тут - лише слабка вертикальна сітка без підписів, щоб не дублювати
+    // той самий текст двічі й звільнити висоту під сам графік.
+    showXAxisLabels: Boolean = true,
 ) {
     if (points.isEmpty()) {
         Text(emptyText, color = TextMuted, modifier = modifier.padding(16.dp))
@@ -597,7 +729,7 @@ private fun EnergyLineChart(
     }
 
     val density = LocalDensity.current
-    val leftMarginPx = with(density) { 44.dp.toPx() }
+    val leftMarginPx = with(density) { leftMarginDp.toPx() }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     // Розмір полотна читаємо в момент виклику (жести живуть довше за кадр).
     fun plotWidthPx() = (canvasSize.width - leftMarginPx).coerceAtLeast(1f)
@@ -634,7 +766,10 @@ private fun EnergyLineChart(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(start = 8.dp, end = 16.dp, top = 12.dp, bottom = 8.dp)
+                // Рівний відступ з усіх боків (як у TimelineChart): разом з однаковим
+                // leftMarginDp/labelWidthPx це вирівнює ліву межу області графіка в обох
+                // картках по вертикалі (доба) - потрібне для спільної лінійки часу.
+                .padding(12.dp)
                 .onSizeChanged { canvasSize = it }
                 .chartGestures(
                     key = Unit,
@@ -648,7 +783,7 @@ private fun EnergyLineChart(
                 ),
         ) {
             val plotLeft = leftMarginPx
-            val bottomMargin = 22.dp.toPx()
+            val bottomMargin = if (showXAxisLabels) 22.dp.toPx() else 4.dp.toPx()
             val plotTop = 6.dp.toPx()
             val plotW = size.width - plotLeft
             val plotH = size.height - plotTop - bottomMargin
@@ -681,19 +816,32 @@ private fun EnergyLineChart(
             }
 
             clipRect(left = plotLeft, top = 0f, right = size.width, bottom = size.height) {
-                // Підписи осі X - крок залежить від масштабу.
-                val step = axis.tickSteps.firstOrNull { vSpan / it <= axis.maxTicks } ?: axis.tickSteps.last()
-                var tick = (ceil(v0 / step) * step).toInt()
-                while (tick <= v0 + vSpan) {
-                    val x = xAt(tick.toFloat())
-                    val label = axis.tickLabel(tick)
-                    drawContext.canvas.nativeCanvas.drawText(
-                        label,
-                        x - axisPaint.measureText(label) / 2f,
-                        size.height - 4.dp.toPx(),
-                        axisPaint,
-                    )
-                    tick += step
+                if (showXAxisLabels) {
+                    // Підписи осі X - крок залежить від масштабу.
+                    val step = axis.tickSteps.firstOrNull { vSpan / it <= axis.maxTicks } ?: axis.tickSteps.last()
+                    var tick = (ceil(v0 / step) * step).toInt()
+                    while (tick <= v0 + vSpan) {
+                        val x = xAt(tick.toFloat())
+                        val label = axis.tickLabel(tick)
+                        drawContext.canvas.nativeCanvas.drawText(
+                            label,
+                            x - axisPaint.measureText(label) / 2f,
+                            size.height - 4.dp.toPx(),
+                            axisPaint,
+                        )
+                        tick += step
+                    }
+                } else {
+                    // Без підписів (їх малює спільна лінійка хронології нижче) - лише
+                    // вертикальна сітка, і саме тим самим кроком (tickStepFor), щоб лінії
+                    // обох графіків стояли в один стовпчик при синхронному масштабі.
+                    val step = tickStepFor(vSpan)
+                    var tick = (ceil(v0 / step) * step).toInt()
+                    while (tick <= v0 + vSpan) {
+                        val x = xAt(tick.toFloat())
+                        drawLine(OutlineSubtle, Offset(x, plotTop), Offset(x, plotTop + plotH), strokeWidth = 1f)
+                        tick += step
+                    }
                 }
 
                 // Лінії: тонкі (2dp). Сусідні точки з'єднуємо суцільно; коротку прогалину
