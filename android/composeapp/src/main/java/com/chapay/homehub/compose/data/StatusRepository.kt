@@ -530,7 +530,39 @@ class StatusRepository(
         payload?.optJSONArray("lines")?.let { arr -> List(arr.length()) { arr.optString(it) } }
     }
 
+    suspend fun peekLoadControllerHistory(config: AppConfig, date: String): JSONObject? = withContext(Dispatchers.IO) {
+        chartCache.get("history", chartCache.scopeOf(config.loadControllerBaseUrl), date.trim())?.payload
+    }
+
+    suspend fun peekGarageHistory(config: AppConfig, date: String): JSONObject? = withContext(Dispatchers.IO) {
+        chartCache.get("history", chartCache.scopeOf(config.garageBaseUrl), date.trim())?.payload
+    }
+
     // ---- Архів історії на телефоні ----
+
+    /**
+     * Частка часу "увімкнено" (0.0..1.0) за кожну ЗАКРИТУ добу з архіву на телефоні,
+     * з 15-хв прапорців /api/history ([baseUrl] - load_controller чи garage; [bit] -
+     * 0 бойлер, 1 насос (лише load_controller), 2 мережа, 3 сонце). Пропускає доби без
+     * жодного семпла (не "0% роботи", а "даних нема"). Основа для ліній "% часу роботи
+     * за добу" на графіку Місяць/Рік - глибина обмежена лише тим, що телефон уже
+     * встиг побачити (кеш росте з дня підключення, назад минуле не відновити).
+     */
+    suspend fun archivedUptimeRatios(baseUrl: String, bit: Int): Map<String, Double> = withContext(Dispatchers.IO) {
+        val scope = chartCache.scopeOf(baseUrl)
+        chartCache.listKeys("history", scope).mapNotNull { date ->
+            val entry = chartCache.get("history", scope, date) ?: return@mapNotNull null
+            if (!isClosedPeriod(PeriodKind.DAY, date, entry.savedAtMs)) return@mapNotNull null
+            val arr = entry.payload.optJSONArray("samples") ?: return@mapNotNull null
+            if (arr.length() == 0) return@mapNotNull null
+            var on = 0
+            for (i in 0 until arr.length()) {
+                val flags = arr.optJSONObject(i)?.optInt("f", 0) ?: 0
+                if ((flags shr bit) and 1 == 1) on++
+            }
+            date to (on.toDouble() / arr.length())
+        }.toMap()
+    }
 
     /** Підсумки закритих діб з архіву на телефоні: дата -> (сонце, навантаження, мережа) у Вт·год. */
     suspend fun archivedDailyTotals(config: AppConfig): Map<String, Triple<Double, Double, Double>> = withContext(Dispatchers.IO) {
@@ -547,6 +579,11 @@ class StatusRepository(
 
     // Дати, для яких лог-файлу на load_controller немає: не питаємо повторно за одну сесію.
     private val archiveMissingLogDates = mutableSetOf<String>()
+
+    // Окремі набори для load_controller/garage - той самий календарний день може бути
+    // відсутній на одному модулі й присутній на іншому, тож їх не можна ділити.
+    private val archiveMissingLcHistoryDates = mutableSetOf<String>()
+    private val archiveMissingGarageHistoryDates = mutableSetOf<String>()
 
     /**
      * Зберігає на телефоні всі закриті доби, яких там ще нема (інвертор: усі, що він має;
@@ -604,21 +641,51 @@ class StatusRepository(
             val scope = chartCache.scopeOf(config.loadControllerBaseUrl)
             val cal = Calendar.getInstance()
             var requests = 0
-            for (back in 1..35) {
+            // /api/history тримає 120 діб (глибше за 30-денну хронологію/журнал) -
+            // саме звідси рахується "% часу роботи за добу" для графіка Місяць/Рік.
+            for (back in 1..120) {
                 if (requests >= 40) break
                 cal.timeInMillis = System.currentTimeMillis()
                 cal.add(Calendar.DAY_OF_MONTH, -back)
                 val date = "%04d-%02d-%02d".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH))
-                val tl = chartCache.get("timeline", scope, date)
-                if (tl == null || !isClosedPeriod(PeriodKind.DAY, date, tl.savedAtMs)) {
-                    fetchLoadControllerTimeline(config, date)
+                if (back <= 35) {
+                    val tl = chartCache.get("timeline", scope, date)
+                    if (tl == null || !isClosedPeriod(PeriodKind.DAY, date, tl.savedAtMs)) {
+                        fetchLoadControllerTimeline(config, date)
+                        requests++
+                        delay(400)
+                    }
+                    val lg = chartCache.get("log", scope, date)
+                    if ((lg == null || !isClosedPeriod(PeriodKind.DAY, date, lg.savedAtMs)) && date !in archiveMissingLogDates) {
+                        val lines = fetchLoadControllerLogLines(config, date)
+                        if (lines == null) archiveMissingLogDates += date
+                        requests++
+                        delay(400)
+                    }
+                }
+                val h = chartCache.get("history", scope, date)
+                if ((h == null || !isClosedPeriod(PeriodKind.DAY, date, h.savedAtMs)) && date !in archiveMissingLcHistoryDates) {
+                    val got = fetchLoadControllerHistory(config, date)
+                    if (got == null) archiveMissingLcHistoryDates += date
                     requests++
                     delay(400)
                 }
-                val lg = chartCache.get("log", scope, date)
-                if ((lg == null || !isClosedPeriod(PeriodKind.DAY, date, lg.savedAtMs)) && date !in archiveMissingLogDates) {
-                    val lines = fetchLoadControllerLogLines(config, date)
-                    if (lines == null) archiveMissingLogDates += date
+            }
+        }
+
+        if (config.garageEnabled) {
+            val scope = chartCache.scopeOf(config.garageBaseUrl)
+            val cal = Calendar.getInstance()
+            var requests = 0
+            for (back in 1..120) {
+                if (requests >= 40) break
+                cal.timeInMillis = System.currentTimeMillis()
+                cal.add(Calendar.DAY_OF_MONTH, -back)
+                val date = "%04d-%02d-%02d".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH))
+                val h = chartCache.get("history", scope, date)
+                if ((h == null || !isClosedPeriod(PeriodKind.DAY, date, h.savedAtMs)) && date !in archiveMissingGarageHistoryDates) {
+                    val got = fetchGarageHistory(config, date)
+                    if (got == null) archiveMissingGarageHistoryDates += date
                     requests++
                     delay(400)
                 }
@@ -899,15 +966,21 @@ class StatusRepository(
         return fetchJsonResult(url, slowClient).json
     }
 
+    // 15-хв прапорці (бойлер/насос/мережа/сонце) + температура - глибша (120 діб), ніж
+    // /api/timeline (30 діб), тож саме це джерело для "% часу роботи за добу" на
+    // графіку Місяць/Рік. Кешується на диску (назавжди для закритих діб), як і хронологія.
     suspend fun fetchLoadControllerHistory(config: AppConfig, date: String = ""): JSONObject? = withContext(Dispatchers.IO) {
         if (!config.loadControllerEnabled) return@withContext null
-        val trimmedDate = date.trim()
-        fetchJsonWithAuth(
-            baseUrlRaw = config.loadControllerBaseUrl,
-            password = config.loadControllerPassword,
-            path = "/api/history",
-            query = if (trimmedDate.isEmpty()) emptyMap() else mapOf("date" to trimmedDate),
-        )
+        val requestedDate = date.trim().ifEmpty { todayIsoDate() }
+        val load: suspend () -> JSONObject? = {
+            fetchJsonWithAuth(
+                baseUrlRaw = config.loadControllerBaseUrl,
+                password = config.loadControllerPassword,
+                path = "/api/history",
+                query = mapOf("date" to requestedDate),
+            )
+        }
+        cachedJson("history", config.loadControllerBaseUrl, requestedDate, PeriodKind.DAY, currentTtlMs = 0L, load = load)
     }
 
     // Події зміни стану (бойлер/насос/мережа/сонце) з точністю до секунди:
@@ -936,13 +1009,20 @@ class StatusRepository(
         )
     }
 
-    suspend fun fetchGarageHistory(config: AppConfig): JSONObject? = withContext(Dispatchers.IO) {
+    // Той самий формат/кеш, що й у load_controller (garage отримав файлову історію
+    // 2026-11-20 - раніше все жило лише в RAM і губилось при перезавантаженні).
+    suspend fun fetchGarageHistory(config: AppConfig, date: String = ""): JSONObject? = withContext(Dispatchers.IO) {
         if (!config.garageEnabled) return@withContext null
-        fetchJsonWithAuth(
-            baseUrlRaw = config.garageBaseUrl,
-            password = config.garagePassword,
-            path = "/api/history",
-        )
+        val requestedDate = date.trim().ifEmpty { todayIsoDate() }
+        val load: suspend () -> JSONObject? = {
+            fetchJsonWithAuth(
+                baseUrlRaw = config.garageBaseUrl,
+                password = config.garagePassword,
+                path = "/api/history",
+                query = mapOf("date" to requestedDate),
+            )
+        }
+        cachedJson("history", config.garageBaseUrl, requestedDate, PeriodKind.DAY, currentTtlMs = 0L, load = load)
     }
 
     suspend fun fetchLoadControllerDailyLog(config: AppConfig, date: String): JSONObject? = withContext(Dispatchers.IO) {

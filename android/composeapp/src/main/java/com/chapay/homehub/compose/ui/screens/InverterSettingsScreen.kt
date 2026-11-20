@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
@@ -90,6 +91,7 @@ fun InverterOutputPriorityScreen(
     onRefresh: () -> Unit,
     onSetOutput: (Int) -> Unit,
     onSetAuto: (Boolean) -> Unit,
+    onOpenJournal: () -> Unit,
     onBack: () -> Unit,
 ) {
     InverterPriorityScreen(
@@ -99,6 +101,7 @@ fun InverterOutputPriorityScreen(
         current = state.settings?.outputPriority,
         onRefresh = onRefresh,
         onPick = onSetOutput,
+        onOpenJournal = onOpenJournal,
         onBack = onBack,
         auto = state.settings?.outputPriorityAuto ?: false,
         autoEtaSec = state.settings?.outputPriorityAutoEtaSec,
@@ -115,6 +118,7 @@ fun InverterChargerPriorityScreen(
     state: InverterSettingsUiState,
     onRefresh: () -> Unit,
     onSetCharger: (Int) -> Unit,
+    onOpenJournal: () -> Unit,
     onBack: () -> Unit,
 ) {
     InverterPriorityScreen(
@@ -124,6 +128,7 @@ fun InverterChargerPriorityScreen(
         current = state.settings?.chargerPriority,
         onRefresh = onRefresh,
         onPick = onSetCharger,
+        onOpenJournal = onOpenJournal,
         onBack = onBack,
     )
 }
@@ -137,6 +142,7 @@ private fun InverterPriorityScreen(
     current: Int?,
     onRefresh: () -> Unit,
     onPick: (Int) -> Unit,
+    onOpenJournal: () -> Unit,
     onBack: () -> Unit,
     auto: Boolean = false,
     autoEtaSec: Int? = null,
@@ -156,6 +162,9 @@ private fun InverterPriorityScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenJournal) {
+                        Icon(Icons.Filled.Article, contentDescription = "Журнал подій", tint = TextPrimary)
+                    }
                     IconButton(onClick = onRefresh, enabled = !state.loading && !state.busy) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Оновити")
                     }

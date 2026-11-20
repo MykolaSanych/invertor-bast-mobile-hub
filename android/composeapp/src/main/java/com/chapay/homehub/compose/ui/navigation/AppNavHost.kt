@@ -117,6 +117,9 @@ fun AppNavHost(
                             "boiler2" -> viewModel.setBoiler2AutoWindow(enabled, start, end)
                         }
                     },
+                    // key тут - те саме значення, що й ключ журнального фільтра
+                    // (grid/load/boiler1/pump/boiler2 - див. DEVICE_TITLES у JournalScreen).
+                    onOpenJournal = { navController.navigate("journal_device/$key") },
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -126,6 +129,7 @@ fun AppNavHost(
                     onRefresh = { scope.launch { viewModel.loadInverterSettings() } },
                     onSetOutput = viewModel::setInverterOutputPriority,
                     onSetAuto = viewModel::setInverterOutputAuto,
+                    onOpenJournal = { navController.navigate("journal_device/pv") },
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -134,6 +138,7 @@ fun AppNavHost(
                     state = inverterSettingsState,
                     onRefresh = { scope.launch { viewModel.loadInverterSettings() } },
                     onSetCharger = viewModel::setInverterChargerPriority,
+                    onOpenJournal = { navController.navigate("journal_device/battery") },
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -226,6 +231,7 @@ private fun MainPager(
                 inverterSettingsLoading = inverterSettingsLoading,
                 onOpenJournal = onOpenJournal,
                 onOpenVoltageChart = onOpenVoltageChart,
+                onOpenSirio = onOpenSirio,
             )
             PAGE_SCHEME -> SchemeScreen(
                 uiState = uiState,

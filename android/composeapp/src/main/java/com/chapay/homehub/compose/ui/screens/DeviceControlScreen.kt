@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.WarningAmber
@@ -85,6 +86,7 @@ fun DeviceControlScreen(
     onSetMode: (String) -> Unit,
     onSetLock: ((String) -> Unit)? = null,
     onSetAutoWindow: ((enabled: Boolean, start: String, end: String) -> Unit)? = null,
+    onOpenJournal: (() -> Unit)? = null,
     onBack: () -> Unit,
 ) {
     val inverter = uiState.status.inverter
@@ -160,6 +162,13 @@ fun DeviceControlScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+                actions = {
+                    if (onOpenJournal != null) {
+                        IconButton(onClick = onOpenJournal) {
+                            Icon(Icons.Filled.Article, contentDescription = "Журнал подій", tint = TextPrimary)
+                        }
                     }
                 },
             )
