@@ -772,7 +772,7 @@ fun EnergyChartScreen(
                             // Той самий курсор, що й у графіка вище - рухається синхронно.
                             externalCursor = cursorX,
                             onExternalCursorChange = { cursorX = it },
-                            modifier = Modifier.fillMaxWidth().height(260.dp),
+                            modifier = Modifier.fillMaxWidth().height(130.dp),
                         )
                     }
                 }

@@ -1,14 +1,24 @@
 package com.chapay.homehub.compose.ui.navigation
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -83,7 +93,6 @@ fun AppNavHost(
                     onOpenDevice = { key -> navController.navigate("device/$key") },
                     onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
                     onOpenInverterSettings = ::openInverterSettings,
-                    inverterSettingsLoading = inverterSettingsState.loading,
                     onOpenJournal = { device -> navController.navigate("journal_device/$device") },
                     onOpenVoltageChart = { metric -> navController.navigate("voltage_history/$metric") },
                     onOpenSirio = { navController.navigate(ROUTE_SIRIO) },
@@ -210,7 +219,6 @@ private fun MainPager(
     onOpenDevice: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenInverterSettings: (String) -> Unit,
-    inverterSettingsLoading: Boolean,
     onOpenJournal: (String) -> Unit,
     onOpenVoltageChart: (String) -> Unit,
     onOpenSirio: () -> Unit,
@@ -218,20 +226,19 @@ private fun MainPager(
     val uiState by viewModel.uiState.collectAsState()
     val pagerState = rememberPagerState(initialPage = PAGE_DASHBOARD, pageCount = { PAGE_COUNT })
 
+    Box(Modifier.fillMaxSize()) {
     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
         when (page) {
             PAGE_DASHBOARD -> DashboardScreen(
                 uiState = uiState,
                 onRefresh = viewModel::refreshNow,
-                onOpenDevice = onOpenDevice,
                 onOpenSettings = onOpenSettings,
                 onTriggerGate = viewModel::triggerGate,
                 onToggleLight = viewModel::toggleGarageLight,
-                onOpenInverterSettings = onOpenInverterSettings,
-                inverterSettingsLoading = inverterSettingsLoading,
                 onOpenJournal = onOpenJournal,
                 onOpenVoltageChart = onOpenVoltageChart,
                 onOpenSirio = onOpenSirio,
+                viewModel = viewModel,
             )
             PAGE_SCHEME -> SchemeScreen(
                 uiState = uiState,
@@ -259,6 +266,30 @@ private fun MainPager(
                     )
                 }
             }
+        }
+    }
+        // Крапочки - яка з 4 вкладок зараз (гортання - лише свайпом, без підписів);
+        // лишаються в природній (не повернутій) орієнтації навіть на "ландшафтній"
+        // вкладці графіка, бо вони - поза LandscapeInPortrait.
+        PageIndicatorDots(
+            pageCount = PAGE_COUNT,
+            currentPage = pagerState.currentPage,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+        )
+    }
+}
+
+@Composable
+private fun PageIndicatorDots(pageCount: Int, currentPage: Int, modifier: Modifier = Modifier) {
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        repeat(pageCount) { i ->
+            val active = i == currentPage
+            Box(
+                Modifier
+                    .size(if (active) 7.dp else 5.dp)
+                    .clip(CircleShape)
+                    .background(if (active) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.35f)),
+            )
         }
     }
 }

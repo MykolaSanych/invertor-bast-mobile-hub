@@ -57,10 +57,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,13 +82,19 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.chapay.homehub.compose.data.ConstellationLayoutStore
+import com.chapay.homehub.compose.data.DeviceTileLayout
+import com.chapay.homehub.compose.data.DeviceTileLayoutStore
 import com.chapay.homehub.compose.data.GarageStatus
 import com.chapay.homehub.compose.data.InverterStatus
 import com.chapay.homehub.compose.data.LoadControllerStatus
+import com.chapay.homehub.compose.data.TileGridPos
 import com.chapay.homehub.compose.ui.DashboardUiState
+import com.chapay.homehub.compose.ui.DashboardViewModel
 import com.chapay.homehub.compose.ui.theme.AccentBattery
 import com.chapay.homehub.compose.ui.theme.AccentBoiler
 import com.chapay.homehub.compose.ui.theme.AccentGate
@@ -103,6 +111,7 @@ import com.chapay.homehub.compose.ui.theme.SurfaceContainerHigh
 import com.chapay.homehub.compose.ui.theme.TextMuted
 import com.chapay.homehub.compose.ui.theme.TextPrimary
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
@@ -120,23 +129,23 @@ import kotlin.math.roundToInt
 fun DashboardScreen(
     uiState: DashboardUiState,
     onRefresh: () -> Unit,
-    onOpenDevice: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onTriggerGate: () -> Unit,
     onToggleLight: () -> Unit,
-    // focus: "output" (вузол сонця) або "charger" (ядро АКБ) - який пріоритет
-    // відкрити зверху на екрані режимів інвертора.
-    onOpenInverterSettings: (focus: String) -> Unit = {},
-    inverterSettingsLoading: Boolean = false,
     // module: "invertor-bast" / "load_controller" / "garage" - чий журнал відкрити.
     onOpenJournal: (module: String) -> Unit = {},
     // metric: "grid" / "pv" / "battery" - 24-годинний графік якої напруги відкрити.
     onOpenVoltageChart: (metric: String) -> Unit = {},
     // Насос Sirio - повний екран налаштувань (окрема прошивка, свій API). Поки
-    // частотник фізично не введено в експлуатацію, плитка "Насос" викликає
-    // звичайне реле (onOpenDevice("pump")), як і бойлери, - цей колбек лишається
-    // непідключеним тут (далі лишається у виклику зі Схеми, яку не чіпаємо).
+    // частотник фізично не введено в експлуатацію, насос - звичайне реле, як
+    // і бойлери, - цей колбек лишається непідключеним тут (далі лишається у
+    // виклику зі Схеми, яку не чіпаємо).
     onOpenSirio: () -> Unit = {},
+    // Меню пристроїв/інвертора тепер - діалог (шторка) поверх цього самого
+    // екрана, не окремий повноекранний маршрут (той лишається для Схеми) -
+    // тому тут потрібен прямий доступ до viewModel (дії керування, стан
+    // налаштувань інвертора), а не лише готові колбеки навігації.
+    viewModel: DashboardViewModel,
 ) {
     val inverter = uiState.status.inverter
     val loadController = uiState.status.loadController
@@ -147,9 +156,66 @@ fun DashboardScreen(
     val inverterStale = isStale(uiState.inverterAtMs)
     val loadStale = isStale(uiState.loadAtMs)
     val garageStale = isStale(uiState.garageAtMs)
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val inverterSettingsState by viewModel.inverterSettings.collectAsState()
     // Ворота - тепер компактна плитка (як і решта пристроїв, 4 в ряд), повне
     // керування (дія/світло) - у шторці знизу, а не окремою великою карткою.
     var gateSheetOpen by remember { mutableStateOf(false) }
+    // Решта пристроїв/інвертора - та сама ідея: діалог (шторка) замість
+    // повноекранного переходу. deviceKey - для [DeviceControlScreen]
+    // ("grid"/"load"/"boiler1"/"pump"/"boiler2"), inverterFocus - для
+    // [InverterOutputPriorityScreen]/[InverterChargerPriorityScreen]
+    // ("output"/"charger").
+    var openDeviceKey by remember { mutableStateOf<String?>(null) }
+    var openInverterFocus by remember { mutableStateOf<String?>(null) }
+    fun openInverterDialog(focus: String) {
+        if (!inverterSettingsState.loading) {
+            scope.launch {
+                viewModel.loadInverterSettings()
+                openInverterFocus = focus
+            }
+        }
+    }
+
+    // Плитки "Пристрої" - перетягувані (довге натискання + рух), прилипають
+    // до найближчої клітинки сітки 4х2 (TILE_GRID_COLS х TILE_GRID_ROWS);
+    // позиція зберігається локально й переживає перезапуск застосунку.
+    var tileLayout by remember { mutableStateOf(DeviceTileLayoutStore.load(context)) }
+    fun tilePos(key: String): TileGridPos = when (key) {
+        "boiler1" -> tileLayout.boiler1
+        "pump" -> tileLayout.pump
+        "boiler2" -> tileLayout.boiler2
+        else -> tileLayout.gate
+    }
+    fun withTilePos(l: DeviceTileLayout, key: String, pos: TileGridPos): DeviceTileLayout = when (key) {
+        "boiler1" -> l.copy(boiler1 = pos)
+        "pump" -> l.copy(pump = pos)
+        "boiler2" -> l.copy(boiler2 = pos)
+        else -> l.copy(gate = pos)
+    }
+    var draggingTileKey by remember { mutableStateOf<String?>(null) }
+    // Дельта перетягування в dp (не в клітинках) - для плавного руху пальцем;
+    // "прилипання" рахується лише в кінці жесту.
+    var tileDragOffsetDp by remember { mutableStateOf(Offset.Zero) }
+    fun endTileDrag(key: String) {
+        val base = tilePos(key)
+        val dCol = (tileDragOffsetDp.x / TILE_CELL_W_DP).roundToInt()
+        val dRow = (tileDragOffsetDp.y / TILE_CELL_H_DP).roundToInt()
+        val target = TileGridPos(
+            (base.col + dCol).coerceIn(0, TILE_GRID_COLS - 1),
+            (base.row + dRow).coerceIn(0, TILE_GRID_ROWS - 1),
+        )
+        if (target != base) {
+            val occupantKey = listOf("boiler1", "pump", "boiler2", "gate").firstOrNull { it != key && tilePos(it) == target }
+            var updated = withTilePos(tileLayout, key, target)
+            if (occupantKey != null) updated = withTilePos(updated, occupantKey, base)
+            tileLayout = updated
+            DeviceTileLayoutStore.save(context, tileLayout)
+        }
+        draggingTileKey = null
+        tileDragOffsetDp = Offset.Zero
+    }
 
     Scaffold(
         containerColor = Color(0xFF0A0C14),
@@ -162,11 +228,9 @@ fun DashboardScreen(
                     Brush.verticalGradient(listOf(Color(0xFF181C28), Color(0xFF0A0C14), Color(0xFF05060A))),
                 ),
         ) {
-            // Декоративне "живе" тло - дрейфуючі розмиті плями кольору (сонце/АКБ/
-            // мережа) і ледь помітні зорі, під усім вмістом.
-            AuroraBlob(color = AccentPv, size = 240.dp, offsetX = (-60).dp, offsetY = (-40).dp, periodMs = 22_000)
-            AuroraBlob(color = AccentGrid, size = 220.dp, offsetX = 190.dp, offsetY = 60.dp, periodMs = 19_000)
-            AuroraBlob(color = AccentBattery, size = 260.dp, offsetX = 40.dp, offsetY = 300.dp, periodMs = 26_000)
+            // Декоративні зорі під усім вмістом; розмиті кольорові плями (аврора)
+            // переїхали ВСЕРЕДИНУ EnergyConstellation - вони тепер прив'язані до
+            // сонця/мережі/АКБ і рухаються разом із ними при перетягуванні.
             StarField()
 
             Column(modifier = Modifier.fillMaxSize()) {
@@ -203,6 +267,8 @@ fun DashboardScreen(
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(18.dp),
                     ) {
+                        val pvVoltageNow = inverter?.pvVoltage
+                        val gridVoltageNow = pickLineVoltage(inverter, loadController, garage)
                         EnergyConstellation(
                             pvW = pickPvW(inverter, loadController, garage),
                             gridW = pickGridPowerW(inverter, loadController, garage),
@@ -212,17 +278,21 @@ fun DashboardScreen(
                             // PV/АКБ/вихід - лише інвертор їх реально міряє (окремі DC/вихідні
                             // кола); мережева напруга - спільна шина, тож як і gridW/loadW,
                             // бере перше доступне з будь-якого з трьох модулів.
-                            pvVoltage = inverter?.pvVoltage,
-                            gridVoltage = pickLineVoltage(inverter, loadController, garage),
+                            pvVoltage = pvVoltageNow,
+                            gridVoltage = gridVoltageNow,
                             loadVoltage = inverter?.outputVoltage,
                             batteryVoltage = inverter?.batteryVoltage,
-                            pvOn = pvIndicatorColor(inverter) == AccentPv,
-                            gridOn = inverter?.gridPresent == true,
-                            inverterBusy = inverterSettingsLoading,
-                            onTapSun = { onOpenInverterSettings("output") },
-                            onTapGrid = { onOpenDevice("grid") },
-                            onTapLoad = { onOpenDevice("load") },
-                            onTapBattery = { onOpenInverterSettings("charger") },
+                            // "Активний" тут - за напругою (>=150В), не за firmware-прапорцем
+                            // gridPresent чи окремим порогом pvIndicatorColor (той лишається
+                            // для Схеми, яку не чіпаємо): нижче 150В значок чорніє і сяйво
+                            // гасне на цьому самому вузлі.
+                            pvOn = (pvVoltageNow ?: 0.0) >= NODE_ACTIVE_VOLTAGE,
+                            gridOn = (gridVoltageNow ?: 0.0) >= NODE_ACTIVE_VOLTAGE,
+                            inverterBusy = inverterSettingsState.loading,
+                            onTapSun = { openInverterDialog("output") },
+                            onTapGrid = { openDeviceKey = "grid" },
+                            onTapLoad = { openDeviceKey = "load" },
+                            onTapBattery = { openInverterDialog("charger") },
                             modifier = Modifier.fillMaxWidth().alpha(if (inverterStale) 0.6f else 1f),
                         )
 
@@ -234,89 +304,134 @@ fun DashboardScreen(
                                 Text("Пристрої", style = MaterialTheme.typography.titleSmall, color = TextPrimary, fontWeight = FontWeight.Bold)
                                 Text("торкніться", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                             }
-                            // Один ряд, 4 рівні плитки - компактніше й ближче до
-                            // макету; кожна плитка тьмяніє за СВОЇМ модулем.
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                val boiler1On = loadController?.boiler1On == true
-                                DeviceTile(
-                                    name = "Бойлер 1",
-                                    stateText = if (loadController == null) "--" else if (boiler1On) "увімк." else "вимк.",
-                                    stateColor = if (boiler1On) StatusGood else TextMuted,
-                                    iconBg = AccentBoiler.copy(alpha = if (boiler1On) 0.18f else 0.08f),
-                                    glowColor = AccentBoiler,
-                                    on = boiler1On,
-                                    onClick = { onOpenDevice("boiler1") },
-                                    modifier = Modifier.weight(1f).alpha(if (loadStale) 0.6f else 1f),
-                                ) { FlickerIcon(Icons.Filled.Whatshot, AccentBoiler, boiler1On) }
+                            // Сітка замість ряду - кожну плитку можна перетягнути пальцем
+                            // (довге натискання + рух), прилипає до найближчої клітинки;
+                            // позиція за замовчуванням - той самий порядок зліва направо.
+                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                                Box(modifier = Modifier.size(width = (TILE_CELL_W_DP * TILE_GRID_COLS).dp, height = (TILE_CELL_H_DP * TILE_GRID_ROWS).dp)) {
+                                    val boiler1On = loadController?.boiler1On == true
+                                    // "Горить" (світіння/бліц іконки) - лише за РЕАЛЬНОЮ
+                                    // потужністю бойлера (>200 Вт), а не за станом реле: реле
+                                    // може бути "увімк." й за нуля Вт (наприклад, бак вже гарячий).
+                                    val boiler1Burning = (loadController?.boilerPower ?: 0.0) > 200.0
+                                    GridTile(
+                                        pos = tileLayout.boiler1,
+                                        isDragging = draggingTileKey == "boiler1",
+                                        dragOffsetDp = tileDragOffsetDp,
+                                        onDragStart = { draggingTileKey = "boiler1" },
+                                        onDrag = { dx, dy -> tileDragOffsetDp += Offset(dx, dy) },
+                                        onDragEnd = { endTileDrag("boiler1") },
+                                        modifier = Modifier.align(Alignment.TopStart),
+                                    ) {
+                                        DeviceTile(
+                                            name = "Бойлер 1",
+                                            stateText = if (loadController == null) "--" else if (boiler1On) "увімк." else "вимк.",
+                                            stateColor = if (boiler1On) StatusGood else TextMuted,
+                                            iconBg = AccentBoiler.copy(alpha = if (boiler1Burning) 0.18f else 0.08f),
+                                            glowColor = AccentBoiler,
+                                            on = boiler1Burning,
+                                            onClick = { openDeviceKey = "boiler1" },
+                                            modifier = Modifier.fillMaxWidth().alpha(if (loadStale) 0.6f else 1f),
+                                        ) { FlickerIcon(Icons.Filled.Whatshot, AccentBoiler, boiler1Burning) }
+                                    }
 
-                                // Напис/колір плитки - стан РЕЛЕ (loadController.pumpOn), той
-                                // самий, за яким працюють бойлери (boiler1On/boiler2On) - а не
-                                // реальне споживання: реле може бути "увімк." навіть секунду
-                                // до того, як мотор розкрутиться й потече струм.
-                                val pumpRelayOn = loadController?.pumpOn == true
-                                // Гвинт обертається лише тоді, коли насос РЕАЛЬНО тягне струм
-                                // (як і поріг "активне навантаження" у самій прошивці) - це
-                                // окремо від стану реле вище, саме так і просив користувач.
-                                val pumpRunning = (loadController?.pumpPower ?: 0.0) > 50.0
-                                DeviceTile(
-                                    name = "Насос",
-                                    stateText = if (loadController == null) "--" else if (pumpRelayOn) "увімк." else "вимк.",
-                                    stateColor = if (pumpRelayOn) StatusGood else TextMuted,
-                                    iconBg = AccentPump.copy(alpha = if (pumpRelayOn) 0.18f else 0.08f),
-                                    glowColor = AccentPump,
-                                    on = pumpRelayOn,
-                                    // Частотник Sirio ще не введено в експлуатацію - насос
-                                    // поки що звичайне реле, тож плитка відкриває ті самі
-                                    // функції керування, що й бойлери, а не повний екран Sirio.
-                                    onClick = { onOpenDevice("pump") },
-                                    modifier = Modifier.weight(1f).alpha(if (loadStale) 0.6f else 1f),
-                                ) { FanIcon(AccentPump, pumpRunning) }
+                                    // Напис/колір плитки - стан РЕЛЕ (loadController.pumpOn), той
+                                    // самий, за яким працюють бойлери (boiler1On/boiler2On) - а не
+                                    // реальне споживання: реле може бути "увімк." навіть секунду
+                                    // до того, як мотор розкрутиться й потече струм.
+                                    val pumpRelayOn = loadController?.pumpOn == true
+                                    // Гвинт обертається лише тоді, коли насос РЕАЛЬНО тягне струм
+                                    // (як і поріг "активне навантаження" у самій прошивці) - це
+                                    // окремо від стану реле вище, саме так і просив користувач.
+                                    val pumpRunning = (loadController?.pumpPower ?: 0.0) > 50.0
+                                    GridTile(
+                                        pos = tileLayout.pump,
+                                        isDragging = draggingTileKey == "pump",
+                                        dragOffsetDp = tileDragOffsetDp,
+                                        onDragStart = { draggingTileKey = "pump" },
+                                        onDrag = { dx, dy -> tileDragOffsetDp += Offset(dx, dy) },
+                                        onDragEnd = { endTileDrag("pump") },
+                                        modifier = Modifier.align(Alignment.TopStart),
+                                    ) {
+                                        DeviceTile(
+                                            name = "Насос",
+                                            stateText = if (loadController == null) "--" else if (pumpRelayOn) "увімк." else "вимк.",
+                                            stateColor = if (pumpRelayOn) StatusGood else TextMuted,
+                                            iconBg = AccentPump.copy(alpha = if (pumpRelayOn) 0.18f else 0.08f),
+                                            glowColor = AccentPump,
+                                            on = pumpRelayOn,
+                                            // Частотник Sirio ще не введено в експлуатацію - насос
+                                            // поки що звичайне реле, тож плитка відкриває ті самі
+                                            // функції керування, що й бойлери, а не повний екран Sirio.
+                                            onClick = { openDeviceKey = "pump" },
+                                            modifier = Modifier.fillMaxWidth().alpha(if (loadStale) 0.6f else 1f),
+                                        ) { FanIcon(AccentPump, pumpRunning) }
+                                    }
 
-                                val boiler2On = garage?.boiler2On == true
-                                DeviceTile(
-                                    name = "Бойлер 2",
-                                    stateText = if (garage == null) "--" else if (boiler2On) "увімк." else "вимк.",
-                                    stateColor = if (boiler2On) StatusGood else TextMuted,
-                                    iconBg = AccentBoiler.copy(alpha = if (boiler2On) 0.18f else 0.08f),
-                                    glowColor = AccentBoiler,
-                                    on = boiler2On,
-                                    onClick = { onOpenDevice("boiler2") },
-                                    modifier = Modifier.weight(1f).alpha(if (garageStale) 0.6f else 1f),
-                                ) { FlickerIcon(Icons.Filled.Whatshot, AccentBoiler, boiler2On) }
+                                    val boiler2On = garage?.boiler2On == true
+                                    val boiler2Burning = (garage?.boilerPower ?: 0.0) > 200.0
+                                    GridTile(
+                                        pos = tileLayout.boiler2,
+                                        isDragging = draggingTileKey == "boiler2",
+                                        dragOffsetDp = tileDragOffsetDp,
+                                        onDragStart = { draggingTileKey = "boiler2" },
+                                        onDrag = { dx, dy -> tileDragOffsetDp += Offset(dx, dy) },
+                                        onDragEnd = { endTileDrag("boiler2") },
+                                        modifier = Modifier.align(Alignment.TopStart),
+                                    ) {
+                                        DeviceTile(
+                                            name = "Бойлер 2",
+                                            stateText = if (garage == null) "--" else if (boiler2On) "увімк." else "вимк.",
+                                            stateColor = if (boiler2On) StatusGood else TextMuted,
+                                            iconBg = AccentBoiler.copy(alpha = if (boiler2Burning) 0.18f else 0.08f),
+                                            glowColor = AccentBoiler,
+                                            on = boiler2Burning,
+                                            onClick = { openDeviceKey = "boiler2" },
+                                            modifier = Modifier.fillMaxWidth().alpha(if (garageStale) 0.6f else 1f),
+                                        ) { FlickerIcon(Icons.Filled.Whatshot, AccentBoiler, boiler2Burning) }
+                                    }
 
-                                val gateStateKey = classifyGateState(garage)
-                                val gateNeedsAttention = gateStateKey != "closed" && gateStateKey != "disabled"
-                                val gateLightOn = garage?.garageLightOn == true
-                                // Квадратик - завжди за станом стулки (не залежить від світла):
-                                // зелений - зачинено (безпечно), червоний - будь-що інше
-                                // (відчинено/рух/невідомо - варто звернути увагу).
-                                val gateSquareColor = when {
-                                    garage == null -> TextMuted
-                                    gateStateKey == "closed" -> StatusGood
-                                    else -> StatusAlert
-                                }
-                                DeviceTile(
-                                    name = "Ворота",
-                                    stateText = gateStateTextUk(garage?.gateState),
-                                    stateColor = gateSquareColor,
-                                    iconBg = gateSquareColor.copy(alpha = if (garage == null) 0.08f else 0.18f),
-                                    // Увімкнене світло - сильніший сигнал поверх кольору
-                                    // стулки: і світіння, і тло всієї плитки (tileTint)
-                                    // жовтіють, щоб не забули його вимкнути.
-                                    glowColor = if (gateLightOn) AccentPv else gateSquareColor,
-                                    on = gateNeedsAttention || gateLightOn,
-                                    tileTint = if (gateLightOn) AccentPv else null,
-                                    onClick = { gateSheetOpen = true },
-                                    modifier = Modifier.weight(1f).alpha(if (garageStale) 0.6f else 1f),
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Garage, contentDescription = null,
-                                        tint = if (garage == null) TextMuted else gateSquareColor,
-                                        modifier = Modifier.size(20.dp),
-                                    )
+                                    val gateStateKey = classifyGateState(garage)
+                                    val gateNeedsAttention = gateStateKey != "closed" && gateStateKey != "disabled"
+                                    val gateLightOn = garage?.garageLightOn == true
+                                    // Квадратик - завжди за станом стулки (не залежить від світла):
+                                    // зелений - зачинено (безпечно), червоний - будь-що інше
+                                    // (відчинено/рух/невідомо - варто звернути увагу).
+                                    val gateSquareColor = when {
+                                        garage == null -> TextMuted
+                                        gateStateKey == "closed" -> StatusGood
+                                        else -> StatusAlert
+                                    }
+                                    GridTile(
+                                        pos = tileLayout.gate,
+                                        isDragging = draggingTileKey == "gate",
+                                        dragOffsetDp = tileDragOffsetDp,
+                                        onDragStart = { draggingTileKey = "gate" },
+                                        onDrag = { dx, dy -> tileDragOffsetDp += Offset(dx, dy) },
+                                        onDragEnd = { endTileDrag("gate") },
+                                        modifier = Modifier.align(Alignment.TopStart),
+                                    ) {
+                                        DeviceTile(
+                                            name = "Ворота",
+                                            stateText = gateStateTextUk(garage?.gateState),
+                                            stateColor = gateSquareColor,
+                                            iconBg = gateSquareColor.copy(alpha = if (garage == null) 0.08f else 0.18f),
+                                            // Увімкнене світло - сильніший сигнал поверх кольору
+                                            // стулки: і світіння, і тло всієї плитки (tileTint)
+                                            // жовтіють, щоб не забули його вимкнути.
+                                            glowColor = if (gateLightOn) AccentPv else gateSquareColor,
+                                            on = gateNeedsAttention || gateLightOn,
+                                            tileTint = if (gateLightOn) AccentPv else null,
+                                            onClick = { gateSheetOpen = true },
+                                            modifier = Modifier.fillMaxWidth().alpha(if (garageStale) 0.6f else 1f),
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Garage, contentDescription = null,
+                                                tint = if (garage == null) TextMuted else gateSquareColor,
+                                                modifier = Modifier.size(20.dp),
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -354,13 +469,147 @@ fun DashboardScreen(
                     )
                 }
             }
+
+            // Меню пристрою (мережа/споживання/бойлери/насос) - той самий екран
+            // [DeviceControlScreen], що й раніше, лише тепер у шторці поверх
+            // "Дому", а не повноекранним переходом (Схема й далі відкриває його
+            // через справжню навігацію - той маршрут не чіпали).
+            if (openDeviceKey != null) {
+                val key = openDeviceKey!!
+                ModalSheet(onDismiss = { openDeviceKey = null }) {
+                    DeviceControlScreen(
+                        deviceKey = key,
+                        uiState = uiState,
+                        onSetMode = { mode ->
+                            when (key) {
+                                "grid" -> viewModel.setInverterGridMode(mode)
+                                "load" -> viewModel.setInverterLoadMode(mode)
+                                "boiler1" -> viewModel.setBoiler1Mode(mode)
+                                "pump" -> viewModel.setPumpMode(mode)
+                                "boiler2" -> viewModel.setBoiler2Mode(mode)
+                            }
+                        },
+                        onSetLock = when (key) {
+                            "load" -> viewModel::setLoadLock
+                            "boiler1" -> viewModel::setBoiler1Lock
+                            "pump" -> viewModel::setPumpLock
+                            "boiler2" -> viewModel::setBoiler2Lock
+                            else -> null
+                        },
+                        onSetAutoWindow = { enabled, start, end ->
+                            when (key) {
+                                "boiler1" -> viewModel.setBoiler1AutoWindow(enabled, start, end)
+                                "pump" -> viewModel.setPumpAutoWindow(enabled, start, end)
+                                "boiler2" -> viewModel.setBoiler2AutoWindow(enabled, start, end)
+                            }
+                        },
+                        onOpenJournal = { openDeviceKey = null; onOpenJournal(key) },
+                        onBack = { openDeviceKey = null },
+                    )
+                }
+            }
+
+            // Меню пріоритету інвертора (сонце/АКБ) - та сама пара екранів, що й
+            // раніше, теж у шторці.
+            if (openInverterFocus != null) {
+                ModalSheet(onDismiss = { openInverterFocus = null }) {
+                    if (openInverterFocus == "charger") {
+                        InverterChargerPriorityScreen(
+                            state = inverterSettingsState,
+                            onRefresh = { scope.launch { viewModel.loadInverterSettings() } },
+                            onSetCharger = viewModel::setInverterChargerPriority,
+                            onOpenJournal = { openInverterFocus = null; onOpenJournal("battery") },
+                            onBack = { openInverterFocus = null },
+                        )
+                    } else {
+                        InverterOutputPriorityScreen(
+                            state = inverterSettingsState,
+                            onRefresh = { scope.launch { viewModel.loadInverterSettings() } },
+                            onSetOutput = viewModel::setInverterOutputPriority,
+                            onSetAuto = viewModel::setInverterOutputAuto,
+                            onOpenJournal = { openInverterFocus = null; onOpenJournal("pv") },
+                            onBack = { openInverterFocus = null },
+                        )
+                    }
+                }
+            }
         }
+    }
+}
+
+/** Напівпрозора підкладка на весь екран + панель знизу (85% висоти, заокруглені
+ * верхні кути) - для меню пристроїв/інвертора: діалог поверх "Дому", не новий
+ * повноекранний екран. Дотик по підкладці - закрити. */
+@Composable
+private fun ModalSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.6f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f)
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(SurfaceContainer),
+        ) {
+            content()
+        }
+    }
+}
+
+/**
+ * Одна плитка сітки "Пристрої" - позиціонується за [pos] (клітинка, не
+ * пікселі); довге натискання + рух - перетягування (та сама логіка, що й у
+ * [dragToReposition], але "прилипання" рахується в кінці жесту в DashboardScreen,
+ * тому тут власний pointerInput з onDragStart).
+ */
+@Composable
+private fun GridTile(
+    pos: TileGridPos,
+    isDragging: Boolean,
+    dragOffsetDp: Offset,
+    onDragStart: () -> Unit,
+    onDrag: (dxDp: Float, dyDp: Float) -> Unit,
+    onDragEnd: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .offset {
+                val baseX = (pos.col * TILE_CELL_W_DP + 4f).dp.roundToPx()
+                val baseY = (pos.row * TILE_CELL_H_DP + 4f).dp.roundToPx()
+                val dx = if (isDragging) dragOffsetDp.x.dp.roundToPx() else 0
+                val dy = if (isDragging) dragOffsetDp.y.dp.roundToPx() else 0
+                IntOffset(baseX + dx, baseY + dy)
+            }
+            .zIndex(if (isDragging) 1f else 0f)
+            .width((TILE_CELL_W_DP - 8f).dp)
+            .dragToReposition(onDrag = onDrag, onDragEnd = onDragEnd, onDragStart = onDragStart),
+    ) {
+        content()
     }
 }
 
 /** Розмита кольорова плями на фоні, що повільно дрейфує - лише атмосфера, не дані. */
 @Composable
-private fun AuroraBlob(color: Color, size: androidx.compose.ui.unit.Dp, offsetX: androidx.compose.ui.unit.Dp, offsetY: androidx.compose.ui.unit.Dp, periodMs: Int) {
+private fun AuroraBlob(
+    color: Color,
+    size: androidx.compose.ui.unit.Dp,
+    offsetX: androidx.compose.ui.unit.Dp,
+    offsetY: androidx.compose.ui.unit.Dp,
+    periodMs: Int,
+    modifier: Modifier = Modifier,
+) {
     val infinite = rememberInfiniteTransition(label = "aurora")
     val dx by infinite.animateFloat(
         initialValue = -1f, targetValue = 1f,
@@ -368,7 +617,7 @@ private fun AuroraBlob(color: Color, size: androidx.compose.ui.unit.Dp, offsetX:
         label = "dx",
     )
     Box(
-        modifier = Modifier
+        modifier = modifier
             .offset(x = offsetX, y = offsetY)
             .graphicsLayer { translationX = dx * 24f; translationY = dx * 16f }
             .size(size)
@@ -520,11 +769,18 @@ private const val MIN_FLOW_POWER_W = 2.0
  * Довге натискання + рух на вузлі - перетягування (а не звичайний дотик,
  * щоб не плутати з [onClick] на тому самому елементі): [onDrag] отримує
  * дельту руху вже в dp (а не px), [onDragEnd] - коли палець відпустили чи
- * жест скасовано (тут - момент, коли варто зберегти позицію на диск).
+ * жест скасовано (тут - момент, коли варто зберегти/"прилипнути" до сітки),
+ * [onDragStart] - на самому початку жесту (напр., позначити "яку плитку
+ * зараз тягнуть", щоб підняти її над сусідніми - zIndex).
  */
-private fun Modifier.dragToReposition(onDrag: (dxDp: Float, dyDp: Float) -> Unit, onDragEnd: () -> Unit): Modifier =
+private fun Modifier.dragToReposition(
+    onDrag: (dxDp: Float, dyDp: Float) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragStart: () -> Unit = {},
+): Modifier =
     pointerInput(Unit) {
         detectDragGesturesAfterLongPress(
+            onDragStart = { onDragStart() },
             onDrag = { change, amount -> change.consume(); onDrag(amount.x / density, amount.y / density) },
             onDragEnd = { onDragEnd() },
             onDragCancel = { onDragEnd() },
@@ -583,14 +839,22 @@ private fun EnergyConstellation(
     val loadFlowing = kotlin.math.abs(loadW ?: 0.0) > MIN_FLOW_POWER_W
     val batteryFlowing = kotlin.math.abs(batteryPowerW) > MIN_FLOW_POWER_W
 
+    // Корінь, не лінійна частка: за лінійною кривою побутова потужність (звично
+    // лише сотні Вт із 4 кВт шкали) давала майже непомітну різницю - корінь
+    // помітно пришвидшує реакцію саме в цьому, реалістичному діапазоні, межі
+    // 0..1 лишаються ті самі.
+    fun responseCurve(frac: Float): Float = kotlin.math.sqrt(frac)
     // Період руху частинок: швидше - коли потужності більше (3200мс біля
-    // нуля -> 650мс біля максимуму). Товщина лінії: 1.5dp -> 7dp.
-    fun flowDurationMs(frac: Float): Int = (3200 - (3200 - 650) * frac).toInt().coerceAtLeast(650)
-    fun strokeWidthDp(frac: Float): Float = 1.5f + (7f - 1.5f) * frac
+    // нуля -> 600мс біля максимуму). Товщина лінії: 1.5dp -> 7dp.
+    fun flowDurationMs(frac: Float): Int = (3200 - (3200 - 600) * responseCurve(frac)).toInt().coerceAtLeast(600)
+    fun strokeWidthDp(frac: Float): Float = 1.5f + (7f - 1.5f) * responseCurve(frac)
     // Яскравість світіння джерела/споживача - від його ж віддачі/споживання,
     // з підлогою 0.22, щоб навіть мала потужність лишалась помітною, а не
     // зникала в нуль (що виглядало б як баг, а не "мало енергії").
-    fun glowAlpha(frac: Float): Float = 0.22f + (0.72f - 0.22f) * frac
+    fun glowAlpha(frac: Float): Float = 0.22f + (0.72f - 0.22f) * responseCurve(frac)
+    // Кількість частинок на лінії - від 1 (ледь є потік) до 5 (повна
+    // потужність), та сама крива чутливості.
+    fun particleCount(frac: Float): Int = (1 + responseCurve(frac) * 4f).roundToInt().coerceIn(1, 5)
 
     val infinite = rememberInfiniteTransition(label = "constellation")
     val sunPhase by infinite.animateFloat(
@@ -652,6 +916,31 @@ private fun EnergyConstellation(
     // межі екрана - так і сталось у першій версії.
     Box(modifier = modifier.height(410.dp), contentAlignment = Alignment.TopCenter) {
         Box(modifier = Modifier.size(width = 340.dp, height = 410.dp)) {
+            // Туманності - прив'язані до сонця/мережі/АКБ (той самий колір), а не
+            // до фіксованих координат екрана: рухаються разом з вузлом, коли його
+            // перетягують. Малюються першими - позаду ліній/вузлів.
+            // Туманність сонця/мережі - лише коли вузол активний (>=150В): інакше
+            // і маленьке сяйво за іконкою, і ця велика фонова пляма мають гаснути
+            // разом, а не тільки перше.
+            if (pvOn) {
+                AuroraBlob(
+                    color = AccentPv, size = 240.dp, periodMs = 22_000,
+                    offsetX = (layout.sunX - 120).dp, offsetY = (layout.sunY - 120).dp,
+                    modifier = Modifier.align(Alignment.TopStart),
+                )
+            }
+            if (gridOn) {
+                AuroraBlob(
+                    color = AccentGrid, size = 220.dp, periodMs = 19_000,
+                    offsetX = (layout.gridX - 110).dp, offsetY = (layout.gridY - 110).dp,
+                    modifier = Modifier.align(Alignment.TopStart),
+                )
+            }
+            AuroraBlob(
+                color = AccentBattery, size = 260.dp, periodMs = 26_000,
+                offsetX = (layout.coreX - 130).dp, offsetY = (layout.coreY - 130).dp,
+                modifier = Modifier.align(Alignment.TopStart),
+            )
             Canvas(Modifier.fillMaxSize()) {
                 val center = Offset(layout.coreX.dp.toPx(), layout.coreY.dp.toPx())
                 val sunC = Offset(layout.sunX.dp.toPx(), layout.sunY.dp.toPx())
@@ -665,20 +954,30 @@ private fun EnergyConstellation(
                 drawLine(lineColorBase, loadC, center, strokeWidth = strokeWidthDp(loadFrac).dp.toPx(), cap = StrokeCap.Round)
 
                 // Рухомі "частинки" на лінії - лише коли реально є потік (інакше
-                // анімація на лінії з 0 Вт виглядала б як баг, не як дані).
+                // анімація на лінії з 0 Вт виглядала б як баг, не як дані); і
+                // ШВИДКІСТЬ (фаза), і ЧИСЛО частинок ростуть із потужністю лінії,
+                // тож різниця реально помітна, а не лише трохи швидший один дот.
                 fun lerp(a: Offset, b: Offset, t: Float) = Offset(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
                 if (pvFlowing) {
-                    val sunT2 = (sunPhase + 0.5f) % 1f
-                    drawCircle(Color(0xFFF3C57A), 3.5.dp.toPx(), lerp(sunC, center, sunPhase))
-                    drawCircle(Color(0xFFF3C57A), 3.5.dp.toPx(), lerp(sunC, center, sunT2))
+                    val n = particleCount(pvFrac)
+                    for (i in 0 until n) {
+                        val t = (sunPhase + i.toFloat() / n) % 1f
+                        drawCircle(Color(0xFFF3C57A), 3.5.dp.toPx(), lerp(sunC, center, t))
+                    }
                 }
                 if (loadFlowing) {
-                    val loadT2 = (loadPhase + 0.5f) % 1f
-                    drawCircle(Color(0xFFF1919F), 3.dp.toPx(), lerp(center, loadC, loadPhase))
-                    drawCircle(Color(0xFFF1919F), 3.dp.toPx(), lerp(center, loadC, loadT2))
+                    val n = particleCount(loadFrac)
+                    for (i in 0 until n) {
+                        val t = (loadPhase + i.toFloat() / n) % 1f
+                        drawCircle(Color(0xFFF1919F), 3.dp.toPx(), lerp(center, loadC, t))
+                    }
                 }
                 if (gridFlowing) {
-                    drawCircle(Color(0xFF86A9EF).copy(alpha = 0.75f), 2.6.dp.toPx(), lerp(gridC, center, gridPhase))
+                    val n = particleCount(gridFrac)
+                    for (i in 0 until n) {
+                        val t = (gridPhase + i.toFloat() / n) % 1f
+                        drawCircle(Color(0xFF86A9EF).copy(alpha = 0.75f), 2.6.dp.toPx(), lerp(gridC, center, t))
+                    }
                 }
 
                 val ringR = 68.dp.toPx()
@@ -829,7 +1128,9 @@ private fun ConstellationNode(
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = "$label - детальніше", tint = if (active) color else TextMuted, modifier = Modifier.size(22.dp))
+            // Неактивний (нижче порогу напруги) - значок чорний, не приглушено-сірий,
+            // як і в чинних індикаторах сонця/мережі деінде в застосунку.
+            Icon(icon, contentDescription = "$label - детальніше", tint = if (active) color else IndicatorOff, modifier = Modifier.size(22.dp))
         }
         Spacer(Modifier.height(6.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = TextPrimary, fontWeight = FontWeight.Bold, maxLines = 1)
@@ -842,6 +1143,21 @@ private fun ConstellationNode(
 
 /** Через скільки мс без відповіді модуля його картки вважаються застарілими (тьмяніють). */
 private const val STALE_DATA_MS = 30_000L
+
+// Нижче цієї напруги вузол "Сонце"/"Мережа" на сузір'ї вважається неактивним:
+// значок чорніє, сяйво гасне. Свій поріг саме для цього вузла (не той самий,
+// що PV_PRESENT_VOLTAGE чи firmware-прапорець gridPresent, які лишаються для
+// Схеми - її не чіпаємо).
+private const val NODE_ACTIVE_VOLTAGE = 150.0
+
+// Сітка плиток "Пристрої" (dp): 4 колонки х 2 ряди - сьогодні зайнятий лише
+// верхній ряд (як і раніше), другий - вільний, щоб було куди перетягнути.
+// Ширина сітки (340dp) навмисно збігається з канвою сузір'я вище - однакове
+// вирівнювання по центру екрана.
+private const val TILE_GRID_COLS = 4
+private const val TILE_GRID_ROWS = 2
+private const val TILE_CELL_W_DP = 85f
+private const val TILE_CELL_H_DP = 118f
 
 /** Сонце: жовте, коли напруга PV-панелей >= [PV_PRESENT_VOLTAGE], інакше чорне. */
 internal fun pvIndicatorColor(inverter: InverterStatus?): Color =
