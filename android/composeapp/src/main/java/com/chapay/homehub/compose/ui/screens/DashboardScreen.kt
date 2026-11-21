@@ -602,7 +602,7 @@ private fun GridTile(
 
 /** Розмита кольорова плями на фоні, що повільно дрейфує - лише атмосфера, не дані. */
 @Composable
-private fun AuroraBlob(
+internal fun AuroraBlob(
     color: Color,
     size: androidx.compose.ui.unit.Dp,
     offsetX: androidx.compose.ui.unit.Dp,
@@ -632,7 +632,7 @@ private fun AuroraBlob(
 /** Ледь помітні зорі, що мерехтять - два незалежних шари з різним періодом, щоб
  * мерехтіння не виглядало синхронним/механічним. Суто атмосфера, не дані. */
 @Composable
-private fun StarField(modifier: Modifier = Modifier) {
+internal fun StarField(modifier: Modifier = Modifier) {
     val infinite = rememberInfiniteTransition(label = "stars")
     val twinkle1 by infinite.animateFloat(
         initialValue = 0.15f, targetValue = 0.7f,
@@ -655,7 +655,7 @@ private fun StarField(modifier: Modifier = Modifier) {
 /** М'яке кольорове світіння (розмита пляма) позаду активного елемента - те, що
  * у CSS-макеті було box-shadow/glow. Пульсує непомітно, щоб відчувалось "живим". */
 @Composable
-private fun Glow(color: Color, modifier: Modifier = Modifier, baseAlpha: Float = 0.55f) {
+internal fun Glow(color: Color, modifier: Modifier = Modifier, baseAlpha: Float = 0.55f) {
     val infinite = rememberInfiniteTransition(label = "glow")
     val pulse by infinite.animateFloat(
         initialValue = baseAlpha * 0.65f, targetValue = baseAlpha,
@@ -773,7 +773,7 @@ private const val MIN_FLOW_POWER_W = 2.0
  * [onDragStart] - на самому початку жесту (напр., позначити "яку плитку
  * зараз тягнуть", щоб підняти її над сусідніми - zIndex).
  */
-private fun Modifier.dragToReposition(
+internal fun Modifier.dragToReposition(
     onDrag: (dxDp: Float, dyDp: Float) -> Unit,
     onDragEnd: () -> Unit,
     onDragStart: () -> Unit = {},
