@@ -1166,9 +1166,15 @@ private fun UnifiedLineChart(
                 series.forEach { s ->
                     val norm = normalize(s)
                     val pts = s.points.sortedBy { it.first }
-                    // Типовий крок цього ряду - з його ВЛАСНИХ сусідніх точок (різні
-                    // джерела мають різну щільність вибірки: 15хв/година/5хв/доба).
-                    val stepHint = if (pts.size >= 2) (pts[1].first - pts[0].first).coerceAtLeast(1f) else axis.pointWidth
+                    // Типовий крок цього ряду - МЕДІАНА його ВЛАСНИХ сусідніх проміжків
+                    // (різні джерела мають різну щільність вибірки: 15хв/година/5хв/доба),
+                    // а не лише перший проміжок: той один випадково короткий/довгий
+                    // проміжок (особливо в нерівномірних рядів на кшталт напруги, яку
+                    // пишемо на телефоні "коли нагода випала", не строго по таймеру)
+                    // псував поріг для ВСІХ наступних точок - лінія рвалась на рівному
+                    // місці, хоча дані насправді безперервні.
+                    val gaps = (1 until pts.size).map { pts[it].first - pts[it - 1].first }
+                    val stepHint = if (gaps.isNotEmpty()) gaps.sorted()[gaps.size / 2].coerceAtLeast(1f) else axis.pointWidth
                     val path = Path()
                     pts.forEachIndexed { i, (x, v) ->
                         val px = xAt(x)
@@ -1177,7 +1183,7 @@ private fun UnifiedLineChart(
                             path.moveTo(px, py)
                         } else {
                             val gap = x - pts[i - 1].first
-                            if (gap <= stepHint * 1.5f) path.lineTo(px, py) else path.moveTo(px, py)
+                            if (gap <= stepHint * 2f) path.lineTo(px, py) else path.moveTo(px, py)
                         }
                     }
                     drawPath(path, s.color, style = lineStroke)

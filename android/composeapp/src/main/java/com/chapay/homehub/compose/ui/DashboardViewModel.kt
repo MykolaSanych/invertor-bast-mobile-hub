@@ -37,6 +37,13 @@ data class DashboardUiState(
     // Час останньої СПРОБИ опитування - змінює стан на кожному циклі, щоб UI
     // перераховував "застарілість" навіть коли всі запити провалюються.
     val lastAttemptAtMs: Long = 0L,
+    // Остання НЕВДАЛА команда (кнопка) - окремо від [error] вище: той
+    // стосується опитування й перезаписується на кожному циклі (навіть
+    // успішному для ІНШОГО модуля), тож команда, що справді провалилась,
+    // миттєво "затиралась" наступним-таки циклом опитування - користувач не
+    // встигав побачити, що кнопка не спрацювала.
+    val commandError: String? = null,
+    val commandErrorAtMs: Long = 0L,
 )
 
 /** Стан екрана режимів інвертора. */
@@ -308,7 +315,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val ok = runCatching { action() }.getOrDefault(false)
             if (!ok) {
-                _uiState.update { it.copy(error = "Команда не виконана") }
+                _uiState.update { it.copy(commandError = "Команда не виконана", commandErrorAtMs = System.currentTimeMillis()) }
             }
             fetchOnce()
         }

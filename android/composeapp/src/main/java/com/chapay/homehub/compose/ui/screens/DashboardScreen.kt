@@ -248,7 +248,12 @@ fun DashboardScreen(
                 ) {
                     Text("HomeHub", style = MaterialTheme.typography.titleLarge, color = TextPrimary, fontWeight = FontWeight.Bold)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        ConnectionBadge(lastSuccessAtMs = uiState.lastSuccessAtMs, hasError = uiState.error != null)
+                        ConnectionBadge(
+                            inverterEnabled = uiState.config.inverterEnabled, inverterAtMs = uiState.inverterAtMs,
+                            loadEnabled = uiState.config.loadControllerEnabled, loadAtMs = uiState.loadAtMs,
+                            garageEnabled = uiState.config.garageEnabled, garageAtMs = uiState.garageAtMs,
+                            commandError = uiState.commandError, commandErrorAtMs = uiState.commandErrorAtMs,
+                        )
                         IconButton(onClick = onOpenSettings) {
                             Icon(Icons.Filled.Settings, contentDescription = "Налаштування", tint = TextPrimary)
                         }
@@ -1322,8 +1327,17 @@ private fun GateCard(
     }
 }
 
+// Раніше індикатор рахувався від "хоч один із трьох модулів відповів у
+// цьому циклі" - тож коли один модуль насправді не відповідав (а два інші
+// справно опитувались), "живо" лишалось зеленим годинами: саме так виглядав
+// баг "дані не йдуть, а індикатор зелений, і кнопки не працюють".
 @Composable
-private fun ConnectionBadge(lastSuccessAtMs: Long, hasError: Boolean) {
+private fun ConnectionBadge(
+    inverterEnabled: Boolean, inverterAtMs: Long,
+    loadEnabled: Boolean, loadAtMs: Long,
+    garageEnabled: Boolean, garageAtMs: Long,
+    commandError: String?, commandErrorAtMs: Long,
+) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         while (true) {
@@ -1331,13 +1345,21 @@ private fun ConnectionBadge(lastSuccessAtMs: Long, hasError: Boolean) {
             kotlinx.coroutines.delay(1000)
         }
     }
-    val ageSec = if (lastSuccessAtMs <= 0) Long.MAX_VALUE else (now - lastSuccessAtMs) / 1000
+    // За КОЖНИМ увімкненим модулем окремо (не за "хоч одним") - інакше
+    // конкретний модуль (і саме його кнопки) міг мовчати як завгодно довго,
+    // лишаючись непоміченим, поки інший модуль справно відповідав.
+    val enabledAtMs = buildList {
+        if (inverterEnabled) add(inverterAtMs)
+        if (loadEnabled) add(loadAtMs)
+        if (garageEnabled) add(garageAtMs)
+    }
+    val commandErrorVisible = commandError != null && now - commandErrorAtMs < 8000L
     val (color, label) = when {
-        ageSec == Long.MAX_VALUE -> StatusAlert to "немає зв'язку"
-        hasError && ageSec >= 20 -> StatusAlert to "помилка запиту"
-        ageSec < 20 -> StatusGood to "живо"
-        ageSec < 60 -> AccentPv to "$ageSec с тому"
-        else -> StatusAlert to "давно (${ageSec}с)"
+        enabledAtMs.isEmpty() -> StatusAlert to "немає ввімкнених модулів"
+        enabledAtMs.all { it <= 0L } -> StatusAlert to "немає зв'язку"
+        enabledAtMs.any { it <= 0L || now - it > STALE_DATA_MS } -> StatusAlert to "не всі модулі на зв'язку"
+        commandErrorVisible -> AccentPv to (commandError ?: "помилка команди")
+        else -> StatusGood to "живо"
     }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 4.dp)) {
         Box(
